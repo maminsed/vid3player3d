@@ -15,7 +15,7 @@ from torch.nn.modules.batchnorm import _BatchNorm
 
 from mmpose.utils import get_root_logger
 from ..builder import BACKBONES
-from vid3player.GVHMR.hmr4d.utils.preproc.vitpose_pytorch.src.vitpose_infer.builder.backbones.utils import load_checkpoint
+from GVHMR.hmr4d.utils.preproc.vitpose_pytorch.src.vitpose_infer.builder.backbones.utils import load_checkpoint
 from .utils import channel_shuffle
 
 

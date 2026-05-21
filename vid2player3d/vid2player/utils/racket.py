@@ -1,5 +1,5 @@
-from vid3player.vid2player3d.vid2player.utils.pose import SMPLPose
-from vid3player.vid2player3d.vid2player.utils.konia_transform import angle_axis_to_rotation_matrix, quaternion_to_rotation_matrix
+from vid2player3d.vid2player.utils.pose import SMPLPose
+from vid2player3d.vid2player.utils.konia_transform import angle_axis_to_rotation_matrix, quaternion_to_rotation_matrix
 
 import math
 import torch

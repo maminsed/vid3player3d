@@ -1,5 +1,5 @@
 import argparse
-from vid3player.GVHMR.hmr4d.utils.video_io_utils import merge_videos_vertical
+from GVHMR.hmr4d.utils.video_io_utils import merge_videos_vertical
 
 
 def parse_args():

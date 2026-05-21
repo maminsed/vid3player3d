@@ -5,9 +5,9 @@ from .vitpose_pytorch import build_model
 from .vitfeat_extractor import get_batch
 from tqdm import tqdm
 
-from vid3player.GVHMR.hmr4d.utils.kpts.kp2d_utils import keypoints_from_heatmaps
-from vid3player.GVHMR.hmr4d.utils.geo_transform import cvt_p2d_from_pm1_to_i
-from vid3player.GVHMR.hmr4d.utils.geo.flip_utils import flip_heatmap_coco17
+from GVHMR.hmr4d.utils.kpts.kp2d_utils import keypoints_from_heatmaps
+from GVHMR.hmr4d.utils.geo_transform import cvt_p2d_from_pm1_to_i
+from GVHMR.hmr4d.utils.geo.flip_utils import flip_heatmap_coco17
 
 
 class VitPoseExtractor:

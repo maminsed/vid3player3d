@@ -4,8 +4,8 @@ import pytorch_lightning as pl
 from pytorch_lightning.callbacks.checkpoint import Checkpoint
 from pytorch_lightning.utilities import rank_zero_only
 
-from vid3player.GVHMR.hmr4d.utils.pylogger import Log
-from vid3player.GVHMR.hmr4d.configs import MainStore, builds
+from GVHMR.hmr4d.utils.pylogger import Log
+from GVHMR.hmr4d.configs import MainStore, builds
 
 
 class SimpleCkptSaver(Checkpoint):

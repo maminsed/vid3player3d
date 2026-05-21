@@ -8,7 +8,7 @@ from smplx.utils import Struct, to_np, to_tensor
 from einops import einsum, rearrange
 from time import time
 
-from vid3player.GVHMR.hmr4d import PROJ_ROOT
+from GVHMR.hmr4d import PROJ_ROOT
 
 
 class SmplxLite(nn.Module):

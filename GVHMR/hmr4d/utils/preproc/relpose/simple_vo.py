@@ -4,7 +4,7 @@ from .matcher_wrapper import Matcher
 from .solver_two_view import TwoPairSolver, CameraParams, interpolate_missing_frames
 from tqdm import tqdm
 
-from vid3player.GVHMR.hmr4d.utils.video_io_utils import get_video_lwh, read_video_np
+from GVHMR.hmr4d.utils.video_io_utils import get_video_lwh, read_video_np
 
 
 class SimpleVO:

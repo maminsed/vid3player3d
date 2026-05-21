@@ -3,7 +3,7 @@ from pytorch_lightning.utilities import rank_zero_only
 from time import time
 from collections import deque
 
-from vid3player.GVHMR.hmr4d.configs import MainStore, builds
+from GVHMR.hmr4d.configs import MainStore, builds
 
 
 class TrainSpeedTimer(pl.Callback):

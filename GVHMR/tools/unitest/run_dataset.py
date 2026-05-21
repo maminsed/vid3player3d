@@ -5,12 +5,12 @@ from tqdm import tqdm
 
 def get_dataset(DATA_TYPE):
     if DATA_TYPE == "BEDLAM_V2":
-        from vid3player.GVHMR.hmr4d.dataset.bedlam.bedlam import BedlamDatasetV2
+        from GVHMR.hmr4d.dataset.bedlam.bedlam import BedlamDatasetV2
 
         return BedlamDatasetV2()
 
     if DATA_TYPE == "3DPW_TRAIN":
-        from vid3player.GVHMR.hmr4d.dataset.threedpw.threedpw_motion_train import ThreedpwSmplDataset
+        from GVHMR.hmr4d.dataset.threedpw.threedpw_motion_train import ThreedpwSmplDataset
 
         return ThreedpwSmplDataset()
 
@@ -21,7 +21,7 @@ if __name__ == "__main__":
 
     data = dataset[0]
 
-    from vid3player.GVHMR.hmr4d.datamodule.mocap_trainX_testY import collate_fn
+    from GVHMR.hmr4d.datamodule.mocap_trainX_testY import collate_fn
 
     loader = DataLoader(
         dataset,

@@ -45,7 +45,7 @@ def get_hash():
         sha = get_git_hash()[:7]
     elif os.path.exists(version_file):
         try:
-            from vid3player.vid2player3d.smpl_visualizer.smpl_visualizer.version import __version__
+            from vid2player3d.smpl_visualizer.smpl_visualizer.version import __version__
             sha = __version__.split('+')[-1]
         except ImportError:
             raise ImportError('Unable to get git version')

@@ -4,13 +4,13 @@ from pathlib import Path
 
 from .utils import *
 from .cam_traj_utils import CameraAugmentorV11
-from vid3player.GVHMR.hmr4d.utils.geo.hmr_cam import create_camera_sensor
-from vid3player.GVHMR.hmr4d.utils.geo.hmr_global import get_c_rootparam, get_R_c2gv
-from vid3player.GVHMR.hmr4d.utils.net_utils import get_valid_mask, repeat_to_max_len, repeat_to_max_len_dict
-from vid3player.GVHMR.hmr4d.utils.geo_transform import compute_cam_angvel, apply_T_on_points, project_p2d, cvt_p2d_from_i_to_c
+from GVHMR.hmr4d.utils.geo.hmr_cam import create_camera_sensor
+from GVHMR.hmr4d.utils.geo.hmr_global import get_c_rootparam, get_R_c2gv
+from GVHMR.hmr4d.utils.net_utils import get_valid_mask, repeat_to_max_len, repeat_to_max_len_dict
+from GVHMR.hmr4d.utils.geo_transform import compute_cam_angvel, apply_T_on_points, project_p2d, cvt_p2d_from_i_to_c
 
-from vid3player.GVHMR.hmr4d.utils.wis3d_utils import make_wis3d, add_motion_as_lines, convert_motion_as_line_mesh
-from vid3player.GVHMR.hmr4d.utils.smplx_utils import make_smplx
+from GVHMR.hmr4d.utils.wis3d_utils import make_wis3d, add_motion_as_lines, convert_motion_as_line_mesh
+from GVHMR.hmr4d.utils.smplx_utils import make_smplx
 
 
 class BaseDataset(Dataset):

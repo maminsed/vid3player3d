@@ -1,6 +1,6 @@
-from vid3player.vid2player3d.vid2player.motion_vae.config import *
-from vid3player.vid2player3d.vid2player.motion_vae.base import MotionVAEModel 
-from vid3player.vid2player3d.vid2player.motion_vae.test import test_motion_vae_randomwalk
+from vid2player3d.vid2player.motion_vae.config import *
+from vid2player3d.vid2player.motion_vae.base import MotionVAEModel 
+from vid2player3d.vid2player.motion_vae.test import test_motion_vae_randomwalk
 from argparse import ArgumentParser
 
 

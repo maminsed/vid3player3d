@@ -3,18 +3,18 @@ from torch.utils import data
 from pathlib import Path
 import numpy as np
 
-from vid3player.GVHMR.hmr4d.utils.pylogger import Log
-from vid3player.GVHMR.hmr4d.utils.wis3d_utils import make_wis3d, add_motion_as_lines
-from vid3player.GVHMR.hmr4d.utils.geo_transform import compute_cam_angvel
-from vid3player.GVHMR.hmr4d.utils.geo.hmr_cam import estimate_K, resize_K
-from vid3player.GVHMR.hmr4d.utils.geo.flip_utils import flip_kp2d_coco17
-from vid3player.GVHMR.hmr4d.dataset.imgfeat_motion.base_dataset import ImgfeatMotionDatasetBase
-from vid3player.GVHMR.hmr4d.utils.net_utils import get_valid_mask, repeat_to_max_len, repeat_to_max_len_dict
-from vid3player.GVHMR.hmr4d.utils.smplx_utils import make_smplx
-from vid3player.GVHMR.hmr4d.utils.video_io_utils import get_video_lwh, read_video_np, save_video
-from vid3player.GVHMR.hmr4d.utils.vis.renderer_utils import simple_render_mesh_background
+from GVHMR.hmr4d.utils.pylogger import Log
+from GVHMR.hmr4d.utils.wis3d_utils import make_wis3d, add_motion_as_lines
+from GVHMR.hmr4d.utils.geo_transform import compute_cam_angvel
+from GVHMR.hmr4d.utils.geo.hmr_cam import estimate_K, resize_K
+from GVHMR.hmr4d.utils.geo.flip_utils import flip_kp2d_coco17
+from GVHMR.hmr4d.dataset.imgfeat_motion.base_dataset import ImgfeatMotionDatasetBase
+from GVHMR.hmr4d.utils.net_utils import get_valid_mask, repeat_to_max_len, repeat_to_max_len_dict
+from GVHMR.hmr4d.utils.smplx_utils import make_smplx
+from GVHMR.hmr4d.utils.video_io_utils import get_video_lwh, read_video_np, save_video
+from GVHMR.hmr4d.utils.vis.renderer_utils import simple_render_mesh_background
 
-from vid3player.GVHMR.hmr4d.configs import MainStore, builds
+from GVHMR.hmr4d.configs import MainStore, builds
 
 
 class ThreedpwSmplDataset(ImgfeatMotionDatasetBase):

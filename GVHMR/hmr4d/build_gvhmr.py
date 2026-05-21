@@ -1,7 +1,7 @@
 from omegaconf import OmegaConf
-from vid3player.GVHMR.hmr4d import PROJ_ROOT
+from GVHMR.hmr4d import PROJ_ROOT
 from hydra.utils import instantiate
-from vid3player.GVHMR.hmr4d.model.gvhmr.gvhmr_pl_demo import DemoPL
+from GVHMR.hmr4d.model.gvhmr.gvhmr_pl_demo import DemoPL
 
 
 def build_gvhmr_demo():

@@ -2,13 +2,13 @@ import torch
 from torch.utils import data
 from pathlib import Path
 
-from vid3player.GVHMR.hmr4d.utils.pylogger import Log
-from vid3player.GVHMR.hmr4d.utils.wis3d_utils import make_wis3d, add_motion_as_lines
-from vid3player.GVHMR.hmr4d.utils.geo_transform import compute_cam_angvel
-from vid3player.GVHMR.hmr4d.utils.geo.hmr_cam import estimate_K, resize_K
-from vid3player.GVHMR.hmr4d.utils.geo.flip_utils import flip_kp2d_coco17
+from GVHMR.hmr4d.utils.pylogger import Log
+from GVHMR.hmr4d.utils.wis3d_utils import make_wis3d, add_motion_as_lines
+from GVHMR.hmr4d.utils.geo_transform import compute_cam_angvel
+from GVHMR.hmr4d.utils.geo.hmr_cam import estimate_K, resize_K
+from GVHMR.hmr4d.utils.geo.flip_utils import flip_kp2d_coco17
 
-from vid3player.GVHMR.hmr4d.configs import MainStore, builds
+from GVHMR.hmr4d.configs import MainStore, builds
 
 VID_HARD = []
 # VID_HARD = ["downtown_bar_00_1"]

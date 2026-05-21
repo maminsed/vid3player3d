@@ -7,7 +7,7 @@ import torch
 import torch.nn.functional as F
 from tqdm import tqdm
 
-from vid3player.vid2player3d.vid2player.utils.tennis_ball import * 
+from vid2player3d.vid2player.utils.tennis_ball import * 
 
 
 class traj_out_params:

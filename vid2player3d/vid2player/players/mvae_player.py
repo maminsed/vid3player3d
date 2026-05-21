@@ -1,10 +1,10 @@
-from vid3player.vid2player3d.vid2player.motion_vae.config import MotionVAEOption
-from vid3player.vid2player3d.vid2player.motion_vae.dataset import Video3DPoseDataset
-from vid3player.vid2player3d.vid2player.motion_vae.base import MotionVAEModel
-from vid3player.vid2player3d.vid2player.utils.racket import Racket
-from vid3player.vid2player3d.vid2player.utils.pose import SMPLPose
-from vid3player.vid2player3d.vid2player.utils.konia_transform import angle_axis_to_rotation_matrix, rotation_matrix_to_angle_axis
-from vid3player.vid2player3d.vid2player.utils.torch_transform import rot6d_to_angle_axis, rot6d_to_rotmat, rotmat_to_rot6d
+from vid2player3d.vid2player.motion_vae.config import MotionVAEOption
+from vid2player3d.vid2player.motion_vae.dataset import Video3DPoseDataset
+from vid2player3d.vid2player.motion_vae.base import MotionVAEModel
+from vid2player3d.vid2player.utils.racket import Racket
+from vid2player3d.vid2player.utils.pose import SMPLPose
+from vid2player3d.vid2player.utils.konia_transform import angle_axis_to_rotation_matrix, rotation_matrix_to_angle_axis
+from vid2player3d.vid2player.utils.torch_transform import rot6d_to_angle_axis, rot6d_to_rotmat, rotmat_to_rot6d
 
 from smpl_visualizer.smpl import SMPL, SMPL_MODEL_DIR
 

@@ -1,7 +1,7 @@
 import torch
 import cv2
 import numpy as np
-from vid3player.GVHMR.hmr4d.utils.geo_transform import apply_T_on_points, project_p2d
+from GVHMR.hmr4d.utils.geo_transform import apply_T_on_points, project_p2d
 from pathlib import Path
 import json
 import time

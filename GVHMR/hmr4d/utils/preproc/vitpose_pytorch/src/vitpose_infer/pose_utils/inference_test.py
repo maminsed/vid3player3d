@@ -1,6 +1,6 @@
-from vid3player.GVHMR.hmr4d.utils.preproc.vitpose_pytorch.src.vitpose_infer.builder import build_model
+from GVHMR.hmr4d.utils.preproc.vitpose_pytorch.src.vitpose_infer.builder import build_model
 import torch
-from vid3player.GVHMR.hmr4d.utils.preproc.vitpose_pytorch.src.vitpose_infer.pose_utils.ViTPose_trt import TRTModule_ViTPose
+from GVHMR.hmr4d.utils.preproc.vitpose_pytorch.src.vitpose_infer.pose_utils.ViTPose_trt import TRTModule_ViTPose
 # pose = TRTModule_ViTPose(path='pose_higher_hrnet_w32_512.engine',device='cuda:0')
 pose = build_model('ViTPose_base_coco_256x192','./models/vitpose-b.pth')
 pose.cuda().eval()

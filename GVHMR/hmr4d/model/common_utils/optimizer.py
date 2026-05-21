@@ -1,5 +1,5 @@
 from torch.optim import AdamW, Adam
-from vid3player.GVHMR.hmr4d.configs import MainStore, builds
+from GVHMR.hmr4d.configs import MainStore, builds
 
 
 optimizer_cfgs = {

@@ -4,26 +4,26 @@ from pathlib import Path
 import torch
 import pytorch_lightning as pl
 from hydra.utils import instantiate
-from vid3player.GVHMR.hmr4d.utils.pylogger import Log
+from GVHMR.hmr4d.utils.pylogger import Log
 from einops import rearrange, einsum
-from vid3player.GVHMR.hmr4d.configs import MainStore, builds
+from GVHMR.hmr4d.configs import MainStore, builds
 
-from vid3player.GVHMR.hmr4d.utils.geo_transform import compute_T_ayfz2ay, apply_T_on_points
-from vid3player.GVHMR.hmr4d.utils.wis3d_utils import make_wis3d, add_motion_as_lines
-from vid3player.GVHMR.hmr4d.utils.smplx_utils import make_smplx
-from vid3player.GVHMR.hmr4d.utils.geo.augment_noisy_pose import (
+from GVHMR.hmr4d.utils.geo_transform import compute_T_ayfz2ay, apply_T_on_points
+from GVHMR.hmr4d.utils.wis3d_utils import make_wis3d, add_motion_as_lines
+from GVHMR.hmr4d.utils.smplx_utils import make_smplx
+from GVHMR.hmr4d.utils.geo.augment_noisy_pose import (
     get_wham_aug_kp3d,
     get_visible_mask,
     get_invisible_legs_mask,
     randomly_occlude_lower_half,
     randomly_modify_hands_legs,
 )
-from vid3player.GVHMR.hmr4d.utils.geo.hmr_cam import perspective_projection, normalize_kp2d, safely_render_x3d_K, get_bbx_xys
+from GVHMR.hmr4d.utils.geo.hmr_cam import perspective_projection, normalize_kp2d, safely_render_x3d_K, get_bbx_xys
 
-from vid3player.GVHMR.hmr4d.utils.video_io_utils import save_video
-from vid3player.GVHMR.hmr4d.utils.vis.cv2_utils import draw_bbx_xys_on_image_batch
-from vid3player.GVHMR.hmr4d.utils.geo.flip_utils import flip_smplx_params, avg_smplx_aa
-from vid3player.GVHMR.hmr4d.model.gvhmr.utils.postprocess import pp_static_joint, pp_static_joint_cam, process_ik
+from GVHMR.hmr4d.utils.video_io_utils import save_video
+from GVHMR.hmr4d.utils.vis.cv2_utils import draw_bbx_xys_on_image_batch
+from GVHMR.hmr4d.utils.geo.flip_utils import flip_smplx_params, avg_smplx_aa
+from GVHMR.hmr4d.model.gvhmr.utils.postprocess import pp_static_joint, pp_static_joint_cam, process_ik
 
 
 class GvhmrPL(pl.LightningModule):

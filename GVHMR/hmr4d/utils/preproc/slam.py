@@ -11,8 +11,8 @@ except:
     pass
 
 
-from vid3player.GVHMR.hmr4d import PROJ_ROOT
-from vid3player.GVHMR.hmr4d.utils.geo.hmr_cam import estimate_focal_length
+from GVHMR.hmr4d import PROJ_ROOT
+from GVHMR.hmr4d.utils.geo.hmr_cam import estimate_focal_length
 
 
 class SLAMModel(object):

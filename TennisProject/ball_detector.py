@@ -1,4 +1,4 @@
-from vid3player.TennisProject.tracknet import BallTrackerNet
+from TennisProject.tracknet import BallTrackerNet
 import torch
 import cv2
 import numpy as np

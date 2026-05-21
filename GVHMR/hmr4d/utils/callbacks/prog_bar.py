@@ -9,11 +9,11 @@ from pytorch_lightning.callbacks.progress import ProgressBar
 from pytorch_lightning.utilities import rank_zero_only
 import pytorch_lightning as pl
 
-from vid3player.GVHMR.hmr4d.utils.pylogger import Log
+from GVHMR.hmr4d.utils.pylogger import Log
 from time import time
 from collections import deque
 import sys
-from vid3player.GVHMR.hmr4d.configs import MainStore, builds
+from GVHMR.hmr4d.configs import MainStore, builds
 
 # ========== Helper functions ========== #
 

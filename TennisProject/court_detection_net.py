@@ -1,10 +1,10 @@
 import cv2
 import numpy as np
 import torch
-from vid3player.TennisProject.tracknet import BallTrackerNet
+from TennisProject.tracknet import BallTrackerNet
 import torch.nn.functional as F
-from vid3player.TennisProject.postprocess import refine_kps
-from vid3player.TennisProject.homography import get_trans_matrix, refer_kps
+from TennisProject.postprocess import refine_kps
+from TennisProject.homography import get_trans_matrix, refer_kps
 from itertools import islice
 
 class CourtDetectorNet():

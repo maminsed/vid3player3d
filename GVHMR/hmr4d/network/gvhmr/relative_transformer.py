@@ -2,12 +2,12 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from einops import einsum, rearrange, repeat
-from vid3player.GVHMR.hmr4d.configs import MainStore, builds
+from GVHMR.hmr4d.configs import MainStore, builds
 
-from vid3player.GVHMR.hmr4d.network.base_arch.transformer.encoder_rope import EncoderRoPEBlock
-from vid3player.GVHMR.hmr4d.network.base_arch.transformer.layer import zero_module
+from GVHMR.hmr4d.network.base_arch.transformer.encoder_rope import EncoderRoPEBlock
+from GVHMR.hmr4d.network.base_arch.transformer.layer import zero_module
 
-from vid3player.GVHMR.hmr4d.utils.net_utils import length_to_mask
+from GVHMR.hmr4d.utils.net_utils import length_to_mask
 from timm.models.vision_transformer import Mlp
 
 

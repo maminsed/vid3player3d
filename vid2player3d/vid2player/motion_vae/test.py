@@ -1,7 +1,7 @@
-from vid3player.vid2player3d.vid2player.motion_vae.base import MotionVAEModel
-from vid3player.vid2player3d.vid2player.motion_vae.dataset import Video3DPoseDataset, encode_action
-from vid3player.vid2player3d.vid2player.utils.common import *
-from vid3player.vid2player3d.vid2player.utils.racket import infer_racket_from_smpl
+from vid2player3d.vid2player.motion_vae.base import MotionVAEModel
+from vid2player3d.vid2player.motion_vae.dataset import Video3DPoseDataset, encode_action
+from vid2player3d.vid2player.utils.common import *
+from vid2player3d.vid2player.utils.racket import infer_racket_from_smpl
 
 from smpl_visualizer.vis_sport import SportVisualizer
 from smpl_visualizer.vis import vstack_videos

@@ -1,4 +1,4 @@
-from vid3player.TennisProject.court_reference import CourtReference
+from TennisProject.court_reference import CourtReference
 import numpy as np
 import cv2
 from scipy.spatial import distance

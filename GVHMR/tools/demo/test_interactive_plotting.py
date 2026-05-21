@@ -81,7 +81,7 @@ def test_interactive_plotting():
     
     # Import and test the plotting function
     try:
-        from vid3player.GVHMR.tools.demo.demo_amass_gravity_and_xy_correct import plot_trajectory_and_ground_contact
+        from GVHMR.tools.demo.demo_amass_gravity_and_xy_correct import plot_trajectory_and_ground_contact
         plot_trajectory_and_ground_contact(cfg, pred)
         print("✓ Interactive trajectory plotting test completed successfully!")
         

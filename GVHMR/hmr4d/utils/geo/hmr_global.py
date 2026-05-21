@@ -1,7 +1,7 @@
 import torch
 from pytorch3d.transforms import axis_angle_to_matrix, matrix_to_axis_angle, matrix_to_quaternion, quaternion_to_matrix
 import vid3player.GVHMR.hmr4d.utils.matrix as matrix
-from vid3player.GVHMR.hmr4d.utils.net_utils import gaussian_smooth
+from GVHMR.hmr4d.utils.net_utils import gaussian_smooth
 
 
 def get_R_c2gv(R_w2c, axis_gravity_in_w=[0, 0, -1]):

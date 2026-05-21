@@ -3,7 +3,7 @@ from omegaconf import DictConfig, OmegaConf
 import rich
 import rich.tree
 import rich.syntax
-from vid3player.GVHMR.hmr4d.utils.pylogger import Log
+from GVHMR.hmr4d.utils.pylogger import Log
 
 
 @rank_zero_only

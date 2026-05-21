@@ -1,4 +1,4 @@
-from vid3player.GVHMR.hmr4d.utils.vis.renderer import Renderer
+from GVHMR.hmr4d.utils.vis.renderer import Renderer
 from tqdm import tqdm
 import numpy as np
 

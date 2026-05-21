@@ -2,7 +2,7 @@ import torch
 from .hmr2 import HMR2
 from pathlib import Path
 from .configs import get_config
-from vid3player.GVHMR.hmr4d import PROJ_ROOT
+from GVHMR.hmr4d import PROJ_ROOT
 
 HMR2A_CKPT = PROJ_ROOT / f"inputs/checkpoints/hmr2/epoch=10-step=25000.ckpt"  # this is HMR2.0a, follow WHAM
 

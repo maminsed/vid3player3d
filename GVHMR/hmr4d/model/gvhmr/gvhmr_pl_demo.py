@@ -1,10 +1,10 @@
 import torch
 import pytorch_lightning as pl
 from hydra.utils import instantiate
-from vid3player.GVHMR.hmr4d.utils.pylogger import Log
-from vid3player.GVHMR.hmr4d.configs import MainStore, builds
+from GVHMR.hmr4d.utils.pylogger import Log
+from GVHMR.hmr4d.configs import MainStore, builds
 
-from vid3player.GVHMR.hmr4d.utils.geo.hmr_cam import normalize_kp2d
+from GVHMR.hmr4d.utils.geo.hmr_cam import normalize_kp2d
 
 
 class DemoPL(pl.LightningModule):

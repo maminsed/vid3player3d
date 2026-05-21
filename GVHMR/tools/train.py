@@ -3,10 +3,10 @@ import pytorch_lightning as pl
 from omegaconf import DictConfig, OmegaConf
 from pytorch_lightning.callbacks.checkpoint import Checkpoint
 
-from vid3player.GVHMR.hmr4d.utils.pylogger import Log
-from vid3player.GVHMR.hmr4d.configs import register_store_gvhmr
-from vid3player.GVHMR.hmr4d.utils.vis.rich_logger import print_cfg
-from vid3player.GVHMR.hmr4d.utils.net_utils import load_pretrained_model, get_resume_ckpt_path
+from GVHMR.hmr4d.utils.pylogger import Log
+from GVHMR.hmr4d.configs import register_store_gvhmr
+from GVHMR.hmr4d.utils.vis.rich_logger import print_cfg
+from GVHMR.hmr4d.utils.net_utils import load_pretrained_model, get_resume_ckpt_path
 
 
 def get_callbacks(cfg: DictConfig) -> list:

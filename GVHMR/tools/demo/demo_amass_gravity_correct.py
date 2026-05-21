@@ -3,15 +3,15 @@ import torch
 import pytorch_lightning as pl
 import numpy as np
 import argparse
-from vid3player.GVHMR.hmr4d.utils.pylogger import Log
+from GVHMR.hmr4d.utils.pylogger import Log
 import hydra
 from hydra import initialize_config_module, compose
 from pathlib import Path
 from pytorch3d.transforms import quaternion_to_matrix
 import joblib
 
-from vid3player.GVHMR.hmr4d.configs import register_store_gvhmr
-from vid3player.GVHMR.hmr4d.utils.video_io_utils import (
+from GVHMR.hmr4d.configs import register_store_gvhmr
+from GVHMR.hmr4d.utils.video_io_utils import (
     get_video_lwh,
     read_video_np,
     save_video,
@@ -19,18 +19,18 @@ from vid3player.GVHMR.hmr4d.utils.video_io_utils import (
     get_writer,
     get_video_reader,
 )
-from vid3player.GVHMR.hmr4d.utils.vis.cv2_utils import draw_bbx_xyxy_on_image_batch, draw_coco17_skeleton_batch
+from GVHMR.hmr4d.utils.vis.cv2_utils import draw_bbx_xyxy_on_image_batch, draw_coco17_skeleton_batch
 
-from vid3player.GVHMR.hmr4d.utils.preproc import Tracker, Extractor, VitPoseExtractor, SimpleVO
+from GVHMR.hmr4d.utils.preproc import Tracker, Extractor, VitPoseExtractor, SimpleVO
 
-from vid3player.GVHMR.hmr4d.utils.geo.hmr_cam import get_bbx_xys_from_xyxy, estimate_K, convert_K_to_K4, create_camera_sensor
-from vid3player.GVHMR.hmr4d.utils.geo_transform import compute_cam_angvel
-from vid3player.GVHMR.hmr4d.model.gvhmr.gvhmr_pl_demo import DemoPL
-from vid3player.GVHMR.hmr4d.utils.net_utils import detach_to_cpu, to_cuda
-from vid3player.GVHMR.hmr4d.utils.smplx_utils import make_smplx
-from vid3player.GVHMR.hmr4d.utils.vis.renderer import Renderer, get_global_cameras_static, get_ground_params_from_points
+from GVHMR.hmr4d.utils.geo.hmr_cam import get_bbx_xys_from_xyxy, estimate_K, convert_K_to_K4, create_camera_sensor
+from GVHMR.hmr4d.utils.geo_transform import compute_cam_angvel
+from GVHMR.hmr4d.model.gvhmr.gvhmr_pl_demo import DemoPL
+from GVHMR.hmr4d.utils.net_utils import detach_to_cpu, to_cuda
+from GVHMR.hmr4d.utils.smplx_utils import make_smplx
+from GVHMR.hmr4d.utils.vis.renderer import Renderer, get_global_cameras_static, get_ground_params_from_points
 from tqdm import tqdm
-from vid3player.GVHMR.hmr4d.utils.geo_transform import apply_T_on_points, compute_T_ayfz2ay
+from GVHMR.hmr4d.utils.geo_transform import apply_T_on_points, compute_T_ayfz2ay
 from einops import einsum, rearrange
 
 
@@ -166,7 +166,7 @@ def run_preprocess(cfg):
                 vo_results = simple_vo.compute()  # (L, 4, 4), numpy
                 torch.save(vo_results, paths.slam)
             else:  # DPVO
-                from vid3player.GVHMR.hmr4d.utils.preproc.slam import SLAMModel
+                from GVHMR.hmr4d.utils.preproc.slam import SLAMModel
 
                 length, width, height = get_video_lwh(cfg.video_path)
                 K_fullimg = estimate_K(width, height)

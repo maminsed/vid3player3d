@@ -4,13 +4,13 @@ import numpy as np
 
 from tqdm import tqdm
 from pathlib import Path
-from vid3player.GVHMR.hmr4d.utils.pylogger import Log
-from vid3player.GVHMR.hmr4d.configs import MainStore, builds
+from GVHMR.hmr4d.utils.pylogger import Log
+from GVHMR.hmr4d.configs import MainStore, builds
 
 from .base_dataset import BaseDataset
 from .utils import *
-from vid3player.GVHMR.hmr4d.utils.geo.hmr_global import get_tgtcoord_rootparam
-from vid3player.GVHMR.hmr4d.utils.wis3d_utils import make_wis3d, add_motion_as_lines, convert_motion_as_line_mesh
+from GVHMR.hmr4d.utils.geo.hmr_global import get_tgtcoord_rootparam
+from GVHMR.hmr4d.utils.wis3d_utils import make_wis3d, add_motion_as_lines, convert_motion_as_line_mesh
 
 
 class AmassDataset(BaseDataset):

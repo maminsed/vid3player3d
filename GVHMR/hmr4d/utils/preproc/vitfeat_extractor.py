@@ -1,12 +1,12 @@
 import torch
-from vid3player.GVHMR.hmr4d.network.hmr2 import load_hmr2, HMR2
+from GVHMR.hmr4d.network.hmr2 import load_hmr2, HMR2
 
 
-from vid3player.GVHMR.hmr4d.utils.video_io_utils import read_video_np
+from GVHMR.hmr4d.utils.video_io_utils import read_video_np
 import cv2
 import numpy as np
 
-from vid3player.GVHMR.hmr4d.network.hmr2.utils.preproc import crop_and_resize, IMAGE_MEAN, IMAGE_STD
+from GVHMR.hmr4d.network.hmr2.utils.preproc import crop_and_resize, IMAGE_MEAN, IMAGE_STD
 from tqdm import tqdm
 
 

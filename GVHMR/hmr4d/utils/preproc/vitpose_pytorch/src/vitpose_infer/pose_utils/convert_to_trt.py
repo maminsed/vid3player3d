@@ -1,5 +1,5 @@
 from torch2trt import TRTModule,torch2trt
-from vid3player.GVHMR.hmr4d.utils.preproc.vitpose_pytorch.src.vitpose_infer.builder import  build_model
+from GVHMR.hmr4d.utils.preproc.vitpose_pytorch.src.vitpose_infer.builder import  build_model
 import torch
 pose = build_model('ViTPose_base_coco_256x192','./models/vitpose-b.pth')
 pose.cuda().eval()

@@ -9,9 +9,9 @@ from pytorch3d.transforms import (
     rotation_6d_to_matrix,
 )
 from einops import rearrange
-from vid3player.GVHMR.hmr4d.utils.geo.hmr_cam import create_camera_sensor
-from vid3player.GVHMR.hmr4d.utils.geo_transform import transform_mat, apply_T_on_points
-from vid3player.GVHMR.hmr4d.utils.geo.transforms import axis_rotate_to_matrix
+from GVHMR.hmr4d.utils.geo.hmr_cam import create_camera_sensor
+from GVHMR.hmr4d.utils.geo_transform import transform_mat, apply_T_on_points
+from GVHMR.hmr4d.utils.geo.transforms import axis_rotate_to_matrix
 import vid3player.GVHMR.hmr4d.utils.matrix as matrix
 
 halfpi = np.pi / 2

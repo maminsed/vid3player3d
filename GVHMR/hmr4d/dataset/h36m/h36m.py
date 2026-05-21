@@ -1,23 +1,23 @@
 import torch
 import numpy as np
 from pathlib import Path
-from vid3player.GVHMR.hmr4d.configs import MainStore, builds
+from GVHMR.hmr4d.configs import MainStore, builds
 
-from vid3player.GVHMR.hmr4d.utils.pylogger import Log
-from vid3player.GVHMR.hmr4d.dataset.imgfeat_motion.base_dataset import ImgfeatMotionDatasetBase
+from GVHMR.hmr4d.utils.pylogger import Log
+from GVHMR.hmr4d.dataset.imgfeat_motion.base_dataset import ImgfeatMotionDatasetBase
 from pytorch3d.transforms import axis_angle_to_matrix, matrix_to_axis_angle
-from vid3player.GVHMR.hmr4d.utils import matrix
-from vid3player.GVHMR.hmr4d.utils.smplx_utils import make_smplx
+from GVHMR.hmr4d.utils import matrix
+from GVHMR.hmr4d.utils.smplx_utils import make_smplx
 from tqdm import tqdm
 
-from vid3player.GVHMR.hmr4d.utils.geo_transform import compute_cam_angvel, apply_T_on_points
-from vid3player.GVHMR.hmr4d.utils.geo.hmr_global import get_tgtcoord_rootparam, get_T_w2c_from_wcparams, get_c_rootparam, get_R_c2gv
+from GVHMR.hmr4d.utils.geo_transform import compute_cam_angvel, apply_T_on_points
+from GVHMR.hmr4d.utils.geo.hmr_global import get_tgtcoord_rootparam, get_T_w2c_from_wcparams, get_c_rootparam, get_R_c2gv
 
-from vid3player.GVHMR.hmr4d.utils.wis3d_utils import make_wis3d, add_motion_as_lines
-from vid3player.GVHMR.hmr4d.utils.vis.renderer import Renderer
+from GVHMR.hmr4d.utils.wis3d_utils import make_wis3d, add_motion_as_lines
+from GVHMR.hmr4d.utils.vis.renderer import Renderer
 import imageio
-from vid3player.GVHMR.hmr4d.utils.video_io_utils import read_video_np
-from vid3player.GVHMR.hmr4d.utils.net_utils import get_valid_mask, repeat_to_max_len, repeat_to_max_len_dict
+from GVHMR.hmr4d.utils.video_io_utils import read_video_np
+from GVHMR.hmr4d.utils.net_utils import get_valid_mask, repeat_to_max_len, repeat_to_max_len_dict
 
 
 class H36mSmplDataset(ImgfeatMotionDatasetBase):

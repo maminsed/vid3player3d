@@ -3,17 +3,17 @@ import torch
 from tqdm import tqdm
 from einops import einsum
 
-from vid3player.GVHMR.hmr4d.utils.pylogger import Log
-from vid3player.GVHMR.hmr4d.utils.smplx_utils import make_smplx
-from vid3player.GVHMR.hmr4d.utils.net_utils import to_cuda
-from vid3player.GVHMR.hmr4d.utils.vis.renderer import (
+from GVHMR.hmr4d.utils.pylogger import Log
+from GVHMR.hmr4d.utils.smplx_utils import make_smplx
+from GVHMR.hmr4d.utils.net_utils import to_cuda
+from GVHMR.hmr4d.utils.vis.renderer import (
     Renderer,
     get_global_cameras_static,
     get_ground_params_from_points,
 )
-from vid3player.GVHMR.hmr4d.utils.geo_transform import apply_T_on_points, compute_T_ayfz2ay
-from vid3player.GVHMR.hmr4d.utils.video_io_utils import get_video_lwh, get_writer
-from vid3player.GVHMR.hmr4d.utils.geo.hmr_cam import create_camera_sensor
+from GVHMR.hmr4d.utils.geo_transform import apply_T_on_points, compute_T_ayfz2ay
+from GVHMR.hmr4d.utils.video_io_utils import get_video_lwh, get_writer
+from GVHMR.hmr4d.utils.geo.hmr_cam import create_camera_sensor
 import joblib
 
 CRF = 23

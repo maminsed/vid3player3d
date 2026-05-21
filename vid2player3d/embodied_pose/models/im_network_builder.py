@@ -6,10 +6,10 @@ import torch.nn as nn
 import numpy as np
 
 from .running_norm import RunningNorm
-from vid3player.vid2player3d.embodied_pose.utils import torch_utils
-from vid3player.vid2player3d.embodied_pose.utils.torch_transform import heading_to_vec, rotation_matrix_to_angle_axis, rotation_matrix_to_quaternion, rot6d_to_rotmat
-from vid3player.vid2player3d.embodied_pose.utils.hybrik import batch_inverse_kinematics_transform_naive, batch_inverse_kinematics_transform
-from vid3player.vid2player3d.uhc.smpllib.smpl_parser import SMPL_BONE_ORDER_NAMES as smpl_joint_names
+from vid2player3d.embodied_pose.utils import torch_utils
+from vid2player3d.embodied_pose.utils.torch_transform import heading_to_vec, rotation_matrix_to_angle_axis, rotation_matrix_to_quaternion, rot6d_to_rotmat
+from vid2player3d.embodied_pose.utils.hybrik import batch_inverse_kinematics_transform_naive, batch_inverse_kinematics_transform
+from vid2player3d.uhc.smpllib.smpl_parser import SMPL_BONE_ORDER_NAMES as smpl_joint_names
 
 
 DISC_LOGIT_INIT_SCALE = 1.0

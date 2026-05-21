@@ -1,12 +1,12 @@
 import cv2
-from vid3player.TennisProject.court_detection_net import CourtDetectorNet
+from TennisProject.court_detection_net import CourtDetectorNet
 import numpy as np
 import torch
-from vid3player.TennisProject.court_reference import CourtReference
-from vid3player.TennisProject.bounce_detector import BounceDetector
-from vid3player.TennisProject.person_detector import PersonDetector
-from vid3player.TennisProject.ball_detector import BallDetector
-from vid3player.TennisProject.utils import scene_detect
+from TennisProject.court_reference import CourtReference
+from TennisProject.bounce_detector import BounceDetector
+from TennisProject.person_detector import PersonDetector
+from TennisProject.ball_detector import BallDetector
+from TennisProject.utils import scene_detect
 import argparse
 import pandas as pd
 import os.path as path

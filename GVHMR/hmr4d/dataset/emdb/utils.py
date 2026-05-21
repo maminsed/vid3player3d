@@ -3,8 +3,8 @@ import pickle
 import numpy as np
 from pathlib import Path
 from tqdm import tqdm
-from vid3player.GVHMR.hmr4d.utils.geo_transform import convert_lurb_to_bbx_xys
-from vid3player.GVHMR.hmr4d.utils.video_io_utils import get_video_lwh
+from GVHMR.hmr4d.utils.geo_transform import convert_lurb_to_bbx_xys
+from GVHMR.hmr4d.utils.video_io_utils import get_video_lwh
 
 
 def name_to_subfolder(name):

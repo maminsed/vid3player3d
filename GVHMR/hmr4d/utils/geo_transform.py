@@ -5,11 +5,11 @@ import torch.nn.functional as F
 from pytorch3d.transforms import so3_exp_map, so3_log_map
 from pytorch3d.transforms import matrix_to_quaternion, quaternion_to_axis_angle, matrix_to_rotation_6d
 import pytorch3d.ops.knn as knn
-from vid3player.GVHMR.hmr4d.utils.pylogger import Log
+from GVHMR.hmr4d.utils.pylogger import Log
 from pytorch3d.transforms import euler_angles_to_matrix
 import vid3player.GVHMR.hmr4d.utils.matrix as matrix
 from einops import einsum, rearrange, repeat
-from vid3player.GVHMR.hmr4d.utils.geo.quaternion import qbetween
+from GVHMR.hmr4d.utils.geo.quaternion import qbetween
 
 
 def homo_points(points):

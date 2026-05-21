@@ -21,15 +21,15 @@ import atexit
 import shutil
 
 from mujoco_py import load_model_from_path, MjSim, MjViewer
-from vid3player.vid2player3d.uhc.khrylib.mocap.skeleton_local import Skeleton
-from vid3player.vid2player3d.uhc.khrylib.mocap.skeleton_mesh_local import Skeleton as SkeletonMesh
-from vid3player.vid2player3d.uhc.smpllib.smpl_parser import (
+from vid2player3d.uhc.khrylib.mocap.skeleton_local import Skeleton
+from vid2player3d.uhc.khrylib.mocap.skeleton_mesh_local import Skeleton as SkeletonMesh
+from vid2player3d.uhc.smpllib.smpl_parser import (
     SMPL_Parser,
     SMPLH_Parser,
     SMPLX_Parser,
 )
-from vid3player.vid2player3d.uhc.utils.geom import quadric_mesh_decimation
-from vid3player.vid2player3d.uhc.utils.flags import flags
+from vid2player3d.uhc.utils.geom import quadric_mesh_decimation
+from vid2player3d.uhc.utils.flags import flags
 
 
 def parse_vec(string):

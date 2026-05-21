@@ -2,7 +2,7 @@ import torchvision
 from torchvision.models.detection import fasterrcnn_resnet50_fpn, FasterRCNN_ResNet50_FPN_Weights
 import cv2
 import torch
-from vid3player.TennisProject.court_reference import CourtReference
+from TennisProject.court_reference import CourtReference
 from scipy import signal
 import numpy as np
 from scipy.spatial import distance

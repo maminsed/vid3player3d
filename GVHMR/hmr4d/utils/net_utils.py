@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from pathlib import Path
-from vid3player.GVHMR.hmr4d.utils.pylogger import Log
+from GVHMR.hmr4d.utils.pylogger import Log
 from pytorch_lightning.utilities.memory import recursive_detach
 from einops import repeat, rearrange
 from scipy.ndimage._filters import _gaussian_kernel1d

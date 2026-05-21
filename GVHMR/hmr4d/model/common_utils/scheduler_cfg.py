@@ -1,5 +1,5 @@
 from omegaconf import DictConfig, ListConfig
-from vid3player.GVHMR.hmr4d.configs import MainStore, builds
+from GVHMR.hmr4d.configs import MainStore, builds
 
 # do not perform scheduling
 default = DictConfig({"scheduler": None})

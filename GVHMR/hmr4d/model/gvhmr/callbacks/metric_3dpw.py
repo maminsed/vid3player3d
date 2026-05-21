@@ -4,16 +4,16 @@ import numpy as np
 from pathlib import Path
 from einops import einsum, rearrange
 
-from vid3player.GVHMR.hmr4d.configs import MainStore, builds
-from vid3player.GVHMR.hmr4d.utils.pylogger import Log
-from vid3player.GVHMR.hmr4d.utils.comm.gather import all_gather
-from vid3player.GVHMR.hmr4d.utils.eval.eval_utils import compute_camcoord_metrics, as_np_array
-from vid3player.GVHMR.hmr4d.utils.smplx_utils import make_smplx
-from vid3player.GVHMR.hmr4d.utils.vis.cv2_utils import cv2, draw_bbx_xys_on_image_batch, draw_coco17_skeleton_batch
-from vid3player.GVHMR.hmr4d.utils.vis.renderer_utils import simple_render_mesh_background
-from vid3player.GVHMR.hmr4d.utils.video_io_utils import read_video_np, get_video_lwh, save_video
-from vid3player.GVHMR.hmr4d.utils.geo_transform import apply_T_on_points
-from vid3player.GVHMR.hmr4d.utils.seq_utils import rearrange_by_mask
+from GVHMR.hmr4d.configs import MainStore, builds
+from GVHMR.hmr4d.utils.pylogger import Log
+from GVHMR.hmr4d.utils.comm.gather import all_gather
+from GVHMR.hmr4d.utils.eval.eval_utils import compute_camcoord_metrics, as_np_array
+from GVHMR.hmr4d.utils.smplx_utils import make_smplx
+from GVHMR.hmr4d.utils.vis.cv2_utils import cv2, draw_bbx_xys_on_image_batch, draw_coco17_skeleton_batch
+from GVHMR.hmr4d.utils.vis.renderer_utils import simple_render_mesh_background
+from GVHMR.hmr4d.utils.video_io_utils import read_video_np, get_video_lwh, save_video
+from GVHMR.hmr4d.utils.geo_transform import apply_T_on_points
+from GVHMR.hmr4d.utils.seq_utils import rearrange_by_mask
 
 
 class MetricMocap(pl.Callback):

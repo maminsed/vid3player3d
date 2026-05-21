@@ -10,7 +10,7 @@ from torch.nn.modules.batchnorm import _BatchNorm
 
 from ..builder import BACKBONES
 from .base_backbone import BaseBackbone
-from vid3player.GVHMR.hmr4d.utils.preproc.vitpose_pytorch.src.vitpose_infer.builder.backbones.utils import load_checkpoint
+from GVHMR.hmr4d.utils.preproc.vitpose_pytorch.src.vitpose_infer.builder.backbones.utils import load_checkpoint
 from .utils import channel_shuffle
 
 

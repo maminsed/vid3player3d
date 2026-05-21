@@ -2,20 +2,20 @@ from pathlib import Path
 import numpy as np
 import torch
 from torch.utils import data
-from vid3player.GVHMR.hmr4d.utils.pylogger import Log
-from vid3player.GVHMR.hmr4d.utils.wis3d_utils import make_wis3d, add_motion_as_lines
+from GVHMR.hmr4d.utils.pylogger import Log
+from GVHMR.hmr4d.utils.wis3d_utils import make_wis3d, add_motion_as_lines
 
-from vid3player.GVHMR.hmr4d.utils.geo_transform import compute_cam_angvel
+from GVHMR.hmr4d.utils.geo_transform import compute_cam_angvel
 from pytorch3d.transforms import quaternion_to_matrix
-from vid3player.GVHMR.hmr4d.utils.geo.hmr_cam import estimate_K, resize_K
-from vid3player.GVHMR.hmr4d.utils.geo.flip_utils import flip_kp2d_coco17
+from GVHMR.hmr4d.utils.geo.hmr_cam import estimate_K, resize_K
+from GVHMR.hmr4d.utils.geo.flip_utils import flip_kp2d_coco17
 
 from .utils import EMDB1_NAMES, EMDB2_NAMES
 
 VID_PRESETS = {1: EMDB1_NAMES, 2: EMDB2_NAMES}
 
 
-from vid3player.GVHMR.hmr4d.configs import MainStore, builds
+from GVHMR.hmr4d.configs import MainStore, builds
 
 
 class EmdbSmplFullSeqDataset(data.Dataset):

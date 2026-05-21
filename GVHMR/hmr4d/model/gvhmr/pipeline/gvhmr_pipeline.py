@@ -5,16 +5,16 @@ from torch.cuda.amp import autocast
 import numpy as np
 from einops import einsum, rearrange, repeat
 from hydra.utils import instantiate
-from vid3player.GVHMR.hmr4d.utils.pylogger import Log
-from vid3player.GVHMR.hmr4d.utils.net_utils import gaussian_smooth
+from GVHMR.hmr4d.utils.pylogger import Log
+from GVHMR.hmr4d.utils.net_utils import gaussian_smooth
 
-from vid3player.GVHMR.hmr4d.model.gvhmr.utils.endecoder import EnDecoder
-from vid3player.GVHMR.hmr4d.model.gvhmr.utils.postprocess import (
+from GVHMR.hmr4d.model.gvhmr.utils.endecoder import EnDecoder
+from GVHMR.hmr4d.model.gvhmr.utils.postprocess import (
     pp_static_joint,
     process_ik,
     pp_static_joint_cam,
 )
-from vid3player.GVHMR.hmr4d.model.gvhmr.utils import stats_compose
+from GVHMR.hmr4d.model.gvhmr.utils import stats_compose
 
 from pytorch3d.transforms import (
     matrix_to_rotation_6d,
@@ -22,14 +22,14 @@ from pytorch3d.transforms import (
     axis_angle_to_matrix,
     matrix_to_axis_angle,
 )
-from vid3player.GVHMR.hmr4d.utils.geo.hmr_cam import compute_bbox_info_bedlam, compute_transl_full_cam, get_a_pred_cam, project_to_bi01
-from vid3player.GVHMR.hmr4d.utils.geo.hmr_global import (
+from GVHMR.hmr4d.utils.geo.hmr_cam import compute_bbox_info_bedlam, compute_transl_full_cam, get_a_pred_cam, project_to_bi01
+from GVHMR.hmr4d.utils.geo.hmr_global import (
     rollout_local_transl_vel,
     get_static_joint_mask,
     get_tgtcoord_rootparam,
 )
-from vid3player.GVHMR.hmr4d.utils.wis3d_utils import make_wis3d, add_motion_as_lines
-from vid3player.GVHMR.hmr4d.utils.smplx_utils import make_smplx
+from GVHMR.hmr4d.utils.wis3d_utils import make_wis3d, add_motion_as_lines
+from GVHMR.hmr4d.utils.smplx_utils import make_smplx
 
 
 class Pipeline(nn.Module):

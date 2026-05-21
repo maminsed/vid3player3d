@@ -1,19 +1,19 @@
 from ultralytics import YOLO
-from vid3player.GVHMR.hmr4d import PROJ_ROOT
+from GVHMR.hmr4d import PROJ_ROOT
 
 import torch
 import numpy as np
 from tqdm import tqdm
 from collections import defaultdict
 
-from vid3player.GVHMR.hmr4d.utils.seq_utils import (
+from GVHMR.hmr4d.utils.seq_utils import (
     get_frame_id_list_from_mask,
     linear_interpolate_frame_ids,
     frame_id_to_mask,
     rearrange_by_mask,
 )
-from vid3player.GVHMR.hmr4d.utils.video_io_utils import get_video_lwh
-from vid3player.GVHMR.hmr4d.utils.net_utils import moving_average_smooth
+from GVHMR.hmr4d.utils.video_io_utils import get_video_lwh
+from GVHMR.hmr4d.utils.net_utils import moving_average_smooth
 
 
 class Tracker:

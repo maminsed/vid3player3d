@@ -11,16 +11,16 @@ from sklearn.ensemble import RandomForestRegressor
 import matplotlib.pyplot as plt
 
 sys.path.append(os.getcwd())
-from vid3player.vid2player3d.embodied_pose.utils.motion_lib import MotionLib
+from embodied_pose.utils.motion_lib import MotionLib
 import torch
 from scipy.spatial.transform import Rotation as sRot
 import yaml
 from tqdm import tqdm
 
-from vid3player.vid2player3d.uhc.smpllib.smpl_parser import SMPL_BONE_ORDER_NAMES as joint_names
-from vid3player.vid2player3d.uhc.smpllib.smpl_local_robot import Robot as LocalRobot
+from vid2player3d.uhc.smpllib.smpl_parser import SMPL_BONE_ORDER_NAMES as joint_names
+from vid2player3d.uhc.smpllib.smpl_local_robot import Robot as LocalRobot
 
-from vid3player.vid2player3d.poselib.poselib.skeleton.skeleton3d import SkeletonTree, SkeletonMotion, SkeletonState
+from vid2player3d.poselib.poselib.skeleton.skeleton3d import SkeletonTree, SkeletonMotion, SkeletonState
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--amass_data', type=str, default="data/amass/amass_copycat_take5_5.pkl")

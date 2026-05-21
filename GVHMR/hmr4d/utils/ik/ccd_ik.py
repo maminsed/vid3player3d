@@ -13,7 +13,7 @@ from pytorch3d.transforms import (
     matrix_to_quaternion,
 )
 import vid3player.GVHMR.hmr4d.utils.matrix as matrix
-from vid3player.GVHMR.hmr4d.utils.geo.quaternion import qbetween, qslerp, qinv, qmul, qrot
+from GVHMR.hmr4d.utils.geo.quaternion import qbetween, qslerp, qinv, qmul, qrot
 
 
 class CCD_IK:

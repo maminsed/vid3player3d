@@ -1,4 +1,4 @@
-from vid3player.vid2player3d.vid2player.utils.tennis_ball import TennisBallGeneratorIsaac, simulate 
+from vid2player3d.vid2player.utils.tennis_ball import TennisBallGeneratorIsaac, simulate 
 
 import numpy as np
 from math import pi

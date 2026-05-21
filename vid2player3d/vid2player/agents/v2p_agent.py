@@ -2,7 +2,7 @@ from rl_games.algos_torch import torch_ext
 from rl_games.common import a2c_common
 
 import vid3player.vid2player3d.vid2player.learning.common_agent as common_agent 
-from vid3player.vid2player3d.vid2player.utils.common import AverageMeter, get_eta_str
+from vid2player3d.vid2player.utils.common import AverageMeter, get_eta_str
 
 import torch 
 import time

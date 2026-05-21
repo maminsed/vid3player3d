@@ -1,7 +1,7 @@
 import argparse
 from pathlib import Path
 from tqdm import tqdm
-from vid3player.GVHMR.hmr4d.utils.pylogger import Log
+from GVHMR.hmr4d.utils.pylogger import Log
 import subprocess
 import os
 

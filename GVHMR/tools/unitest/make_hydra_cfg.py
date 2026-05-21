@@ -1,5 +1,5 @@
-from vid3player.GVHMR.hmr4d.configs import parse_args_to_cfg, register_store_gvhmr
-from vid3player.GVHMR.hmr4d.utils.vis.rich_logger import print_cfg
+from GVHMR.hmr4d.configs import parse_args_to_cfg, register_store_gvhmr
+from GVHMR.hmr4d.utils.vis.rich_logger import print_cfg
 
 if __name__ == "__main__":
     register_store_gvhmr()
