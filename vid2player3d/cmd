@@ -1,0 +1,2 @@
+python embodied_pose/run.py --cfg amass_im --test --num_envs 1 --motion_id 0 --checkpoint latest
+python embodied_pose/run.py --cfg tram_im --play --checkpoint latest
