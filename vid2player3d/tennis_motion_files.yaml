@@ -19,40 +19,40 @@ motions:
 
 
   # #TURNED OFF: 
-  # - file: "data/motion_lib/0-Adrian_Mannarino_vs._Jiri_Lehecka_reencoded-scene005-001/mlib_part_00000.pth"
-  #   weight: 1.0
-  # - file: "data/motion_lib/0-Adrian_Mannarino_vs._Jiri_Lehecka_reencoded-scene008-000/mlib_part_00000.pth"
-  #   weight: 1.0
-  # - file: "data/motion_lib/0-Adrian_Mannarino_vs._Jiri_Lehecka_reencoded-scene011-000/mlib_part_00000.pth"
-  #   weight: 1.0
-  # - file: "data/motion_lib/0-Adrian_Mannarino_vs._Jiri_Lehecka_reencoded-scene014-000/mlib_part_00000.pth"
-  #   weight: 1.0
-  # - file: "data/motion_lib/0-Alexander_Bublik_vs._Tommy_Paul_reencoded-scene011-000/mlib_part_00000.pth"
-  #   weight: 1.0
-  # - file: "data/motion_lib/0-Alexander_Zverev_vs._Felix_Auger-Aliassime_reencoded-scene010-000/mlib_part_00000.pth"
-  #   weight: 1.0
-  # - file: "data/motion_lib/0-Alexander_Zverev_vs._Felix_Auger-Aliassime_reencoded-scene010-001/mlib_part_00000.pth"
-  #   weight: 1.0
-  # - file: "data/motion_lib/0-Amanda_Anisimova_vs._Beatriz_Haddad_Maia_reencoded-scene000-000/mlib_part_00000.pth"
-  #   weight: 1.0
-  # - file: "data/motion_lib/0-Amanda_Anisimova_vs._Beatriz_Haddad_Maia_reencoded-scene001-001/mlib_part_00000.pth"
-  #   weight: 1.0
-  # - file: "data/motion_lib/0-Amanda_Anisimova_vs._Beatriz_Haddad_Maia_reencoded-scene005-001/mlib_part_00000.pth"
-  #   weight: 1.0
-  # - file: "data/motion_lib/0-Amanda_Anisimova_vs._Beatriz_Haddad_Maia_reencoded-scene008-000/mlib_part_00000.pth"
-  #   weight: 1.0
-  # - file: "data/motion_lib/0-Amanda_Anisimova_vs._Beatriz_Haddad_Maia_reencoded-scene010-001/mlib_part_00000.pth"
-  #   weight: 1.0
-  # - file: "data/motion_lib/0-Amanda_Anisimova_vs._Iga_Swiatek_reencoded-scene000-000/mlib_part_00000.pth"
-  #   weight: 1.0
-  # - file: "data/motion_lib/0-Amanda_Anisimova_vs._Iga_Swiatek_reencoded-scene005-000/mlib_part_00000.pth"
-  #   weight: 1.0
-  # - file: "data/motion_lib/0-Amanda_Anisimova_vs._Iga_Swiatek_reencoded-scene005-001/mlib_part_00000.pth"
-  #   weight: 1.0
-  # - file: "data/motion_lib/0-Amanda_Anisimova_vs._Iga_Swiatek_reencoded-scene012-001/mlib_part_00000.pth"
-  #   weight: 1.0
-  # - file: "data/motion_lib/0-Amanda_Anisimova_vs._Iga_Swiatek_reencoded-scene014-000/mlib_part_00000.pth"
-  #   weight: 1.0
+  - file: "data/motion_lib/0-Adrian_Mannarino_vs._Jiri_Lehecka_reencoded-scene005-001/mlib_part_00000.pth"
+    weight: 1.0
+  - file: "data/motion_lib/0-Adrian_Mannarino_vs._Jiri_Lehecka_reencoded-scene008-000/mlib_part_00000.pth"
+    weight: 1.0
+  - file: "data/motion_lib/0-Adrian_Mannarino_vs._Jiri_Lehecka_reencoded-scene011-000/mlib_part_00000.pth"
+    weight: 1.0
+  - file: "data/motion_lib/0-Adrian_Mannarino_vs._Jiri_Lehecka_reencoded-scene014-000/mlib_part_00000.pth"
+    weight: 1.0
+  - file: "data/motion_lib/0-Alexander_Bublik_vs._Tommy_Paul_reencoded-scene011-000/mlib_part_00000.pth"
+    weight: 1.0
+  - file: "data/motion_lib/0-Alexander_Zverev_vs._Felix_Auger-Aliassime_reencoded-scene010-000/mlib_part_00000.pth"
+    weight: 1.0
+  - file: "data/motion_lib/0-Alexander_Zverev_vs._Felix_Auger-Aliassime_reencoded-scene010-001/mlib_part_00000.pth"
+    weight: 1.0
+  - file: "data/motion_lib/0-Amanda_Anisimova_vs._Beatriz_Haddad_Maia_reencoded-scene000-000/mlib_part_00000.pth"
+    weight: 1.0
+  - file: "data/motion_lib/0-Amanda_Anisimova_vs._Beatriz_Haddad_Maia_reencoded-scene001-001/mlib_part_00000.pth"
+    weight: 1.0
+  - file: "data/motion_lib/0-Amanda_Anisimova_vs._Beatriz_Haddad_Maia_reencoded-scene005-001/mlib_part_00000.pth"
+    weight: 1.0
+  - file: "data/motion_lib/0-Amanda_Anisimova_vs._Beatriz_Haddad_Maia_reencoded-scene008-000/mlib_part_00000.pth"
+    weight: 1.0
+  - file: "data/motion_lib/0-Amanda_Anisimova_vs._Beatriz_Haddad_Maia_reencoded-scene010-001/mlib_part_00000.pth"
+    weight: 1.0
+  - file: "data/motion_lib/0-Amanda_Anisimova_vs._Iga_Swiatek_reencoded-scene000-000/mlib_part_00000.pth"
+    weight: 1.0
+  - file: "data/motion_lib/0-Amanda_Anisimova_vs._Iga_Swiatek_reencoded-scene005-000/mlib_part_00000.pth"
+    weight: 1.0
+  - file: "data/motion_lib/0-Amanda_Anisimova_vs._Iga_Swiatek_reencoded-scene005-001/mlib_part_00000.pth"
+    weight: 1.0
+  - file: "data/motion_lib/0-Amanda_Anisimova_vs._Iga_Swiatek_reencoded-scene012-001/mlib_part_00000.pth"
+    weight: 1.0
+  - file: "data/motion_lib/0-Amanda_Anisimova_vs._Iga_Swiatek_reencoded-scene014-000/mlib_part_00000.pth"
+    weight: 1.0
   
   
   

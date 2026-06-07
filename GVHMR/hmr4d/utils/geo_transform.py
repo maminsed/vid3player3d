@@ -7,7 +7,7 @@ from pytorch3d.transforms import matrix_to_quaternion, quaternion_to_axis_angle,
 import pytorch3d.ops.knn as knn
 from GVHMR.hmr4d.utils.pylogger import Log
 from pytorch3d.transforms import euler_angles_to_matrix
-import vid3player.GVHMR.hmr4d.utils.matrix as matrix
+import GVHMR.hmr4d.utils.matrix as matrix
 from einops import einsum, rearrange, repeat
 from GVHMR.hmr4d.utils.geo.quaternion import qbetween
 

@@ -1,3 +1,8 @@
+"""
+Use these command to copy your stuff to here:
+- cp vid2player3d/data/motion_lib/updated_0-Amanda_Anisimova_vs._Beatriz_Haddad_Maia_reencoded-scene000-000/mlib_part_00000_render.pkl GVHMR/tmp/
+- cp GVHMR/outputs/demo/0-Amanda_Anisimova_vs._Beatriz_Haddad_Maia_reencoded-scene000-000/1_incam.mp4 GVHMR/tmp/
+"""
 from pathlib import Path
 import torch
 from tqdm import tqdm
@@ -26,7 +31,7 @@ def render_global(cfg):
 
     debug_cam = False
     faces_smpl = make_smplx("smpl").faces
-    J_regressor = torch.load("/pub2/amin/GVHMR/hmr4d/utils/body_model/smpl_neutral_J_regressor.pt").cuda()
+    J_regressor = torch.load("/pub2/amin/vid3player/GVHMR/hmr4d/utils/body_model/smpl_neutral_J_regressor.pt").cuda()
 
     pred_path = str(cfg.paths.pred_path)
     if pred_path.endswith('.pkl'):
@@ -104,9 +109,9 @@ def main():
     from types import SimpleNamespace
 
     # Path to the render pkl saved by convert_amass_isaac_correct_ground.py
-    PRED_PATH = "/pub2/amin/GVHMR/tmp/mlib_part_00000_render.pkl"
-    OUT_VIDEO = Path("/pub2/amin/GVHMR/tmp/render_global.mp4")
-    REF_VIDEO = Path("/pub2/amin/GVHMR/tmp/1_incam.mp4")  # optional, for video dimensions
+    PRED_PATH = "/pub2/amin/vid3player/GVHMR/tmp/mlib_part_00000_render.pkl"
+    OUT_VIDEO = Path("/pub2/amin/vid3player/GVHMR/tmp/render_global.mp4")
+    REF_VIDEO = Path("/pub2/amin/vid3player/GVHMR/tmp/1_incam.mp4")  # optional, for video dimensions
 
     paths = SimpleNamespace(
         global_video=OUT_VIDEO,

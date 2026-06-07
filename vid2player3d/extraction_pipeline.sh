@@ -5,9 +5,41 @@ mkdir -p logs/
 echo "STARTED OPERATION $(date)" &>> logs/mylogs.txt
 count=0
 
+
+allowedFileNames=(
+    "0-Adrian_Mannarino_vs._Jiri_Lehecka_reencoded-scene005-001"
+    "0-Adrian_Mannarino_vs._Jiri_Lehecka_reencoded-scene008-000"
+    "0-Adrian_Mannarino_vs._Jiri_Lehecka_reencoded-scene011-000"
+    "0-Adrian_Mannarino_vs._Jiri_Lehecka_reencoded-scene014-000"
+    "0-Alexander_Bublik_vs._Tommy_Paul_reencoded-scene011-000"
+    "0-Alexander_Zverev_vs._Felix_Auger-Aliassime_reencoded-scene010-000"
+    "0-Alexander_Zverev_vs._Felix_Auger-Aliassime_reencoded-scene010-001"
+    "0-Amanda_Anisimova_vs._Beatriz_Haddad_Maia_reencoded-scene000-000"
+    "0-Amanda_Anisimova_vs._Beatriz_Haddad_Maia_reencoded-scene001-001"
+    "0-Amanda_Anisimova_vs._Beatriz_Haddad_Maia_reencoded-scene005-001"
+    "0-Amanda_Anisimova_vs._Beatriz_Haddad_Maia_reencoded-scene008-000"
+    "0-Amanda_Anisimova_vs._Beatriz_Haddad_Maia_reencoded-scene010-001"
+    "0-Amanda_Anisimova_vs._Iga_Swiatek_reencoded-scene000-000"
+    "0-Amanda_Anisimova_vs._Iga_Swiatek_reencoded-scene005-000"
+    "0-Amanda_Anisimova_vs._Iga_Swiatek_reencoded-scene005-001"
+    "0-Amanda_Anisimova_vs._Iga_Swiatek_reencoded-scene012-001"
+    "0-Amanda_Anisimova_vs._Iga_Swiatek_reencoded-scene014-000"
+)
+
 for DIR in "$GVHMR_ROOT_DIR"/*scene*/; do
-    DIR="../GVHMR/outputs/demo/0-Adrian_Mannarino_vs._Jiri_Lehecka_reencoded-scene004-000/"
     FILE_NAME="$(basename "$DIR")"
+    found=false
+    for f in "${allowedFileNames[@]}"; do
+        if [ "$f" = "$FILE_NAME" ]; then
+            found=true
+            break
+        fi
+    done
+
+    if [ "$found" = "false" ]; then
+        continue
+    fi
+
     printf "\n\n" &>> logs/mylogs.txt
     echo "Started FILE_NAME $FILE_NAME at $(date)" &>> logs/mylogs.txt
     TP_FILE_NAME=$(echo "$FILE_NAME" | sed 's/^[^-]*-//; s/-scene.*$/.csv/')
@@ -27,7 +59,6 @@ for DIR in "$GVHMR_ROOT_DIR"/*scene*/; do
 
     rm -rf "./input/$FILE_NAME"
     ((count++))
-    break
 done
 echo "Finished operation after processing $count file(s) at $(date)" &>> logs/mylogs.txt
 echo "Finished operation after processing $count file(s) at $(date)"
