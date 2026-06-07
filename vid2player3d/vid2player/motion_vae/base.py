@@ -1,8 +1,8 @@
-from vid2player3d.vid2player.motion_vae.config import *
-from vid2player3d.vid2player.motion_vae.dataset import Video3DPoseDataset
-from vid2player3d.vid2player.motion_vae.model import PoseMixtureVAE
-from vid2player3d.vid2player.utils.konia_transform import quaternion_to_angle_axis
-from vid2player3d.vid2player.utils.torch_transform import rot6d_to_angle_axis
+from vid2player.motion_vae.config import *
+from vid2player.motion_vae.dataset import Video3DPoseDataset
+from vid2player.motion_vae.model import PoseMixtureVAE
+from vid2player.utils.konia_transform import quaternion_to_angle_axis
+from vid2player.utils.torch_transform import rot6d_to_angle_axis
 
 import os
 import numpy as np

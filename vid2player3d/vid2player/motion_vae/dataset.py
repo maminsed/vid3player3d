@@ -1,7 +1,7 @@
-from vid2player3d.vid2player.utils.io import *
-from vid2player3d.vid2player.utils.pose import SMPLPose
-from vid2player3d.vid2player.utils.common import concat
-from vid2player3d.vid2player.utils.torch_transform import rotmat_to_rot6d
+from vid2player.utils.io import *
+from vid2player.utils.pose import SMPLPose
+from vid2player.utils.common import concat
+from vid2player.utils.torch_transform import rotmat_to_rot6d
 
 from torch.utils.data import Dataset
 import os

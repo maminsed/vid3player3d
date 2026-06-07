@@ -12,7 +12,7 @@ from einops import rearrange
 from GVHMR.hmr4d.utils.geo.hmr_cam import create_camera_sensor
 from GVHMR.hmr4d.utils.geo_transform import transform_mat, apply_T_on_points
 from GVHMR.hmr4d.utils.geo.transforms import axis_rotate_to_matrix
-import vid3player.GVHMR.hmr4d.utils.matrix as matrix
+import GVHMR.hmr4d.utils.matrix as matrix
 
 halfpi = np.pi / 2
 R_y_upsidedown = torch.tensor([[-1, 0, 0], [0, -1, 0], [0, 0, 1]]).float()

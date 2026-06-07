@@ -1,6 +1,6 @@
 import torch
 from pytorch3d.transforms import axis_angle_to_matrix, matrix_to_axis_angle, matrix_to_quaternion, quaternion_to_matrix
-import vid3player.GVHMR.hmr4d.utils.matrix as matrix
+import GVHMR.hmr4d.utils.matrix as matrix
 from GVHMR.hmr4d.utils.net_utils import gaussian_smooth
 
 

@@ -7,7 +7,7 @@ from pytorch3d.transforms import (
     matrix_to_axis_angle,
 )
 
-import vid3player.GVHMR.hmr4d.utils.matrix as matrix
+import GVHMR.hmr4d.utils.matrix as matrix
 from GVHMR.hmr4d.utils.ik.ccd_ik import CCD_IK
 from GVHMR.hmr4d.utils.geo_transform import get_sequence_cammat, transform_mat, apply_T_on_points
 from GVHMR.hmr4d.utils.net_utils import gaussian_smooth

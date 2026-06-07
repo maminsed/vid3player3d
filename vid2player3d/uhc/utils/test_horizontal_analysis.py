@@ -8,7 +8,7 @@ on a single sequence for quick testing.
 import joblib
 import numpy as np
 import matplotlib.pyplot as plt
-from vid2player3d.uhc.utils.analyze_horizontal_drift import analyze_horizontal_trajectory, create_interactive_trajectory_plot
+from uhc.utils.analyze_horizontal_drift import analyze_horizontal_trajectory, create_interactive_trajectory_plot
 
 def test_single_sequence(amass_data_path, sequence_name=None):
     """

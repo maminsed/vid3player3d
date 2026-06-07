@@ -11,7 +11,7 @@ from GVHMR.hmr4d.utils.wis3d_utils import make_wis3d, add_motion_as_lines
 from GVHMR.hmr4d.utils.vis.renderer_utils import simple_render_mesh_background
 from GVHMR.hmr4d.utils.video_io_utils import read_video_np, save_video
 
-import vid3player.GVHMR.hmr4d.utils.matrix as matrix
+import GVHMR.hmr4d.utils.matrix as matrix
 from GVHMR.hmr4d.utils.net_utils import get_valid_mask, repeat_to_max_len, repeat_to_max_len_dict
 from GVHMR.hmr4d.dataset.imgfeat_motion.base_dataset import ImgfeatMotionDatasetBase
 from GVHMR.hmr4d.dataset.bedlam.utils import mid2featname, mid2vname

@@ -20,7 +20,7 @@ import sys
 import numpy as np
 
 try:
-    import vid3player.vid2player3d.poselib.poselib.skeleton.backend.fbx as fbx
+    import poselib.poselib.skeleton.backend.fbx as fbx
     import FbxCommon
 except ImportError as e:
     print("Error: FBX Import Failed. Message: {}".format(e))

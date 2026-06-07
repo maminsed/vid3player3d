@@ -10,9 +10,9 @@ from rl_games.algos_torch import torch_ext
 from rl_games.algos_torch import central_value
 from rl_games.algos_torch.running_mean_std import RunningMeanStd
 
-import vid3player.vid2player3d.embodied_pose.learning.common_agent as common_agent
-import vid3player.vid2player3d.embodied_pose.learning.amp_datasets as amp_datasets
-from vid2player3d.embodied_pose.utils.tools import AverageMeter, get_eta_str
+import embodied_pose.learning.common_agent as common_agent
+import embodied_pose.learning.amp_datasets as amp_datasets
+from embodied_pose.utils.tools import AverageMeter, get_eta_str
 
 
 def swap01(arr):

@@ -9,18 +9,18 @@ import sys
 sys.path.append('./')
 sys.path.append('./poselib')
 
-from vid2player3d.embodied_pose.utils.config import set_np_formatting, get_args, parse_sim_params, load_cfg
-from vid2player3d.embodied_pose.utils.parse_task import parse_task
+from embodied_pose.utils.config import set_np_formatting, get_args, parse_sim_params, load_cfg
+from embodied_pose.utils.parse_task import parse_task
 
 from rl_games.algos_torch import torch_ext
 from rl_games.common import env_configurations, vecenv
 from rl_games.common.algo_observer import AlgoObserver
 from rl_games.torch_runner import Runner
 
-from vid2player3d.embodied_pose.models.im_models import ImitatorModel
-from vid2player3d.embodied_pose.models.im_network_builder import ImitatorBuilder
-from vid2player3d.embodied_pose.agents.im_agent import ImitatorAgent
-from vid2player3d.embodied_pose.players.im_player import ImitatorPlayer
+from embodied_pose.models.im_models import ImitatorModel
+from embodied_pose.models.im_network_builder import ImitatorBuilder
+from embodied_pose.agents.im_agent import ImitatorAgent
+from embodied_pose.players.im_player import ImitatorPlayer
 
 args = None
 cfg = None

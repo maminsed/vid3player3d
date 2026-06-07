@@ -10,7 +10,7 @@ from rl_games.algos_torch import torch_ext
 from rl_games.algos_torch.players import rescale_actions, unsqueeze_obs
 from rl_games.common.player import BasePlayer
 
-import vid3player.vid2player3d.embodied_pose.learning.common_player as common_player
+import embodied_pose.learning.common_player as common_player
 
 
 class ImitatorPlayer(common_player.CommonPlayer):

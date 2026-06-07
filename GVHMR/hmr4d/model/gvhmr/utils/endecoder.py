@@ -10,7 +10,7 @@ from pytorch3d.transforms import (
 )
 from GVHMR.hmr4d.configs import MainStore, builds
 from GVHMR.hmr4d.utils.geo.augment_noisy_pose import gaussian_augment
-import vid3player.GVHMR.hmr4d.utils.matrix as matrix
+import GVHMR.hmr4d.utils.matrix as matrix
 from GVHMR.hmr4d.utils.pylogger import Log
 from GVHMR.hmr4d.utils.geo.hmr_global import get_local_transl_vel, rollout_local_transl_vel
 from GVHMR.hmr4d.utils.smplx_utils import make_smplx

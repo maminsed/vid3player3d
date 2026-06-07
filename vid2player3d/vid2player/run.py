@@ -5,24 +5,24 @@
 # distribution of this software and related documentation without an express
 # license agreement from NVIDIA CORPORATION is strictly prohibited.
 
-from vid2player3d.vid2player.utils.config import set_np_formatting, get_args, parse_sim_params, load_cfg
-from vid2player3d.vid2player.utils.parse_task import parse_task
+from vid2player.utils.config import set_np_formatting, get_args, parse_sim_params, load_cfg
+from vid2player.utils.parse_task import parse_task
 
 from rl_games.algos_torch import torch_ext
 from rl_games.common import env_configurations, vecenv
 from rl_games.common.algo_observer import AlgoObserver
 from rl_games.torch_runner import Runner
 
-from vid2player3d.vid2player.agents.v2p_agent import V2PAgent
-from vid2player3d.vid2player.players.v2p_player import V2PPlayer
-from vid2player3d.vid2player.models.v2p_models import V2PModel
-from vid2player3d.vid2player.models.v2p_network_builder import V2PBuilder
-from vid2player3d.vid2player.models.v2p_network_builder_dual import V2PBuilderDual
-from vid2player3d.vid2player.models.v2p_network_builder_dual_v2 import V2PBuilderDualV2
+from vid2player.agents.v2p_agent import V2PAgent
+from vid2player.players.v2p_player import V2PPlayer
+from vid2player.models.v2p_models import V2PModel
+from vid2player.models.v2p_network_builder import V2PBuilder
+from vid2player.models.v2p_network_builder_dual import V2PBuilderDual
+from vid2player.models.v2p_network_builder_dual_v2 import V2PBuilderDualV2
 
-from vid2player3d.vid2player.players.im_player import ImitatorPlayer
-from vid2player3d.vid2player.models.im_models import ImitatorModel
-from vid2player3d.vid2player.models.im_network_builder import ImitatorBuilder
+from vid2player.players.im_player import ImitatorPlayer
+from vid2player.models.im_models import ImitatorModel
+from vid2player.models.im_network_builder import ImitatorBuilder
 
 
 args = None

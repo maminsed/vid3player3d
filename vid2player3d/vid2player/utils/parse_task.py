@@ -5,11 +5,11 @@
 # distribution of this software and related documentation without an express
 # license agreement from NVIDIA CORPORATION is strictly prohibited.
 
-from vid2player3d.vid2player.env.tasks.physics_mvae_controller import PhysicsMVAEController
-from vid2player3d.vid2player.env.tasks.physics_mvae_controller_dual import PhysicsMVAEControllerDual
-from vid2player3d.vid2player.env.tasks.mvae_controller_vis import MVAEControllerVis
-from vid2player3d.vid2player.env.tasks.mvae_controller_vis_dual import MVAEControllerVisDual
-from vid2player3d.vid2player.env.tasks.vec_task_wrappers import VecTaskPythonWrapper
+from vid2player.env.tasks.physics_mvae_controller import PhysicsMVAEController
+from vid2player.env.tasks.physics_mvae_controller_dual import PhysicsMVAEControllerDual
+from vid2player.env.tasks.mvae_controller_vis import MVAEControllerVis
+from vid2player.env.tasks.mvae_controller_vis_dual import MVAEControllerVisDual
+from vid2player.env.tasks.vec_task_wrappers import VecTaskPythonWrapper
 
 import numpy as np
 

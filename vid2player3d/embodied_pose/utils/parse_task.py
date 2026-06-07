@@ -5,9 +5,9 @@
 # distribution of this software and related documentation without an express
 # license agreement from NVIDIA CORPORATION is strictly prohibited.
 
-from vid2player3d.embodied_pose.env.tasks.humanoid_smpl_im import HumanoidSMPLIM
-from vid2player3d.embodied_pose.env.tasks.humanoid_smpl_im_vis import HumanoidSMPLIMVis
-from vid2player3d.embodied_pose.env.tasks.vec_task_wrappers import VecTaskPythonWrapper
+from embodied_pose.env.tasks.humanoid_smpl_im import HumanoidSMPLIM
+from embodied_pose.env.tasks.humanoid_smpl_im_vis import HumanoidSMPLIMVis
+from embodied_pose.env.tasks.vec_task_wrappers import VecTaskPythonWrapper
 
 import numpy as np
 

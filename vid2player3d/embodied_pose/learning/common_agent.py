@@ -4,7 +4,7 @@ from rl_games.algos_torch import central_value
 from rl_games.algos_torch.running_mean_std import RunningMeanStd
 from rl_games.common import a2c_common
 
-import vid3player.vid2player3d.embodied_pose.learning.amp_datasets as amp_datasets
+import embodied_pose.learning.amp_datasets as amp_datasets
 
 import torch
 from torch import optim

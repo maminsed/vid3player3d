@@ -1,6 +1,6 @@
 from rl_games.algos_torch import torch_ext
 
-import vid3player.vid2player3d.vid2player.learning.common_player as common_player
+import vid2player.learning.common_player as common_player
 
 import torch
 import os

@@ -131,7 +131,7 @@ params:
 
   config:
     pretrained_model_cp: results/tennis_im/models/Humanoid_latest.pth 
-    name: general_tennis_motion3
+    name: general_tennis_motion4
     env_name: rlgpu
     multi_gpu: False
     ppo: True

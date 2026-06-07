@@ -2,7 +2,7 @@ import os
 from lxml.etree import XMLParser, parse, SubElement
 from lxml import etree
 import numpy as np
-from vid2player3d.uhc.utils.transformation import quaternion_from_matrix
+from uhc.utils.transformation import quaternion_from_matrix
 
 TEMPLATE_FILE = "embodied_pose/data/assets/mjcf/humanoid_template_local.xml"
 
