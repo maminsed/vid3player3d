@@ -21,7 +21,7 @@ env:
   terminationHeadHeight: 1.0
   show_gym_viewer: True #Test:
   enableEarlyTermination: True
-  motion_file: data/motion_lib/updated_0-Adrian_Mannarino_vs._Jiri_Lehecka_reencoded-scene004-000
+  motion_file: data/motion_lib/updated_0-Amanda_Anisimova_vs._Iga_Swiatek_reencoded-scene005-001
   residual_force_scale: 31.85
   context_length: 32
   context_padding: 8
@@ -112,8 +112,8 @@ params:
   load_checkpoint: False
 
   config:
-    pretrained_model_cp: output/general_tennis_motion_filtered/models/general_tennis_motion3_latest.pth
-    name: general_tennis_motion3
+    pretrained_model_cp: output/general_tennis_motion_filtered/models/general_tennis_motion4_latest.pth
+    name: general_tennis_motion4
     env_name: rlgpu
     multi_gpu: False
     ppo: True

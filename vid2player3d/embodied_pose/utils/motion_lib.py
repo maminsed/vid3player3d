@@ -12,8 +12,8 @@ import yaml
 import joblib
 import torch
 
-from poselib.poselib.skeleton.skeleton3d import SkeletonMotion
-from poselib.poselib.core.rotation3d import *
+from poselib.skeleton.skeleton3d import SkeletonMotion
+from poselib.core.rotation3d import *
 
 
 USE_CACHE = True

@@ -87,14 +87,14 @@ python embodied_pose/run.py --cfg amass_im --rl_device cuda:0 --headless
 
 python -u embodied_pose/run.py --cfg general_tennis_motion_filtered --rl_device cuda:0 --headless --results_dir ./output &> output_logs.txt
 
+python -u embodied_pose/run.py --cfg specific_on_general --play --checkpoint latest --record --num_rec_frames 300 --rec_fname saved_video.mp4 --results_dir ./output &> sim_logs.txt
+
+
 python -u embodied_pose/run.py --cfg 0-Adrian_Mannarino_vs._Jiri_Lehecka_reencoded-scene000-000 --play --checkpoint latest --record --num_rec_frames 300 --rec_fname saved_video.mp4 --results_dir ./output &>> sim_logs.txt
 
-python -u embodied_pose/run.py --cfg specefic_on_general --play --checkpoint latest --record --num_rec_frames 300 --rec_fname saved_video.mp4 --results_dir ./output &> sim_logs.txt
-
-
 # Try this when in waterloo
-python -u embodied_pose/run.py --cfg specefic_on_general --play --checkpoint latest --results_dir ./output
-python -u embodied_pose/run.py --cfg specefic_on_general --test --checkpoint epoch01000 --record --max_test_steps 20 --rec_fname video_saved.mp4 --results_dir  ./output &> output_log.txt
+python -u embodied_pose/run.py --cfg specific_on_general --play --checkpoint latest --results_dir ./output
+python -u embodied_pose/run.py --cfg specific_on_general --test --checkpoint epoch01000 --record --max_test_steps 20 --rec_fname video_saved.mp4 --results_dir  ./output &> output_log.txt
 
 --test
 
