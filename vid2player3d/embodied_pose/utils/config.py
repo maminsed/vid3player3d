@@ -155,7 +155,12 @@ def load_cfg(args):
 
     if args.test:
         cfg['name'] = cfg['test_name']
-    if args.motion_id is not None:
+    if args.export_dataset:
+        cfg['env']['stateInit'] = 'Start'
+
+    if args.export_dataset and args.motion_id is not None and args.motion_id < 0:
+        cfg['env']['sample_first_motions'] = True
+    elif args.motion_id is not None:
         cfg['env']['motion_id'] = args.motion_id
 
     cfg['env']['export_dataset'] = args.export_dataset

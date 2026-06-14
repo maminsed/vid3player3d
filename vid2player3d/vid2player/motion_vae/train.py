@@ -1,9 +1,10 @@
 from vid2player.motion_vae.config import *
 from vid2player.motion_vae.base import MotionVAEModel 
-from vid2player.motion_vae.test import test_motion_vae_randomwalk
 from argparse import ArgumentParser
+import logging
 
 
+logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s: %(message)s')
 parser = ArgumentParser()
 parser.add_argument('-e', '--exp', action='store', dest='exp_list',
                     type=str, nargs='*', default=['vx.x.x'],
@@ -18,6 +19,8 @@ parser.add_argument('-n', '--nframes', action='store', type=int, default=1000)
 parser.add_argument('-a', '--nactors', action='store', type=int, default=5)
 parser.add_argument('--ntests', action='store', type=int, default=1)
 parser.add_argument('--suffix', action='store', type=str, default='')
+parser.add_argument('--record_html', action='store_true')
+parser.add_argument('--record_cv', action='store_true')
 
 args = parser.parse_args()
 
@@ -33,7 +36,6 @@ if __name__ == '__main__':
             opt.n_epochs = 5
             opt.n_epochs_decay = 5
             opt.nseqs = 1000
-            opt.no_log = True
         opt.no_log = args.no_log
 
         if not args.test_only:
@@ -44,6 +46,8 @@ if __name__ == '__main__':
 
         # run test
         if args.run_test or args.test_only:
+            from vid2player.motion_vae.test import test_motion_vae_randomwalk
+
             print("Running test ... ")
             opt.test_only = True
             opt.infer_racket = True
@@ -53,5 +57,7 @@ if __name__ == '__main__':
                 num_runner=args.nactors, 
                 result_dir_suffix=args.suffix,
                 nframes=args.nframes, 
-                interactive=args.interactive
+                interactive=args.interactive,
+                record_html=args.record_html,
+                record_cv=args.record_cv,
             )

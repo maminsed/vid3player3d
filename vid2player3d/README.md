@@ -82,10 +82,12 @@ python vid2player/run.py --cfg federer_djokovic --rl_device cuda:0 --test --num_
 
 ### Low-level policy
 We provide the code for training the low-level policy in [embodied_pose](embodied_pose). As described in the paper, the low-level policy is trained in two stages using AMASS motions and tennis motions. You can run the following script to execute the two-stage training (assuming the motion data are available).
-```
+```bash
 python embodied_pose/run.py --cfg amass_im --rl_device cuda:0 --headless
 
 python -u embodied_pose/run.py --cfg general_tennis_motion_filtered --rl_device cuda:0 --headless --results_dir ./output &> output_logs.txt
+
+python -u embodied_pose/run.py --play --cfg general_tennis_motion_filtered --rl_device cuda:0 --headless --results_dir ./output/ --checkpoint latest --export_dataset &> export_dataset_logs.txt
 
 python -u embodied_pose/run.py --cfg specific_on_general --play --checkpoint latest --record --num_rec_frames 300 --rec_fname saved_video.mp4 --results_dir ./output &> sim_logs.txt
 
@@ -103,10 +105,20 @@ python -u embodied_pose/run.py --cfg specific_on_general --test --checkpoint epo
 
 ### Motion embedding
 We provide code for training the motion embedding in [vid2player/motion_vae](vid2player/motion_vae/) (assuming the motion data is organized in the format described in [Video3DPoseDataset](vid2player/motion_vae/dataset.py)).
+```bash
+python embodied_pose/run.py --play --cfg general_tennis_motion_filtered --rl_device cuda:0 --headless --results_dir ./output/ --checkpoint latest --export_dataset --num_envs 32  &> export_dataset_logs.txt
+
+python vid2player/motion_vae/convert_export_dataset.py --input-yaml exports/motion_export_motion.yaml --out-dir tennis_dataset_physics
+
+python vid2player/motion_vae/train.py  --exp federer_physics &> mvae_logs.txt
+
+#to run test
+PYTHONPATH=. python -u vid2player/motion_vae/train.py  --exp federer_physics --test_only --run_test --record_cv  &> mvae_test_logs.txt
+```
 
 ### High-level policy
 We also provide code for training the high-level policy in [vid2player](vid2player). As described in the paper, we design a curriculum trained in three stages. You can run the following script to execute the curriculum training (assuming the checkpoints for the low-leve policy and motion embedding are available).
-```
+```bash
 python vid2player/run.py --cfg federer_train_stage_1 --rl_device cuda:0 --headless
 python vid2player/run.py --cfg federer_train_stage_2 --rl_device cuda:0 --headless
 python vid2player/run.py --cfg federer_train_stage_3 --rl_device cuda:0 --headless

@@ -253,8 +253,135 @@ class ImitatorPlayer(common_player.CommonPlayer):
                 dones = np.expand_dims(np.asarray(dones), 0)
             return self.obs_to_torch(obs), torch.from_numpy(rewards), torch.from_numpy(dones), infos
 
+    def _reset_motion_export_data(self):
+        self.motion_export_data = {
+            'pose_aa': [],
+            'trans_orig': []
+        }
+
+    def _get_export_motion_ids(self):
+        if hasattr(self.args, 'motion_id') and self.args.motion_id is not None and self.args.motion_id >= 0:
+            return [int(self.args.motion_id)]
+        return list(range(self.task._motion_lib.num_motions()))
+
+    def _get_export_env_map(self):
+        env_map = {}
+        if hasattr(self.task, '_reset_ref_motion_ids'):
+            motion_ids = self.task._reset_ref_motion_ids.detach().cpu().numpy()
+            for env_id, motion_id in enumerate(motion_ids):
+                env_map.setdefault(int(motion_id), int(env_id))
+        return env_map
+
+    def _prepare_export_motion(self, motion_id, env_id):
+        self.task._reset_ref_motion_ids[env_id] = motion_id
+        if hasattr(self.task, '_reset_ref_motion_bodies'):
+            self.task._reset_ref_motion_bodies[env_id] = (
+                self.task._motion_lib._motion_bodies[motion_id].to(self.device)
+            )
+
+        return self.env_reset()
+
+    def _get_export_rollout_steps(self, motion_id):
+        rollout_steps = self.max_steps
+        if hasattr(self.task._motion_lib, '_motion_num_frames'):
+            motion_frames = int(self.task._motion_lib._motion_num_frames[motion_id].item())
+            rollout_steps = min(rollout_steps, motion_frames)
+        return max(1, rollout_steps)
+
+    def _reset_done_background_envs(self, done, export_env_id):
+        done_env_ids = done.nonzero(as_tuple=False).view(-1)
+        if done_env_ids.numel() == 0:
+            return None
+
+        reset_env_ids = done_env_ids[done_env_ids != export_env_id]
+        if reset_env_ids.numel() == 0:
+            return None
+
+        print(f"Resetting {reset_env_ids.numel()} completed background env(s): {reset_env_ids.detach().cpu().tolist()}")
+        if self.is_rnn and self.states is not None:
+            for state in self.states:
+                state[:, reset_env_ids, :] = 0.0
+
+        return self.env_reset(reset_env_ids)
+
+    def _run_export_dataset(self):
+        print("\nStarting deterministic export over motion library...")
+        motion_ids = self._get_export_motion_ids()
+        export_env_map = self._get_export_env_map()
+        print(f"Exporting {len(motion_ids)} motion(s): {motion_ids}")
+
+        missing_motion_ids = [motion_id for motion_id in motion_ids if motion_id not in export_env_map]
+        if missing_motion_ids:
+            print("WARNING: Some motion ids were not assigned their own env at sim creation.")
+            print(f"WARNING: Missing env ids for motions: {missing_motion_ids}")
+            print("WARNING: Falling back to env 0 for those motions; leave --num_envs unset or set it >= num motions for best exports.")
+
+        render = self.render_env
+        is_determenistic = self.is_determenistic
+        has_masks = False
+        has_masks_func = getattr(self.env, "has_action_mask", None) is not None
+        if has_masks_func:
+            has_masks = self.env.has_action_mask()
+
+        for export_idx, motion_id in enumerate(motion_ids):
+            export_env_id = export_env_map.get(motion_id, 0)
+            rollout_steps = self._get_export_rollout_steps(motion_id)
+            print("\n" + "="*60)
+            print(f"Exporting motion {motion_id} ({export_idx + 1}/{len(motion_ids)}) from env {export_env_id}")
+            print(f"Rollout steps: {rollout_steps}")
+            print("="*60)
+
+            self._reset_motion_export_data()
+            obs_dict = self._prepare_export_motion(motion_id, export_env_id)
+            batch_size = self.get_batch_size(obs_dict['obs'], 1)
+
+            if self.is_rnn:
+                self.init_rnn()
+
+            print("Initializing visualization...")
+            self.task.render_vis(init=True)
+
+            for n in range(rollout_steps):
+                print(f"\nExport step {n}/{rollout_steps} for motion {motion_id}")
+                t = n % self.task.context_length
+                if n > 0 and t == 0:
+                    print("Resetting context...")
+                    self.task._init_context(self.task._reset_ref_motion_ids, self.task._cur_ref_motion_times)
+
+                obs_dict['t'] = t
+                obs_dict['global_t_offset'] = n - t
+                if has_masks:
+                    masks = self.env.get_action_mask()
+                    action = self.get_masked_action(obs_dict, masks, is_determenistic)
+                else:
+                    action = self.get_action(obs_dict, is_determenistic)
+
+                obs_dict, _, done, info = self.env_step(self.env, action)
+                self.task.render_vis()
+                self._post_step(info)
+                self._collect_motion_data(env_id=export_env_id)
+
+                if render:
+                    self.env.render(sync_frame_time=True)
+
+                if bool(done[export_env_id].item()):
+                    print(f"Motion {motion_id} terminated at export step {n}")
+                    break
+
+                reset_obs_dict = self._reset_done_background_envs(done, export_env_id)
+                if reset_obs_dict is not None:
+                    obs_dict = reset_obs_dict
+
+            self._save_motion_data(motion_id=motion_id, env_id=export_env_id)
+
+        print("\nExport complete.")
+        return
+
     def run(self):
         print("\nStarting ImitatorPlayer.run()...")
+        if self._export_dataset and self.motion_export_data is not None:
+            return self._run_export_dataset()
+
         n_games = self.games_num
         render = self.render_env
         n_game_life = self.n_game_life
@@ -413,8 +540,7 @@ class ImitatorPlayer(common_player.CommonPlayer):
 
         return
 
-    def _collect_motion_data(self):
-        env_id = 0
+    def _collect_motion_data(self, env_id=0):
         
         root_state = self.env.task._humanoid_root_states[env_id]
         root_pos = root_state[0:3].cpu().numpy()
@@ -471,12 +597,13 @@ class ImitatorPlayer(common_player.CommonPlayer):
         self.motion_export_data['pose_aa'].append(full_pose_aa_new.flatten())
         self.motion_export_data['trans_orig'].append(root_pos)
 
-    def _save_motion_data(self):
+    def _save_motion_data(self, motion_id=None, env_id=0):
         print("\n" + "="*60)
         print("SAVING EXPORTED MOTION DATA")
         print("="*60)
         
-        motion_id = self.env.task._reset_ref_motion_ids[0].item()
+        if motion_id is None:
+            motion_id = self.env.task._reset_ref_motion_ids[env_id].item()
         
         # Get metadata from the motion library
         motion_lib = self.env.task._motion_lib
@@ -539,6 +666,7 @@ class ImitatorPlayer(common_player.CommonPlayer):
         print(f"📊 Data summary:")
         print(f"   - Frames exported: {len(self.motion_export_data['pose_aa'])}")
         print(f"   - Motion ID: {motion_id}")
+        print(f"   - Env ID: {env_id}")
         print(f"   - Gender: {gender}")
         print(f"   - FPS: {fps}")
         print(f"   - File size: {os.path.getsize(full_path) / 1024:.1f} KB")

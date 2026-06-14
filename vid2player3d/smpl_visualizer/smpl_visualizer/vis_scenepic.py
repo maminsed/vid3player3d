@@ -391,6 +391,7 @@ class SportVisualizerHTML():
             self.ball_targets = init_args.get('ball_targets')
             self.num_actors, self.num_fr = self.smpl_verts.shape[:2]
         else:
+            self.ball_targets = None
             self.init_players_and_rackets(smpl_seq=init_args.get('smpl_seq'), 
                 racket_seq=init_args.get('racket_seq'))
 

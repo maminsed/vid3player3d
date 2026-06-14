@@ -564,11 +564,12 @@ class HumanoidSMPLIM(HumanoidSMPL):
             self._cur_ref_motion_times[env_ids] = motion_times
         self._set_target_motion_state(env_ids=env_ids if use_env_ids else None)
 
-        self._init_context(motion_ids, motion_times)
+        self._init_context(motion_ids, motion_times, env_ids=env_ids if use_env_ids else None)
         return
 
-    def _init_context(self, motion_ids, motion_times):
+    def _init_context(self, motion_ids, motion_times, env_ids=None):
         motion_times = motion_times + self.dt
+        num_context_envs = motion_ids.shape[0]
         context_padded_length = self.context_length + self.context_padding * 2
         all_motion_ids = torch.tile(motion_ids.unsqueeze(-1), [1, context_padded_length])
         time_steps = self.dt * torch.arange(-self.context_padding, self.context_length + self.context_padding, device=motion_times.device)
@@ -590,10 +591,26 @@ class HumanoidSMPLIM(HumanoidSMPL):
 
         self._transform_target(context_dict)
 
-        self.context_feat = torch.cat([context_dict[x].view(context_dict[x].shape[0], -1) for x in self.context_names], dim=-1)
-        self.context_feat = self.context_feat.view(self.num_envs, -1, self.context_feat.shape[-1])
+        context_feat = torch.cat([context_dict[x].view(context_dict[x].shape[0], -1) for x in self.context_names], dim=-1)
+        context_feat = context_feat.view(num_context_envs, -1, context_feat.shape[-1])
 
-        self.context_mask = all_motion_times <= (self._motion_lib._motion_lengths[self._reset_ref_motion_ids] + 2 * self.dt).unsqueeze(-1)
+        context_mask = all_motion_times <= (self._motion_lib._motion_lengths[motion_ids] + 2 * self.dt).unsqueeze(-1)
+
+        if env_ids is None:
+            self.context_feat = context_feat
+            self.context_mask = context_mask
+        else:
+            env_ids = env_ids.view(-1)
+            expected_feat_shape = (self.num_envs, context_feat.shape[1], context_feat.shape[2])
+            expected_mask_shape = (self.num_envs, context_mask.shape[1])
+            if (not hasattr(self, 'context_feat')
+                    or not hasattr(self, 'context_mask')
+                    or self.context_feat.shape != expected_feat_shape
+                    or self.context_mask.shape != expected_mask_shape):
+                self.context_feat = torch.zeros(expected_feat_shape, device=context_feat.device, dtype=context_feat.dtype)
+                self.context_mask = torch.zeros(expected_mask_shape, device=context_mask.device, dtype=context_mask.dtype)
+            self.context_feat[env_ids] = context_feat
+            self.context_mask[env_ids] = context_mask
 
         if self.model is not None:
             if not self.is_env_dim_setup:

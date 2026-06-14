@@ -14,6 +14,8 @@ class MotionVAEOption(object):
     pose_feature = ['root_pos', 'root_velo', 'joint_rotmat', 'joint_pos', 'joint_velo']
     update_joint_pos = False
     predict_phase = False
+    condition_root_x_only = False
+    no_condition_root_y = False
     
     # Network
     frame_size = None
@@ -107,6 +109,14 @@ motion_vae_opt_dict = {
     'n_epochs_decay'                        : 250,
     'save_freq_epoch'                       : 50,
 }, 
+
+'federer_physics': {
+    'model_ver'                             : 'federer_physics',
+    'base_opt_ver'                          : 'federer',
+    'dataset_dir'                           : 'tennis_dataset_physics',
+    'predict_phase'                         : False,
+    'mixed_phase_schedule'                  : None,
+},
 
 'djokovic': {
     'model_ver'                             : 'djokovic',

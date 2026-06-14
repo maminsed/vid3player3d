@@ -10,6 +10,25 @@ import copy
 import torch
 
 
+def encode_action(action, action_dim):
+    action = torch.as_tensor(action, dtype=torch.long)
+    if action_dim is None:
+        raise ValueError("action_dim must be set to encode actions.")
+    action_dim = int(action_dim)
+    if action.numel() > 0:
+        min_action = int(action.min().item())
+        max_action = int(action.max().item())
+        if min_action < 0 or max_action >= action_dim:
+            raise ValueError(
+                "Action labels must be in [0, {}), got min={} max={}.".format(
+                    action_dim, min_action, max_action))
+
+    encoded = torch.zeros(action.shape + (action_dim,), device=action.device, dtype=torch.float32)
+    if action.numel() > 0:
+        encoded.scatter_(-1, action.unsqueeze(-1), 1.0)
+    return encoded
+
+
 class Video3DPoseDataset(Dataset):
 
     def __init__(
