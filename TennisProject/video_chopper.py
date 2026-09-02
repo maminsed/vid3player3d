@@ -2,156 +2,181 @@ import os
 import os.path as path
 import ffmpeg
 import json
+from glob import glob
 from scenedetect import detect, ContentDetector
 from datetime import datetime
+from time import perf_counter
+
+INPUT_DIR = "/pub2/amin/youtube_download/video_only_usopen/reencoded_2/"
+OUTPUT_DIR = "/pub2/amin/vid3player/TennisProject/chopped_2/"
+SCENE_STATS_DIR = "/pub2/amin/vid3player/TennisProject/scene_stats/"
+FPS = 30
+MAX_CHUNK_SECONDS = 15
+MIN_SCENE_SECONDS = 1
+SCENE_THRESHOLD = 12.0
+SCENE_MIN_LEN_FRAMES = 8
+SCENE_EDGE_WEIGHT = 0.5
+CRF = 18
+PRESET = "slow"
 
 
-def scene_detect(path_video):
+def log(message):
+    print(f"[{datetime.now().isoformat(timespec='seconds')}] {message}", flush=True)
+
+
+def scene_detect(path_video, stats_file_path=None):
     """
     Split video to disjoint fragments based on color histograms.
-    Returns list of [start_time_seconds, end_time_seconds] for each scene.
+    Returns list of [start_frame, end_frame, start_time_seconds, end_time_seconds].
     """
-    scene_list = detect(path_video, ContentDetector())
+    detector = ContentDetector(
+        threshold=SCENE_THRESHOLD,
+        min_scene_len=SCENE_MIN_LEN_FRAMES,
+    )
+    scene_list = detect(path_video, detector, stats_file_path=stats_file_path)
 
     if scene_list == []:
         raise RuntimeError(f"Empty scenes for {path_video}")
 
-    scenes = [[x[0].get_seconds(), x[1].get_seconds()] for x in scene_list]
+    scenes = [
+        [start.frame_num, end.frame_num, start.get_seconds(), end.get_seconds()]
+        for start, end in scene_list
+    ]
     return scenes
 
 
 def main():
-    DIR = "../youtube_download/video_only_usopen/reencoded/"
-    MAX_CHUNK_SECONDS = 15
+    run_start_time = perf_counter()
     resDict = {}
+    max_chunk_frames = MAX_CHUNK_SECONDS * FPS
+    min_scene_frames = MIN_SCENE_SECONDS * FPS
 
-    os.makedirs("chopped", exist_ok=True)
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    os.makedirs(SCENE_STATS_DIR, exist_ok=True)
 
     try:
-        for input_path in os.listdir(DIR):
+        for input_path in os.listdir(INPUT_DIR):
             if not input_path.endswith(".mp4"):
                 continue
 
-            full_path = path.join(DIR, input_path)
-            print(f"\n\nProcessing: {input_path}")
+            base_name = input_path[:-4]
+            existing = glob(path.join(OUTPUT_DIR, f"{base_name}-scene*-*.mp4"))
+            if existing:
+                log(f"already processed skipping! {existing}")
+                continue
+
+            video_start_time = perf_counter()
+            full_path = path.join(INPUT_DIR, input_path)
+            log(f"\n\nProcessing: {input_path}")
 
             resDict[input_path] = []
 
             try:
-                scenes = scene_detect(full_path)
+                detect_start_time = perf_counter()
+                stats_file_path = path.join(SCENE_STATS_DIR, f"{base_name}_scene_stats.csv")
+                scenes = scene_detect(full_path, stats_file_path=stats_file_path)
+                log(
+                    f"Scene detection found {len(scenes)} scenes for {input_path} "
+                    f"in {perf_counter() - detect_start_time:.2f}s; stats={stats_file_path}"
+                )
             except Exception as e:
-                print(f"Scene detection failed for {full_path}: {e}")
+                log(f"Scene detection failed for {full_path}: {e}")
                 resDict[input_path].append("scene detection failed")
                 continue
 
-            base_name = input_path[:-4]
 
-            for scene_idx, (start_time, end_time) in enumerate(scenes):
-                print(f"At scene_idx: {scene_idx}")
+            for scene_idx, (start_frame, end_frame, start_time, end_time) in enumerate(scenes):
+                scene_start_time = perf_counter()
+                log(f"At scene_idx: {scene_idx}")
 
-                duration = end_time - start_time
-                if duration <= 1:  # Don't want less than 1 second long vids
-                    print(f"Skipping very short scene in {base_name}, idx={scene_idx}")
+                scene_frames = end_frame - start_frame
+                duration = scene_frames / FPS
+                if scene_frames <= min_scene_frames:
+                    log(f"Skipping very short scene in {base_name}, idx={scene_idx}")
                     resDict[input_path].append(
-                        f"scene_idx: {scene_idx} skipped (duration {duration:.2f}s)"
+                        f"scene_idx: {scene_idx} skipped (duration {duration:.2f}s). start_time: {start_time}, end_time: {end_time}"
                     )
                     continue
 
                 try:
-                    in_stream = ffmpeg.input(full_path)
+                    chunk_idx = 0
+                    chunk_start = start_frame
 
-                    # Trim to the scene boundaries
-                    trimmed = (
-                        in_stream
-                        .trim(start=start_time, end=end_time)
-                        .setpts('PTS-STARTPTS')
-                    )
+                    while chunk_start < end_frame:
+                        chunk_wall_start_time = perf_counter()
+                        chunk_end = min(chunk_start + max_chunk_frames, end_frame)
+                        chunk_duration = (chunk_end - chunk_start) / FPS
 
-                    # Convert to CFR 30fps
-                    trimmed_cfr = trimmed.filter('fps', fps=30)
+                        if chunk_duration <= MIN_SCENE_SECONDS:
+                            break
 
-                    # ----- CASE 1: Scene shorter than or equal to MAX_CHUNK_SECONDS -----
-                    # Don't chop further; just one file with suffix 000.
-                    if duration <= 20:
-                        output_path = path.join(
-                            'chopped',
-                            f"{base_name}-scene{scene_idx:03d}-000.mp4"
+                        chunk_output_path = path.join(
+                            OUTPUT_DIR,
+                            f"{base_name}-scene{scene_idx:03d}-{chunk_idx:03d}.mp4",
                         )
-                        print(
-                            f"  -> scene {scene_idx}: {start_time:.2f}s - {end_time:.2f}s "
-                            f"(duration {duration:.2f}s) -> {output_path}"
+                        log(
+                            f"  -> scene {scene_idx}, chunk {chunk_idx}: "
+                            f"frames {chunk_start}-{chunk_end} "
+                            f"(duration {chunk_duration:.2f}s) -> {chunk_output_path}"
                         )
-                        print('skipping chopping more due to size')
+
+                        in_stream = ffmpeg.input(full_path)
+                        trimmed = (
+                            in_stream
+                            .trim(start_frame=chunk_start, end_frame=chunk_end)
+                            .setpts("PTS-STARTPTS")
+                        )
 
                         (
-                            trimmed_cfr
+                            trimmed
                             .output(
-                                output_path,
+                                chunk_output_path,
                                 vcodec='libx264',
                                 an=None,
                                 pix_fmt='yuv420p',
-                                movflags='+faststart',
-                                crf=22,          # adjust if you need smaller/larger files
-                                preset='slow',   # better compression at same quality
+                                crf=CRF,
+                                preset=PRESET,
                                 reset_timestamps=1
                             )
                             .run(quiet=True)
                         )
 
-                    # ----- CASE 2: Scene longer than MAX_CHUNK_SECONDS -----
-                    # Use segment muxer to further chop into <= MAX_CHUNK_SECONDS chunks.
-                    else:
-                        output_pattern = path.join(
-                            'chopped',
-                            f"{base_name}-scene{scene_idx:03d}-%03d.mp4"
+                        log(
+                            f"Finished scene {scene_idx}, chunk {chunk_idx} "
+                            f"in {perf_counter() - chunk_wall_start_time:.2f}s"
                         )
-                        print(
-                            f"  -> scene {scene_idx}: {start_time:.2f}s - {end_time:.2f}s "
-                            f"(duration {duration:.2f}s) -> {output_pattern}"
+                        resDict[input_path].append(
+                            f"scene_idx: {scene_idx}, chunk_idx: {chunk_idx} processed successfully "
+                            f"(duration {chunk_duration:.2f}s)"
                         )
 
-                        (
-                            trimmed_cfr
-                            .output(
-                                output_pattern,
-                                vcodec='libx264',
-                                an=None,
-                                pix_fmt='yuv420p',
-                                movflags='+faststart',
-                                crf=22,
-                                preset='slow',
-                                f='segment',
-                                segment_time=MAX_CHUNK_SECONDS,
-                                reset_timestamps=1,
-                            )
-                            .run(quiet=True)
-                        )
+                        chunk_idx += 1
+                        chunk_start = chunk_end
 
-                    resDict[input_path].append(
-                        f"scene_idx: {scene_idx} processed successfully (duration {duration:.2f}s)"
-                    )
+                    log(f"Finished scene {scene_idx} in {perf_counter() - scene_start_time:.2f}s")
 
                 except Exception as e:
-                    print(f"Error processing scene {scene_idx} in {base_name}: {e}")
+                    log(f"Error processing scene {scene_idx} in {base_name}: {e}")
                     resDict[input_path].append(
                         f"scene_idx: {scene_idx} failed with error: {e}"
                     )
-            # break
+            log(f"Finished video {input_path} in {perf_counter() - video_start_time:.2f}s")
     except Exception as e:
-        print("Big Exception Occurred:", e)
+        log(f"Big Exception Occurred: {e}")
     finally:
         # Save results to JSON
         try:
             with open("chop_results.json", "w", encoding="utf-8") as f:
                 json.dump(resDict, f, indent=2)
-            print("Saved results to chop_results.json")
+            log("Saved results to chop_results.json")
         except Exception as e:
-            print("Failed to write chop_results.json:", e)
+            log(f"Failed to write chop_results.json: {e}")
 
+        log(f"Total run time: {perf_counter() - run_start_time:.2f}s")
         return resDict
 
 
 if __name__ == "__main__":
-    print(f"Start at {datetime.now().isoformat()}")
+    log("Start")
     main()
-    print(f"Done at {datetime.now().isoformat()}")
+    log("Done")
