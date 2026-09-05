@@ -9,8 +9,9 @@ import cv2
 def scene_detect(path_video):
     """
     Split video to disjoint fragments based on color histograms
+    We have already choped with video_chopper.py so we stick with ffmpeg probe.
     """
-    scene_list = detect(path_video, ContentDetector())
+    scene_list = [] # detect(path_video, ContentDetector())
 
     if scene_list == []:
         probe = ffmpeg.probe(path_video)

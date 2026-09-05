@@ -24,11 +24,16 @@ class PersonDetector():
         
     def detect(self, image, person_min_score=0.85): 
         PERSON_LABEL = 1
-        frame_tensor = image.transpose((2, 0, 1)) / 255
-        frame_tensor = torch.from_numpy(frame_tensor).unsqueeze(0).float().to(self.dtype)
-        
+        rgb = cv2.cvtColor(image,cv2.COLOR_BGR2RGB)
+        frame_tensor = (
+            torch.from_numpy(rgb)
+            .permute(2,0,1)
+            .float()
+            .div(255.0)
+            .to(self.dtype)
+        )
         with torch.no_grad():
-            preds = self.detection_model(frame_tensor)
+            preds = self.detection_model([frame_tensor])
             
         persons_boxes = []
         probs = []

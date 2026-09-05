@@ -10,10 +10,11 @@ from TennisProject.utils import scene_detect
 import argparse
 import pandas as pd
 import os.path as path
+import time
 
 def read_video(path_video):
     cap = cv2.VideoCapture(path_video)
-    fps = int(cap.get(cv2.CAP_PROP_FPS))
+    fps = 30 # int(cap.get(cv2.CAP_PROP_FPS))
     frames = []
     model_width,model_height = 640,360
     H,W = None,None
@@ -210,11 +211,19 @@ def main(frames, num_scene, bounces, ball_track, homography_matrices, kps_court,
 
 def write(imgs_res, fps, path_output_video):
     height, width = imgs_res[0].shape[:2]
-    out = cv2.VideoWriter(path_output_video, cv2.VideoWriter_fourcc(*'DIVX'), fps, (width, height))
-    for num in range(len(imgs_res)):
-        frame = imgs_res[num]
-        out.write(frame)
-    out.release()    
+    out = cv2.VideoWriter(
+        path_output_video, 
+        cv2.VideoWriter_fourcc(*'mp4v'), 
+        fps, 
+        (width, height)
+    )
+    try:
+        if not out.isOpened():
+            raise RuntimeError(f"could not open video: {path_output_video}")
+        for i,frame in enumerate(imgs_res):
+            out.write(frame)
+    finally:
+        out.release()    
 
 
 if __name__ == '__main__':
@@ -228,67 +237,79 @@ if __name__ == '__main__':
     parser.add_argument('--save', type=str, help='If we should save the video')
     args = parser.parse_args()
     if args.save == 'True':
-        print("saving: ")
+        print(f"{time.perf_counter()}: saving: ")
     else:
-        print("not saving")
+        print(f"{time.perf_counter()}: not saving")
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     input_video:str = args.path_input_video
     output_video:str = args.path_output_video
-    print('scene detection')
+    data_path: str = output_video.replace(".mp4",".csv")
+    print(f"going from {input_video} -> {output_video} and datapath: {data_path}")
+    print(f'{time.perf_counter()}: scene detection')
     frames, fps, output_width,output_height = read_video(input_video) 
-    scenes = scene_detect(input_video)    
+    scenes = [(0,len(frames))] # scene_detect(input_video)    
     print(f"len(scenes): {len(scenes)}")
 
-    print("initializing detectors")
+    print(f"{time.perf_counter()}: initializing detectors")
     court_detector = CourtDetectorNet(args.path_court_model, device)
     ball_detector = BallDetector(args.path_ball_track_model, device)
     person_detector = PersonDetector(device)
     bounce_detector = BounceDetector(args.path_bounce_model)
-    
-    firstDash = output_video.find("-scene")
-    dot = output_video.rfind(".")
-    if firstDash == -1:
-        base_name = output_video[:dot]
-    else:
-        base_name = output_video[:firstDash]
-    data_path = base_name + ".csv"
 
     for num_scene in range(len(scenes)):
-        output_video_name = f"{num_scene}-{output_video}"
-        print(f"at num_scene: {num_scene}") 
-        start,end = scenes[num_scene]  
+        output_video_name = path.join(path.dirname(output_video),f"{num_scene}-{path.basename(output_video)}")
+        print(f"{time.perf_counter()}: at num_scene: {num_scene}") 
+        start,end = scenes[num_scene] # frame
 
-        print('court detection')
+        print(f'{time.perf_counter()}: court detection')
         homography_matrices, kps_court = court_detector.infer_model(frames, start,end)
 
         # we don't want scenes that have less that half not court
-        is_track = [x is not None for x in homography_matrices] 
-        sum_track = sum(is_track)
-        len_track = end - start
-        eps = 1e-15
-        scene_rate = sum_track/(len_track+eps)
-        if (scene_rate <= 0.5): continue
+        # new_start = start
+        # is_track = [x is not None for x in homography_matrices] 
+        # sum_track = sum(is_track)
+        # len_track = end - start
+        # eps = 1e-15
+        # scene_rate = sum_track/(len_track+eps)
+        # if (scene_rate <= 0.5): continue
 
-        print('ball detection')
-        ball_track = ball_detector.infer_model(frames, start, end)
+        # triming the sides + getting rid of empty scenes. 
+        tennis_scene = [i+start for i in range(len(homography_matrices)) if homography_matrices[i] is not None]
+        if not tennis_scene: 
+            print(f"{time.perf_counter()}: scene does not have a tennis court.")
+            continue
+        startFrame = tennis_scene[0]
+        endFrame = tennis_scene[-1]+1
+        localstart = startFrame - start
+        localend = endFrame - start
+        print(f"There is {(endFrame-startFrame)/30:,.2f} seconds of tennis court on the screen.")
+        if endFrame - startFrame < 1 * 30: 
+            print(f"{time.perf_counter()}: there is less than 1 second of tennis court on the scene.")
+            continue
+        
+        homography_matrices = homography_matrices[localstart:localend]
+        kps_court = kps_court[localstart:localend]
 
-        print('person detection')
-        persons_top, persons_bottom = person_detector.track_players(frames, homography_matrices, start, end, filter_players=True)
+        print(f'{time.perf_counter()}: ball detection')
+        ball_track = ball_detector.infer_model(frames, startFrame, endFrame)
+
+        print(f'{time.perf_counter()}: person detection')
+        persons_top, persons_bottom = person_detector.track_players(frames, homography_matrices, startFrame, endFrame, filter_players=True)
 
         # bounce detection
-        print('bounce detection')
+        print(f'{time.perf_counter()}: bounce detection')
         x_ball = [x[0] for x in ball_track]
         y_ball = [x[1] for x in ball_track]
-        bounces = bounce_detector.predict(x_ball, y_ball, start=start)
+        bounces = bounce_detector.predict(x_ball, y_ball, start=startFrame) # **
 
-        print('combining')
-        imgs_res = main(frames, num_scene, bounces, ball_track, homography_matrices, kps_court, persons_top, persons_bottom, data_path, start,end,
+        print(f'{time.perf_counter()}: combining')
+        imgs_res = main(frames, num_scene, bounces, ball_track, homography_matrices, kps_court, persons_top, persons_bottom, data_path, startFrame,endFrame,
                         draw_trace=False, output_w=output_width, output_h=output_height,output_video_name=output_video_name)
         
         del homography_matrices, ball_track, bounces, persons_bottom, persons_top, kps_court
         if args.save == 'True':
-            print('downloading')
+            print(f'{time.perf_counter()}: downloading')
             write(imgs_res, fps, output_video_name)
  
 

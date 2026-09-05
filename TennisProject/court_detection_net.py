@@ -7,6 +7,71 @@ from TennisProject.postprocess import refine_kps
 from TennisProject.homography import get_trans_matrix, refer_kps
 from itertools import islice
 
+
+def smooth_court_predictions(matrixes, keypoints, radius=3, strength=0.4):
+    """Smooth one camera scene offline, keeping image-to-court maps consistent.
+
+    Blend each frame with the mean of its centered window (including itself).
+    Missing detections split windows and remain missing. Radius is in frames;
+    strength=0 or radius=0 disables smoothing. Inputs are never modified.
+    """
+    if not isinstance(radius, int) or radius < 0:
+        raise ValueError("radius must be a non-negative integer")
+    if not 0 <= strength <= 1:
+        raise ValueError("strength must be between 0 and 1")
+    if len(matrixes) != len(keypoints):
+        raise ValueError("Matrices and keypoints must have the same length")
+
+    smoothed_matrices = list(matrixes)
+    smoothed_points = list(keypoints)
+    if radius == 0 or strength == 0:
+        return smoothed_matrices, smoothed_points
+
+    valid = [
+        p is not None and m is not None
+        and np.isfinite(p).all() and np.isfinite(m).all()
+        for m, p in zip(matrixes, keypoints)
+    ]
+    continued=0
+    for i, points in enumerate(keypoints):
+        if not valid[i]:
+            smoothed_matrices[i] = None
+            smoothed_points[i] = None
+            continued+=1
+            continue
+
+        left, right = i, i + 1
+        while left > max(0, i - radius) and valid[left - 1]:
+            left -= 1
+        while right < min(len(keypoints), i + radius + 1) and valid[right]:
+            right += 1
+        if right - left == 1:
+            continued+=1
+            continue
+
+        mean_points = np.mean(np.stack(keypoints[left:right]), axis=0)
+        target = ((1 - strength) * points + strength * mean_points).astype(np.float32)
+
+        # Averaging projected points need not preserve a single projective court.
+        # Fit all 14 correspondences, then derive both outputs from that fit.
+        forward, _ = cv2.findHomography(refer_kps, target, method=0)
+        if forward is None or not np.isfinite(forward).all():
+            continued+=1
+            continue  # Retain the original matched pair if the fit fails.
+        invertible, inverse = cv2.invert(forward)
+        if not invertible or not np.isfinite(inverse).all():
+            continued+=1
+            continue
+        projected = cv2.perspectiveTransform(refer_kps, forward)
+        if not np.isfinite(projected).all():
+            continued+=1
+            continue
+        smoothed_matrices[i] = inverse
+        smoothed_points[i] = projected
+    print(f"debug: continued/valid: {continued/sum(valid):.2f}")
+    return smoothed_matrices, smoothed_points
+
+
 class CourtDetectorNet():
     def __init__(self, path_model=None,  device='cuda'):
         self.model = BallTrackerNet(out_channels=15).to(device)
@@ -16,7 +81,7 @@ class CourtDetectorNet():
             self.model = self.model.to(device)
             self.model.eval()
     @torch.inference_mode()
-    def infer_model(self, frames, start,end):
+    def infer_model(self, frames, start,end, smoothing_radius=5, smoothing_strength=0.4):
         scaleX = 1
         scaleY = 1
         
@@ -50,5 +115,7 @@ class CourtDetectorNet():
                 matrix_trans = cv2.invert(matrix_trans)[1]
             kps_res.append(points)
             matrixes_res.append(matrix_trans)
-            
-        return matrixes_res, kps_res    
+
+        return smooth_court_predictions(
+            matrixes_res, kps_res, smoothing_radius, smoothing_strength
+        )

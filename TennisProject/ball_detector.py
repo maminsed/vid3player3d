@@ -23,7 +23,7 @@ class BallDetector:
         :return
             ball_track: list of detected ball points
         """
-        ball_track = [(None, None)]*2
+        ball_track = [(None, None)]*(end-start)
         prev_pred = [None, None]
         for num in range(max(2,start), end): #tqdm
             img = cv2.resize(frames[num], (self.width, self.height))
@@ -39,7 +39,7 @@ class BallDetector:
             output = out.argmax(dim=1).detach().cpu().numpy()
             x_pred, y_pred = self.postprocess(output, prev_pred)
             prev_pred = [x_pred, y_pred]
-            ball_track.append((x_pred, y_pred))
+            ball_track[num-start] = (x_pred, y_pred)
         return ball_track
 
     def postprocess(self, feature_map, prev_pred, scaleX=1, scaleY=1, max_dist=80):
