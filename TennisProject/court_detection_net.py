@@ -33,6 +33,9 @@ def smooth_court_predictions(matrixes, keypoints, radius=3, strength=0.4):
         for m, p in zip(matrixes, keypoints)
     ]
     continued=0
+    avgleft=0
+    avgright=0
+    validCount=0
     for i, points in enumerate(keypoints):
         if not valid[i]:
             smoothed_matrices[i] = None
@@ -68,7 +71,10 @@ def smooth_court_predictions(matrixes, keypoints, radius=3, strength=0.4):
             continue
         smoothed_matrices[i] = inverse
         smoothed_points[i] = projected
-    print(f"debug: continued/valid: {continued/sum(valid):.2f}")
+        avgleft+=i-left
+        avgright+=right-(i+1)
+        validCount+=1
+    print(f"debug: continued/valid: {continued/max(1,sum(valid)):.4f}. avgleft: {avgleft/max(1,validCount):.2f}. avgright={avgright/validCount:.2f}")
     return smoothed_matrices, smoothed_points
 
 
@@ -81,13 +87,16 @@ class CourtDetectorNet():
             self.model = self.model.to(device)
             self.model.eval()
     @torch.inference_mode()
-    def infer_model(self, frames, start,end, smoothing_radius=5, smoothing_strength=0.4):
+    def infer_model(self, frames, start,end, smoothing_radius=16, smoothing_strength=0.8):
         scaleX = 1
         scaleY = 1
         
         kps_res = []
         matrixes_res = []
+        num_refined=0
+        totalFrames=0
         for num_frame, image in enumerate(islice(frames, start,end), start): # tqdm
+            totalFrames+=1
             inp_np = (image.astype(np.float32) / 255.)
             inp = torch.from_numpy(inp_np).permute(2, 0, 1).unsqueeze(0).to(self.device, non_blocking=True)
             out = self.model(inp)[0]
@@ -103,7 +112,8 @@ class CourtDetectorNet():
                     x_pred = circles[0][0][0]*scaleX
                     y_pred = circles[0][0][1]*scaleY
                     if kps_num not in [8, 12, 9]:
-                        x_pred, y_pred = refine_kps(image, int(y_pred), int(x_pred), crop_size=40)
+                        x_pred, y_pred, is_refined = refine_kps(image, int(y_pred), int(x_pred), crop_size=20)
+                        num_refined+=int(is_refined)
                     points.append((x_pred, y_pred))                
                 else:
                     points.append(None)
@@ -115,7 +125,7 @@ class CourtDetectorNet():
                 matrix_trans = cv2.invert(matrix_trans)[1]
             kps_res.append(points)
             matrixes_res.append(matrix_trans)
-
+        print(f"debug: average number of refined points per frame: {num_refined/totalFrames:.2f}/14")
         return smooth_court_predictions(
             matrixes_res, kps_res, smoothing_radius, smoothing_strength
         )

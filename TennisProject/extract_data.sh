@@ -1,14 +1,15 @@
 #!/bin/bash
 
 INPUT_DIR="chopped_2/"
-OUTPUT_DIR="res_2/"
+OUTPUT_DIR="test_2/"
 mkdir -p $OUTPUT_DIR
 echo &> logs/mylogs.txt
-echo &> pythonlogs.txt
+echo &> logs/pythonlogs.txt
 
 echo "STARTED OPERATION $(date)" &>> logs/mylogs.txt
 i=0
 for FILE in "$INPUT_DIR"/*.mp4; do
+    i=$((i + 1))
     printf "\n\n=================\n" &>> logs/mylogs.txt
     # if [ $i -lt 2 ]; then
     #     continue
@@ -28,7 +29,6 @@ for FILE in "$INPUT_DIR"/*.mp4; do
         echo "Failed at $(date)" &>> logs/mylogs.txt
     fi;
     echo "Finished FIle $FILE -> $OUTPUTFILE at $(date)" &>> logs/mylogs.txt
-    i=$((i + 1))
 done
 
 echo "FINISHED ENTIRE OPERATION $(date) with $i videos processed" &>> logs/mylogs.txt

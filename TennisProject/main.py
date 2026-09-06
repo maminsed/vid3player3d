@@ -11,6 +11,8 @@ import argparse
 import pandas as pd
 import os.path as path
 import time
+import subprocess
+import tempfile
 
 def read_video(path_video):
     cap = cv2.VideoCapture(path_video)
@@ -210,20 +212,58 @@ def main(frames, num_scene, bounces, ball_track, homography_matrices, kps_court,
     return imgs_res
 
 def write(imgs_res, fps, path_output_video):
+    """Write a small H.264 debug MP4 that VS Code can preview.
+
+    Requires FFmpeg with libx264. Keep all frames and the original timing,
+    but limit resolution to 960x540 and favor encoding speed over quality.
+    """
+    if len(imgs_res) == 0:
+        raise ValueError("Cannot write a video without frames")
+    if not np.isfinite(fps) or fps <= 0:
+        raise ValueError("Video fps must be positive and finite")
     height, width = imgs_res[0].shape[:2]
-    out = cv2.VideoWriter(
-        path_output_video, 
-        cv2.VideoWriter_fourcc(*'mp4v'), 
-        fps, 
-        (width, height)
-    )
-    try:
-        if not out.isOpened():
-            raise RuntimeError(f"could not open video: {path_output_video}")
-        for i,frame in enumerate(imgs_res):
-            out.write(frame)
-    finally:
-        out.release()    
+    scale = min(1.0, 960 / width, 540 / height)
+    # yuv420p needs even dimensions. Resize before piping to reduce data transfer.
+    size = (max(2, int(width * scale) // 2 * 2),
+            max(2, int(height * scale) // 2 * 2))
+    command = [
+        'ffmpeg', '-hide_banner', '-loglevel', 'error', '-y',
+        '-f', 'rawvideo', '-pix_fmt', 'bgr24',
+        '-s', f'{size[0]}x{size[1]}', '-r', str(fps), '-i', 'pipe:0',
+        '-an', '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '30',
+        '-threads', '2', '-pix_fmt', 'yuv420p', '-movflags', '+faststart',
+        '-f', 'mp4', str(path_output_video),
+    ]
+    # A file captures diagnostics without risking a full stderr pipe deadlock.
+    with tempfile.TemporaryFile() as errors:
+        try:
+            out = subprocess.Popen(command, stdin=subprocess.PIPE, stderr=errors)
+        except FileNotFoundError as exc:
+            raise RuntimeError("Debug video writing requires FFmpeg with libx264") from exc
+        try:
+            for frame in imgs_res:
+                if frame.shape != (height, width, 3) or frame.dtype != np.uint8:
+                    raise ValueError("Video frames must be equally sized uint8 BGR images")
+                if size != (width, height):
+                    frame = cv2.resize(frame, size, interpolation=cv2.INTER_AREA)
+                out.stdin.write(frame.tobytes())
+            out.stdin.close()
+        except BrokenPipeError:
+            # Report FFmpeg's actual error below instead of just 'broken pipe'.
+            pass
+        except BaseException:
+            out.kill()
+            out.wait()
+            raise
+        finally:
+            try:
+                out.stdin.close()
+            except BrokenPipeError:
+                pass
+        if out.wait() != 0:
+            errors.seek(0)
+            detail = errors.read().decode(errors='replace').strip()
+            raise RuntimeError(f"Could not write video {path_output_video}: {detail}")
 
 
 if __name__ == '__main__':
@@ -311,12 +351,12 @@ if __name__ == '__main__':
         if args.save == 'True':
             print(f'{time.perf_counter()}: downloading')
             write(imgs_res, fps, output_video_name)
+            print(f'{time.perf_counter()}: downloaded')
  
 
     import resource
 
     usage = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
     print(f"Peak memory usage: {round(usage / 1_000_000,2)} GB")
-
 
 
