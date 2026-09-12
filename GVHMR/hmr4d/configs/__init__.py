@@ -13,7 +13,7 @@ MainStore = ConfigStore.instance()
 
 def register_store_gvhmr():
     """Register group options to MainStore"""
-    from .....GVHMR.hmr4d.configs import store_gvhmr
+    from GVHMR.hmr4d.configs import store_gvhmr
 
 
 def parse_args_to_cfg():

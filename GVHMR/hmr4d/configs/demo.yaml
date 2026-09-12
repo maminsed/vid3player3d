@@ -5,7 +5,7 @@ defaults:
   - endecoder: gvhmr/v1_amass_local_bedlam_cam
 
 pipeline:
-  _target_: hmr4d.model.gvhmr.pipeline.gvhmr_pipeline.Pipeline
+  _target_: GVHMR.hmr4d.model.gvhmr.pipeline.gvhmr_pipeline.Pipeline
   args_denoiser3d: ${network}
   args:
     endecoder_opt: ${endecoder}

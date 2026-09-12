@@ -14,7 +14,7 @@ import GVHMR.hmr4d.utils.matrix as matrix
 from GVHMR.hmr4d.utils.pylogger import Log
 from GVHMR.hmr4d.utils.geo.hmr_global import get_local_transl_vel, rollout_local_transl_vel
 from GVHMR.hmr4d.utils.smplx_utils import make_smplx
-from .......GVHMR.hmr4d.model.gvhmr.utils import stats_compose
+from GVHMR.hmr4d.model.gvhmr.utils import stats_compose
 
 
 class EnDecoder(nn.Module):

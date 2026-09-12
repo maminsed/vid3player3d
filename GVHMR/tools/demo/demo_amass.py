@@ -3,6 +3,7 @@ import torch
 import pytorch_lightning as pl
 import numpy as np
 import argparse
+import json
 from GVHMR.hmr4d.utils.pylogger import Log
 import hydra
 from hydra import initialize_config_module, compose
@@ -13,11 +14,13 @@ import joblib
 from GVHMR.hmr4d.configs import register_store_gvhmr
 from GVHMR.hmr4d.utils.video_io_utils import (
     get_video_lwh,
+    get_video_fps,
     read_video_np,
     save_video,
     merge_videos_horizontal,
     get_writer,
     get_video_reader,
+    trim_video,
 )
 from GVHMR.hmr4d.utils.vis.cv2_utils import draw_bbx_xyxy_on_image_batch, draw_coco17_skeleton_batch
 
@@ -34,13 +37,60 @@ from GVHMR.hmr4d.utils.geo_transform import apply_T_on_points, compute_T_ayfz2ay
 from einops import einsum, rearrange
 
 
-CRF = 23  # 17 is lossless, every +6 halves the mp4 size
+CRF = 23  # Visualization quality.
+INPUT_CRF = 10  # High-quality H.264 High/YUV420 input for preprocessing.
+
+
+def prepare_input_video(cfg, video_path, start_frame, end_frame, fps):
+    """Reuse only a verified copy of this source/range; rebuild dependent caches otherwise."""
+    output_path = Path(cfg.video_path)
+    if video_path.resolve() == output_path.resolve():
+        raise ValueError("Input and output video paths must differ")
+    metadata_path = output_path.with_suffix(".json")
+    source_stat = video_path.stat()
+    source = {
+        "path": str(video_path.resolve()),
+        "size": source_stat.st_size,
+        "mtime_ns": source_stat.st_mtime_ns,
+        "start_frame": start_frame,
+        "end_frame": end_frame,
+        "fps": fps,
+        "encoding": "ffmpeg-libx264-high-yuv420p-fast-v2",
+        "crf": INPUT_CRF,
+    }
+    metadata = {}
+    if metadata_path.exists():
+        try:
+            metadata = json.loads(metadata_path.read_text())
+        except (OSError, ValueError):
+            pass
+    if output_path.exists() and isinstance(metadata, dict) and metadata.get("source") == source:
+        output_stat = output_path.stat()
+        if metadata.get("output") == [output_stat.st_size, output_stat.st_mtime_ns]:
+            Log.info(f"[Input Video] Reusing verified frames [{start_frame}, {end_frame})")
+            return
+
+    Log.info(f"[Copy Video] {video_path} frames [{start_frame}, {end_frame}) -> {output_path}")
+    trim_video(video_path, output_path, start_frame, end_frame, fps=fps, crf=INPUT_CRF)
+    # These artifacts all depend on the exact saved input, including equal-length trims.
+    for cached_path in cfg.paths.values():
+        Path(cached_path).unlink(missing_ok=True)
+    output_stat = output_path.stat()
+    metadata_path.write_text(json.dumps({
+        "source": source,
+        "output": [output_stat.st_size, output_stat.st_mtime_ns],
+    }, indent=2))
+    Log.info(f"[Input Video] Verified {end_frame - start_frame} decoded frames at {fps} fps (H.264 High/YUV420, CRF {INPUT_CRF})")
 
 
 def parse_args_to_cfg():
     # Put all args to cfg
     parser = argparse.ArgumentParser()
     parser.add_argument("--video", type=str, default="inputs/demo/dance_3.mp4")
+    parser.add_argument("--start_frame", type=int, default=0, help="Zero-based first frame, inclusive")
+    parser.add_argument("--end_frame", type=int, default=-1, help="Zero-based stop frame, exclusive; -1 means EOF")
+    
+    
     parser.add_argument("--output_root", type=str, default=None, help="by default to outputs/demo")
     parser.add_argument("-s", "--static_cam", action="store_true", help="If true, skip DPVO")
     parser.add_argument("--use_dpvo", action="store_true", help="If true, use DPVO. By default not using DPVO.")
@@ -61,10 +111,17 @@ def parse_args_to_cfg():
     video_path = Path(args.video)
     assert video_path.exists(), f"Video not found at {video_path}"
     length, width, height = get_video_lwh(video_path)
+    start_frame = args.start_frame
+    end_frame = length if args.end_frame == -1 else args.end_frame
+    if not 0 <= start_frame < end_frame <= length:
+        parser.error(f"Expected 0 <= start_frame < end_frame <= {length}; got {start_frame}:{end_frame}")
+    fps = get_video_fps(video_path)
+    if not np.isclose(fps, 30.0, rtol=0, atol=1e-6):
+        parser.error(f"Input video must have 30 fps; got {fps}. No frame-rate conversion is performed.")
     Log.info(f"[Input]: {video_path}")
     Log.info(f"(L, W, H) = ({length}, {width}, {height})")
     # Cfg
-    with initialize_config_module(version_base="1.3", config_module=f"hmr4d.configs"):
+    with initialize_config_module(version_base="1.3", config_module=f"GVHMR.hmr4d.configs"):
         overrides = [
             f"video_name={video_path.stem}",
             f"static_cam={args.static_cam}",
@@ -84,20 +141,7 @@ def parse_args_to_cfg():
     Log.info(f"[Output Dir]: {cfg.output_dir}")
     Path(cfg.output_dir).mkdir(parents=True, exist_ok=True)
     Path(cfg.preprocess_dir).mkdir(parents=True, exist_ok=True)
-
-    # Copy raw-input-video to video_path
-    Log.info(f"[Copy Video] {video_path} -> {cfg.video_path}")
-    if not Path(cfg.video_path).exists() or get_video_lwh(video_path)[0] != get_video_lwh(cfg.video_path)[0]:
-        reader = get_video_reader(video_path)
-        writer = get_writer(cfg.video_path, fps=30, crf=CRF)
-        try:
-            for img in tqdm(reader, total=get_video_lwh(video_path)[0], desc=f"Copy"):
-                writer.write_frame(img)
-        except Exception as e:
-            writer.close()
-            reader.close()
-            raise e from e
-    Log.info("Done?")
+    prepare_input_video(cfg, video_path, start_frame, end_frame, fps)
     # Store AMASS settings separately (not in cfg to avoid OmegaConf issues)
     amass_settings = {
         'save_amass': args.save_amass,
