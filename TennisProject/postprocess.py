@@ -8,7 +8,7 @@ from sympy.geometry.point import Point2D
 
 # Set COURT_DEBUG_DIR=/tmp/court_debug before running to save the first 100
 # refinement crops per process (not frames). Unset it to disable image output.
-COURT_DEBUG_DIR = os.environ.get('COURT_DEBUG_DIR')
+COURT_DEBUG_DIR = os.environ.get('COURT_DEBUG_DIR',"./tmp/")
 SHOW_IMAGES=False
 COURT_DEBUG_MAX_IMAGES = 100
 _court_debug_count = 0

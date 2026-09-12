@@ -1,7 +1,7 @@
 #!/bin/bash
 
 INPUT_DIR="chopped_2/"
-OUTPUT_DIR="test_2/"
+OUTPUT_DIR="res_2/"
 mkdir -p $OUTPUT_DIR
 echo &> logs/mylogs.txt
 echo &> logs/pythonlogs.txt

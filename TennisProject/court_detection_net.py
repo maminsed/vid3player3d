@@ -74,7 +74,7 @@ def smooth_court_predictions(matrixes, keypoints, radius=3, strength=0.4):
         avgleft+=i-left
         avgright+=right-(i+1)
         validCount+=1
-    print(f"debug: continued/valid: {continued/max(1,sum(valid)):.4f}. avgleft: {avgleft/max(1,validCount):.2f}. avgright={avgright/validCount:.2f}")
+    print(f"debug: continued/valid: {continued/max(1,sum(valid)):.4f}. avgleft: {avgleft/max(1,validCount):.2f}. avgright={avgright/max(1,validCount):.2f}")
     return smoothed_matrices, smoothed_points
 
 
