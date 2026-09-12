@@ -28,8 +28,8 @@ for FILE in "$INPUT_DIR"/*.mp4; do
     INPUT_VIDEO="$HIGHER_RES_DIR"/"${basename#0-}".mp4
     TEMP_DIR=inputs/demo/"${basename#0-}".mp4
 
-    end_frame=$(python -c "import pandas as pd; df = pd.read_csv(\""$CSV_PATH"\"); print(df.loc[:,\"global_frame\"].iloc[-1] - 3)")
-    start_frame=$(python -c "import pandas as pd; df = pd.read_csv(\""$CSV_PATH"\"); print(df.loc[0,\"global_frame\"] + 3)")
+    end_frame=$(python -c "import pandas as pd; df = pd.read_csv(\""$CSV_PATH"\"); print(df.loc[:,\"global_frame\"].iloc[-1] - 3)") &> mylogs.txt
+    start_frame=$(python -c "import pandas as pd; df = pd.read_csv(\""$CSV_PATH"\"); print(df.loc[0,\"global_frame\"] + 3)") &> mylogs.txt
 
     echo "$(date): Started FIle_NAME: $FILE_NAME - CSV_PATH: $CSV_PATH - INPUT_VIDEO: $INPUT_VIDEO - start_frame: $start_frame - end_frame: $end_frame" &>> logs/mylogs.txt
 
@@ -39,12 +39,13 @@ for FILE in "$INPUT_DIR"/*.mp4; do
         --output_root "outputs/demo_2/" \
         --start_frame $start_frame \
         --end_frame $end_frame \
-        --save_amass &>> logs/pythonlogs.txt
+        --verbose \
+        --save_amass &>> logs/pythonlogs.txt # remove verbose!
     
     if [ $? -ne 0 ]; then
-        echo "$FILE_NAME" >> logs/processed.txt
         echo "Failed FIle $FILE_NAME at $(date)" &>> logs/mylogs.txt
     else
+        echo "$FILE_NAME" >> logs/processed.txt
         echo "Ended FIle $FILE_NAME at $(date)" &>> logs/mylogs.txt
     fi
 

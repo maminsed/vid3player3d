@@ -1,3 +1,4 @@
+from contextlib import closing, contextmanager
 import cv2
 import torch
 import pytorch_lightning as pl
@@ -16,9 +17,11 @@ from GVHMR.hmr4d.utils.video_io_utils import (
     get_video_lwh,
     get_video_fps,
     read_video_np,
-    save_video,
+    save_debug_video,
     merge_videos_horizontal,
-    get_writer,
+    get_debug_writer,
+    debug_video_size,
+    valid_debug_video,
     get_video_reader,
     trim_video,
 )
@@ -37,8 +40,20 @@ from GVHMR.hmr4d.utils.geo_transform import apply_T_on_points, compute_T_ayfz2ay
 from einops import einsum, rearrange
 
 
-CRF = 23  # Visualization quality.
 INPUT_CRF = 10  # High-quality H.264 High/YUV420 input for preprocessing.
+
+
+@contextmanager
+def log_stage(name):
+    start = Log.time()
+    Log.info(f"[{name}] Start")
+    try:
+        yield
+    except BaseException:
+        Log.info(f"[{name}] Interrupted/failed after {Log.time() - start:.2f}s")
+        raise
+    else:
+        Log.info(f"[{name}] End. Time elapsed: {Log.time() - start:.2f}s")
 
 
 def prepare_input_video(cfg, video_path, start_frame, end_frame, fps):
@@ -51,7 +66,6 @@ def prepare_input_video(cfg, video_path, start_frame, end_frame, fps):
     source = {
         "path": str(video_path.resolve()),
         "size": source_stat.st_size,
-        "mtime_ns": source_stat.st_mtime_ns,
         "start_frame": start_frame,
         "end_frame": end_frame,
         "fps": fps,
@@ -166,70 +180,74 @@ def run_preprocess(cfg):
     static_cam = cfg.static_cam
     verbose = cfg.verbose
 
-    # Get bbx tracking result
-    if not Path(paths.bbx).exists():
-        tracker = Tracker()
-        bbx_xyxy = tracker.get_one_track(video_path).float()  # (L, 4)
-        bbx_xys = get_bbx_xys_from_xyxy(bbx_xyxy, base_enlarge=1.2).float()  # (L, 3) apply aspect ratio and enlarge
-        torch.save({"bbx_xyxy": bbx_xyxy, "bbx_xys": bbx_xys}, paths.bbx)
-        del tracker
-    else:
-        bbx_xys = torch.load(paths.bbx)["bbx_xys"]
-        Log.info(f"[Preprocess] bbx (xyxy, xys) from {paths.bbx}")
-    if verbose:
-        video = read_video_np(video_path)
-        bbx_xyxy = torch.load(paths.bbx)["bbx_xyxy"]
-        video_overlay = draw_bbx_xyxy_on_image_batch(bbx_xyxy, video)
-        save_video(video_overlay, cfg.paths.bbx_xyxy_video_overlay)
-
-    # Get VitPose
-    if not Path(paths.vitpose).exists():
-        vitpose_extractor = VitPoseExtractor()
-        vitpose = vitpose_extractor.extract(video_path, bbx_xys)
-        torch.save(vitpose, paths.vitpose)
-        del vitpose_extractor
-    else:
-        vitpose = torch.load(paths.vitpose)
-        Log.info(f"[Preprocess] vitpose from {paths.vitpose}")
-    if verbose:
-        video = read_video_np(video_path)
-        video_overlay = draw_coco17_skeleton_batch(video, vitpose, 0.5)
-        save_video(video_overlay, paths.vitpose_video_overlay)
-
-    # Get vit features
-    if not Path(paths.vit_features).exists():
-        extractor = Extractor()
-        vit_features = extractor.extract_video_features(video_path, bbx_xys)
-        torch.save(vit_features, paths.vit_features)
-        del extractor
-    else:
-        Log.info(f"[Preprocess] vit_features from {paths.vit_features}")
-
-    # Get visual odometry results
-    if not static_cam:  # use slam to get cam rotation
-        if not Path(paths.slam).exists():
-            if not cfg.use_dpvo:
-                simple_vo = SimpleVO(cfg.video_path, scale=0.5, step=8, method="sift", f_mm=cfg.f_mm)
-                vo_results = simple_vo.compute()  # (L, 4, 4), numpy
-                torch.save(vo_results, paths.slam)
-            else:  # DPVO
-                from GVHMR.hmr4d.utils.preproc.slam import SLAMModel
-
-                length, width, height = get_video_lwh(cfg.video_path)
-                K_fullimg = estimate_K(width, height)
-                intrinsics = convert_K_to_K4(K_fullimg)
-                slam = SLAMModel(video_path, width, height, intrinsics, buffer=4000, resize=0.5)
-                bar = tqdm(total=length, desc="DPVO")
-                while True:
-                    ret = slam.track()
-                    if ret:
-                        bar.update()
-                    else:
-                        break
-                slam_results = slam.process()  # (L, 7), numpy
-                torch.save(slam_results, paths.slam)
+    with log_stage("Tracking"):
+        # Get bbx tracking result
+        if not Path(paths.bbx).exists():
+            tracker = Tracker()
+            bbx_xyxy = tracker.get_one_track(video_path).float()  # (L, 4)
+            bbx_xys = get_bbx_xys_from_xyxy(bbx_xyxy, base_enlarge=1.2).float()  # (L, 3) apply aspect ratio and enlarge
+            torch.save({"bbx_xyxy": bbx_xyxy, "bbx_xys": bbx_xys}, paths.bbx)
+            del tracker
         else:
-            Log.info(f"[Preprocess] slam results from {paths.slam}")
+            bbx_xys = torch.load(paths.bbx)["bbx_xys"]
+            Log.info(f"[Preprocess] bbx (xyxy, xys) from {paths.bbx}")
+        if verbose:
+            video = read_video_np(video_path)
+            bbx_xyxy = torch.load(paths.bbx)["bbx_xyxy"]
+            video_overlay = draw_bbx_xyxy_on_image_batch(bbx_xyxy, video)
+            save_debug_video(video_overlay, cfg.paths.bbx_xyxy_video_overlay)
+
+    with log_stage("VitPose"):
+        # Get VitPose
+        if not Path(paths.vitpose).exists():
+            vitpose_extractor = VitPoseExtractor()
+            vitpose = vitpose_extractor.extract(video_path, bbx_xys)
+            torch.save(vitpose, paths.vitpose)
+            del vitpose_extractor
+        else:
+            vitpose = torch.load(paths.vitpose)
+            Log.info(f"[Preprocess] vitpose from {paths.vitpose}")
+        if verbose:
+            video = read_video_np(video_path)
+            video_overlay = draw_coco17_skeleton_batch(video, vitpose, 0.5)
+            save_debug_video(video_overlay, paths.vitpose_video_overlay)
+
+    with log_stage("Image features"):
+        # Get vit features
+        if not Path(paths.vit_features).exists():
+            extractor = Extractor()
+            vit_features = extractor.extract_video_features(video_path, bbx_xys)
+            torch.save(vit_features, paths.vit_features)
+            del extractor
+        else:
+            Log.info(f"[Preprocess] vit_features from {paths.vit_features}")
+
+    with log_stage("Visual odometry"):
+        # Get visual odometry results
+        if not static_cam:  # use slam to get cam rotation
+            if not Path(paths.slam).exists():
+                if not cfg.use_dpvo:
+                    simple_vo = SimpleVO(cfg.video_path, scale=0.5, step=8, method="sift", f_mm=cfg.f_mm)
+                    vo_results = simple_vo.compute()  # (L, 4, 4), numpy
+                    torch.save(vo_results, paths.slam)
+                else:  # DPVO
+                    from GVHMR.hmr4d.utils.preproc.slam import SLAMModel
+
+                    length, width, height = get_video_lwh(cfg.video_path)
+                    K_fullimg = estimate_K(width, height)
+                    intrinsics = convert_K_to_K4(K_fullimg)
+                    slam = SLAMModel(video_path, width, height, intrinsics, buffer=4000, resize=0.5)
+                    bar = tqdm(total=length, desc="DPVO")
+                    while True:
+                        ret = slam.track()
+                        if ret:
+                            bar.update()
+                        else:
+                            break
+                    slam_results = slam.process()  # (L, 7), numpy
+                    torch.save(slam_results, paths.slam)
+            else:
+                Log.info(f"[Preprocess] slam results from {paths.slam}")
 
     Log.info(f"[Preprocess] End. Time elapsed: {Log.time()-tic:.2f}s")
 
@@ -251,20 +269,43 @@ def load_data_dict(cfg):
     else:
         K_fullimg = estimate_K(width, height).repeat(length, 1, 1)
 
+    cam_angvel = compute_cam_angvel(R_w2c)
+    # The final entry repeats the last transition; exclude it from statistics.
+    # These six values encode rotation only, with identity [1, 0, 0, 0, 1, 0].
+    transitions = cam_angvel[:-1]
+    camera_source = "static assumption" if cfg.static_cam else ("DPVO" if cfg.use_dpvo else "SimpleVO")
+    if len(transitions):
+        identity_6d = transitions.new_tensor([1, 0, 0, 0, 1, 0])
+        mean_6d = transitions.mean(dim=0)
+        mean_abs_change = (transitions - identity_6d).abs().mean(dim=0)
+        Log.info(
+            f"[Camera movement] {camera_source}, {len(transitions)} frame transitions; "
+            f"6D component order=[r00, r01, r02, r10, r11, r12]; "
+            f"mean rotation=[{', '.join(f'{v:.6f}' for v in mean_6d.tolist())}]; "
+            f"mean abs deviation from identity=[{', '.join(f'{v:.6f}' for v in mean_abs_change.tolist())}] "
+            "(dimensionless rotation representation, excludes translation/zoom)"
+        )
+    else:
+        Log.info(f"[Camera movement] {camera_source}: no frame transitions to average")
+
     data = {
         "length": torch.tensor(length),
         "bbx_xys": torch.load(paths.bbx)["bbx_xys"],
         "kp2d": torch.load(paths.vitpose),
         "K_fullimg": K_fullimg,
-        "cam_angvel": compute_cam_angvel(R_w2c),
+        "cam_angvel": cam_angvel,
         "f_imgseq": torch.load(paths.vit_features),
     }
     return data
 
 
+@torch.no_grad()
+@log_stage("Render Incam")
 def render_incam(cfg):
     incam_video_path = Path(cfg.paths.incam_video)
-    if incam_video_path.exists():
+    length, source_width, source_height = get_video_lwh(cfg.video_path)
+    width, height = debug_video_size(source_width, source_height)
+    if valid_debug_video(incam_video_path, length, width, height):
         Log.info(f"[Render Incam] Video already exists at {incam_video_path}")
         return
 
@@ -279,38 +320,34 @@ def render_incam(cfg):
 
     # -- rendering code -- #
     video_path = cfg.video_path
-    length, width, height = get_video_lwh(video_path)
-    K = pred["K_fullimg"][0]
+    K = pred["K_fullimg"][0].clone()
+    K[0] *= width / source_width
+    K[1] *= height / source_height
 
     # renderer
     renderer = Renderer(width, height, device="cuda", faces=faces_smpl, K=K)
-    reader = get_video_reader(video_path)  # (F, H, W, 3), uint8, numpy
-    bbx_xys_render = torch.load(cfg.paths.bbx)["bbx_xys"]
 
     # -- render mesh -- #
     verts_incam = pred_c_verts
-    writer = get_writer(incam_video_path, fps=30, crf=CRF)
-    for i, img_raw in tqdm(enumerate(reader), total=get_video_lwh(video_path)[0], desc=f"Rendering Incam"):
-        img = renderer.render_mesh(verts_incam[i].cuda(), img_raw, [0.8, 0.8, 0.8])
-
-        # # bbx
-        # bbx_xys_ = bbx_xys_render[i].cpu().numpy()
-        # lu_point = (bbx_xys_[:2] - bbx_xys_[2:] / 2).astype(int)
-        # rd_point = (bbx_xys_[:2] + bbx_xys_[2:] / 2).astype(int)
-        # img = cv2.rectangle(img, lu_point, rd_point, (255, 178, 102), 2)
-
-        writer.write_frame(img)
-    writer.close()
-    reader.close()
+    with closing(get_video_reader(video_path)) as reader, get_debug_writer(incam_video_path, width, height, length) as writer:
+        for i, img_raw in tqdm(enumerate(reader), total=length, desc="Rendering Incam"):
+            img_raw = cv2.resize(img_raw, (width, height), interpolation=cv2.INTER_AREA)
+            img = renderer.render_mesh(verts_incam[i].cuda(), img_raw, [0.8, 0.8, 0.8])
+            writer.write_frame(img)
+            if (i + 1) % 100 == 0:
+                Log.info(f"[Render Incam] {i + 1}/{length} frames")
 
 
+@torch.no_grad()
+@log_stage("Render Global")
 def render_global(cfg):
     global_video_path = Path(cfg.paths.global_video)
-    if global_video_path.exists():
+    length, width, height = get_video_lwh(cfg.video_path)
+    width, height = debug_video_size(width, height)
+    if valid_debug_video(global_video_path, length, width, height):
         Log.info(f"[Render Global] Video already exists at {global_video_path}")
         return
 
-    debug_cam = False
     pred = torch.load(cfg.paths.hmr4d_results)
     smplx = make_smplx("supermotion").cuda()
     smplx2smpl = torch.load("hmr4d/utils/body_model/smplx2smpl_sparse.pt").cuda()
@@ -344,25 +381,28 @@ def render_global(cfg):
 
     # -- rendering code -- #
     video_path = cfg.video_path
-    length, width, height = get_video_lwh(video_path)
     _, _, K = create_camera_sensor(width, height, 24)  # render as 24mm lens
 
     # renderer
-    # renderer = Renderer(width, height, device="cuda", faces=faces_smpl, K=K)
-    renderer = Renderer(width, height, device="cuda", faces=faces_smpl, K=K, bin_size=0)
+    # Use automatic coarse-to-fine binning rather than the naive full-image rasterizer.
+    renderer = Renderer(width, height, device="cuda", faces=faces_smpl, K=K)
 
     # -- render mesh -- #
     scale, cx, cz = get_ground_params_from_points(joints_glob[:, 0], verts_glob)
     renderer.set_ground(scale * 1.5, cx, cz)
+    # The body and checkerboard can overlap in one bin; the default capacity can overflow.
+    renderer.renderer.rasterizer.raster_settings.max_faces_per_bin = (
+        len(faces_smpl) + len(renderer.ground_geometry[1])
+    )
     color = torch.ones(3).float().cuda() * 0.8
 
-    render_length = length if not debug_cam else 8
-    writer = get_writer(global_video_path, fps=30, crf=CRF)
-    for i in tqdm(range(render_length), desc=f"Rendering Global"):
-        cameras = renderer.create_camera(global_R[i], global_T[i])
-        img = renderer.render_with_ground(verts_glob[[i]], color[None], cameras, global_lights)
-        writer.write_frame(img)
-    writer.close()
+    with get_debug_writer(global_video_path, width, height, length) as writer:
+        for i in tqdm(range(length), desc="Rendering Global"):
+            cameras = renderer.create_camera(global_R[i], global_T[i])
+            img = renderer.render_with_ground(verts_glob[[i]], color[None], cameras, global_lights)
+            writer.write_frame(img)
+            if (i + 1) % 100 == 0:
+                Log.info(f"[Render Global] {i + 1}/{length} frames")
 
 
 def save_amass_format(amass_output, pred):
@@ -533,6 +573,5 @@ if __name__ == "__main__":
     # ===== Render ===== #
     render_incam(cfg)
     render_global(cfg)
-    if not Path(paths.incam_global_horiz_video).exists():
-        Log.info("[Merge Videos]")
+    with log_stage("Merge Videos"):
         merge_videos_horizontal([paths.incam_video, paths.global_video], paths.incam_global_horiz_video)

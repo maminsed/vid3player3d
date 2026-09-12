@@ -1,4 +1,6 @@
+from contextlib import contextmanager
 from fractions import Fraction
+import subprocess
 import tempfile
 import imageio.v3 as iio
 import numpy as np
@@ -172,13 +174,118 @@ def copy_file(video_path, out_video_path, overwrite=True):
     shutil.copy(video_path, out_video_path)
 
 
+def debug_video_size(width, height):
+    scale = min(1.0, 960 / width, 540 / height)
+    return max(2, int(width * scale) // 2 * 2), max(2, int(height * scale) // 2 * 2)
+
+
+def valid_debug_video(path, length, width, height, fps=30):
+    """Do not reuse interrupted, incompatible, or outdated-resolution renders."""
+    if not Path(path).is_file():
+        return False
+    try:
+        stream = ffmpeg.probe(str(path), select_streams="v:0", count_frames=None)["streams"][0]
+        return (
+            stream.get("codec_name") == "h264" and stream.get("pix_fmt") == "yuv420p"
+            and stream.get("profile") in ("High", "Main", "Constrained Baseline")
+            and int(stream.get("nb_read_frames", 0)) == length
+            and (stream["width"], stream["height"]) == (width, height)
+            and abs(float(Fraction(stream["avg_frame_rate"])) - fps) < 1e-6
+        )
+    except (ffmpeg.Error, KeyError, ValueError, IndexError, ZeroDivisionError):
+        return False
+
+
+class _DebugWriter:
+    def __init__(self, pipe, width, height):
+        self.pipe, self.width, self.height = pipe, width, height
+        self.count = 0
+
+    def write_frame(self, frame):
+        frame = np.asarray(frame)
+        if frame.shape != (self.height, self.width, 3) or frame.dtype != np.uint8:
+            raise ValueError("Debug writer expects RGB uint8 frames at the requested dimensions")
+        self.pipe.write(frame.tobytes())
+        self.count += 1
+
+
+@contextmanager
+def get_debug_writer(path, width, height, length, fps=30):
+    """Fast H.264/YUV420; publish only after successful close and frame-count verification."""
+    path = Path(path)
+    with tempfile.TemporaryDirectory(prefix=".debug-", dir=path.parent) as directory, tempfile.TemporaryFile() as errors:
+        temporary = Path(directory) / path.name
+        output = ffmpeg.output(
+            ffmpeg.input("pipe:", format="rawvideo", pix_fmt="rgb24", s=f"{width}x{height}", framerate=fps),
+            str(temporary), vcodec="libx264", pix_fmt="yuv420p", crf=28, preset="veryfast",
+            threads=4, movflags="+faststart", **{"profile:v": "high"},
+        ).global_args("-loglevel", "error")
+        process = subprocess.Popen(ffmpeg.compile(output), stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=errors)
+        writer = _DebugWriter(process.stdin, width, height)
+        try:
+            yield writer
+            process.stdin.close()
+            if process.wait() != 0:
+                errors.seek(0)
+                raise RuntimeError(f"Debug encoding failed: {errors.read().decode(errors='replace')}")
+            if writer.count != length or not valid_debug_video(temporary, length, width, height, fps):
+                raise RuntimeError(f"Incomplete debug video: wrote {writer.count} frames; expected {length}")
+            temporary.replace(path)
+        finally:
+            if process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait()
+            if not process.stdin.closed:
+                try:
+                    process.stdin.close()
+                except BrokenPipeError:
+                    pass
+
+
+def save_debug_video(images, path, fps=30):
+    height, width = images[0].shape[:2]
+    width, height = debug_video_size(width, height)
+    with get_debug_writer(path, width, height, len(images), fps) as writer:
+        for frame in images:
+            writer.write_frame(cv2.resize(frame, (width, height), interpolation=cv2.INTER_AREA))
+
+
 def merge_videos_horizontal(in_video_paths: list, out_video_path: str):
     if len(in_video_paths) < 2:
         raise ValueError("At least two video paths are required for merging.")
-    inputs = [ffmpeg.input(path) for path in in_video_paths]
-    merged_video = ffmpeg.filter(inputs, "hstack", inputs=len(inputs))
-    output = ffmpeg.output(merged_video, out_video_path)
-    ffmpeg.run(output, overwrite_output=True, quiet=True)
+    properties = [get_video_lwh(path) for path in in_video_paths]
+    length, _, height = properties[0]
+    fps = get_video_fps(in_video_paths[0])
+    if any(l != length or h != height for l, w, h in properties):
+        raise ValueError("Merged videos must have equal frame counts and heights")
+    if any(abs(get_video_fps(path) - fps) > 1e-6 for path in in_video_paths):
+        raise ValueError("Merged videos must have equal frame rates")
+    width = sum(w for _, w, _ in properties)
+    out_video_path = Path(out_video_path)
+    if valid_debug_video(out_video_path, length, width, height, fps) and out_video_path.stat().st_mtime_ns >= max(
+        Path(path).stat().st_mtime_ns for path in in_video_paths
+    ):
+        return
+    with tempfile.TemporaryDirectory(prefix=".merge-", dir=out_video_path.parent) as directory:
+        temporary = Path(directory) / out_video_path.name
+        inputs = [ffmpeg.input(str(path)).video.filter("setpts", "PTS-STARTPTS") for path in in_video_paths]
+        merged = ffmpeg.filter(inputs, "hstack", inputs=len(inputs), shortest=1)
+        output = ffmpeg.output(
+            merged, str(temporary), vcodec="libx264", pix_fmt="yuv420p", crf=28,
+            preset="veryfast", threads=4, movflags="+faststart", vsync=0,
+            **{"profile:v": "high"},
+        ).global_args("-loglevel", "error")
+        try:
+            ffmpeg.run(output, capture_stdout=True, capture_stderr=True)
+        except ffmpeg.Error as exc:
+            raise RuntimeError(f"Video merge failed: {(exc.stderr or b'').decode(errors='replace')}") from exc
+        if not valid_debug_video(temporary, length, width, height, fps):
+            raise RuntimeError("Merged video failed frame-count/format verification")
+        temporary.replace(out_video_path)
 
 
 def merge_videos_vertical(in_video_paths: list, out_video_path: str):
