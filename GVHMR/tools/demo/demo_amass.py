@@ -28,6 +28,7 @@ from GVHMR.hmr4d.utils.video_io_utils import (
 from GVHMR.hmr4d.utils.vis.cv2_utils import draw_bbx_xyxy_on_image_batch, draw_coco17_skeleton_batch
 
 from GVHMR.hmr4d.utils.preproc import Tracker, Extractor, VitPoseExtractor, SimpleVO
+from GVHMR.hmr4d.utils.preproc.vitpose import interpolate_low_confidence
 
 from GVHMR.hmr4d.utils.geo.hmr_cam import get_bbx_xys_from_xyxy, estimate_K, convert_K_to_K4, create_camera_sensor
 from GVHMR.hmr4d.utils.geo_transform import compute_cam_angvel
@@ -171,6 +172,32 @@ def parse_args_to_cfg():
     return cfg, amass_settings
 
 
+def save_vitpose_debug_images(video, raw_pose, processed_pose, thresholds, output_dir):
+    """Save the first 30 repaired frames side by side, using raw scores on both."""
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    # Remove only our previous comparisons so reruns cannot leave stale frames.
+    for old_image in output_dir.glob("vitpose_frame_*.png"):
+        old_image.unlink()
+    repaired_frames = torch.where((processed_pose != raw_pose).any(dim=-1).any(dim=-1))[0][:30].tolist()
+    for frame_index in repaired_frames:
+        poses = torch.stack([raw_pose[frame_index], processed_pose[frame_index]])
+        poses[..., 2] = raw_pose[frame_index, :, 2]
+        panels = draw_coco17_skeleton_batch(
+            [video[frame_index], video[frame_index]], poses, show_confidence=True,
+            joint_conf_thr=thresholds, frame_indices=[frame_index, frame_index],
+        )
+        for i, title in enumerate(["Original ViTPose", "Filtered / interpolated ViTPose"]):
+            panels[i] = cv2.copyMakeBorder(panels[i], 40, 0, 0, 0, cv2.BORDER_CONSTANT, value=(0, 0, 0))
+            cv2.putText(panels[i], title, (8, 28), cv2.FONT_HERSHEY_SIMPLEX,
+                        0.8, (255, 255, 255), 2, cv2.LINE_AA)
+        comparison = np.concatenate(panels, axis=1)
+        path = output_dir / f"vitpose_frame_{frame_index:06d}.png"
+        if not cv2.imwrite(str(path), cv2.cvtColor(comparison, cv2.COLOR_RGB2BGR)):
+            raise OSError(f"Could not save ViTPose comparison: {path}")
+    Log.info(f"[ViTPose] Saved {len(repaired_frames)} comparisons to {output_dir}")
+
+
 @torch.no_grad()
 def run_preprocess(cfg):
     Log.info(f"[Preprocess] Start!")
@@ -199,18 +226,33 @@ def run_preprocess(cfg):
 
     with log_stage("VitPose"):
         # Get VitPose
-        if not Path(paths.vitpose).exists():
-            vitpose_extractor = VitPoseExtractor()
-            vitpose = vitpose_extractor.extract(video_path, bbx_xys)
-            torch.save(vitpose, paths.vitpose)
-            del vitpose_extractor
+        if Path(paths.vitpose_raw).exists():
+            raw_vitpose = torch.load(paths.vitpose_raw)
+        elif Path(paths.vitpose).exists():
+            # Existing caches predate interpolation and contain raw predictions.
+            raw_vitpose = torch.load(paths.vitpose)
+            torch.save(raw_vitpose, paths.vitpose_raw)
         else:
-            vitpose = torch.load(paths.vitpose)
-            Log.info(f"[Preprocess] vitpose from {paths.vitpose}")
+            vitpose_extractor = VitPoseExtractor()
+            raw_vitpose = vitpose_extractor.extract(video_path, bbx_xys, conf_thr=0)
+            torch.save(raw_vitpose, paths.vitpose_raw)
+            del vitpose_extractor
+        thresholds = list(cfg.vitpose_joint_conf_thr)
+        vitpose = interpolate_low_confidence(raw_vitpose, thresholds)
+        changed = not Path(paths.vitpose).exists() or not torch.equal(vitpose, torch.load(paths.vitpose))
+        if changed:
+            torch.save(vitpose, paths.vitpose)
+        filled = (vitpose != raw_vitpose).any(dim=-1).sum().item()
+        Log.info(f"[ViTPose] joint thresholds={thresholds}; filled {filled} joints; raw scores in {paths.vitpose_raw}")
         if verbose:
             video = read_video_np(video_path)
-            video_overlay = draw_coco17_skeleton_batch(video, vitpose, 0.5)
+            overlay_pose = vitpose.clone()
+            overlay_pose[..., 2] = raw_vitpose[..., 2]
+            video_overlay = draw_coco17_skeleton_batch(video, overlay_pose,
+                                                     show_confidence=True, joint_conf_thr=thresholds)
             save_debug_video(video_overlay, paths.vitpose_video_overlay)
+            save_vitpose_debug_images(video, raw_vitpose, vitpose, thresholds,
+                                      Path(cfg.preprocess_dir) / "img_debug")
 
     with log_stage("Image features"):
         # Get vit features

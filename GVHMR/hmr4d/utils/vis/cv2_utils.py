@@ -135,10 +135,33 @@ def draw_coco17_skeleton(img, keypoints, conf_thr=0):
     return img
 
 
-def draw_coco17_skeleton_batch(imgs, keypoints_batch, conf_thr=0):
+def draw_coco17_skeleton_batch(imgs, keypoints_batch, show_confidence=False, joint_conf_thr=None,
+                             frame_indices=None):
     assert len(imgs) == len(keypoints_batch)
     keypoints_batch = to_numpy(keypoints_batch)
+    thresholds = np.broadcast_to(joint_conf_thr, (17,))
     imgs_out = []
     for i in range(len(imgs)):
-        imgs_out.append(draw_coco17_skeleton(imgs[i], keypoints_batch[i], conf_thr))
+        keypoints = keypoints_batch[i]
+        # Show filled positions too, while reporting the original model scores.
+        img = draw_coco17_skeleton(imgs[i], keypoints[:, :2] if show_confidence else keypoints, 0)
+        if show_confidence:
+            names = ["nose", "L eye", "R eye", "L ear", "R ear", "L shoulder", "R shoulder",
+                     "L elbow", "R elbow", "L wrist", "R wrist", "L hip", "R hip",
+                     "L knee", "R knee", "L ankle", "R ankle"]
+            frame_index = i if frame_indices is None else frame_indices[i]
+            lines = [f"Frame {frame_index} | raw confidence / threshold (0 = off)"]
+            lines += ["   ".join(f"{names[j]}: {keypoints[j, 2]:.2f}/{thresholds[j]:g}" for j in range(k, min(k + 3, 17)))
+                      for k in range(0, 17, 3)]
+            lines.append("Red = below interpolation threshold")
+            scale = min(0.8, img.shape[1] / 1050)
+            spacing = max(14, int(34 * scale))
+            for row, line in enumerate(lines):
+                origin = (8, (row + 1) * spacing)
+                cv2.putText(img, line, origin, cv2.FONT_HERSHEY_SIMPLEX, scale, (0, 0, 0), 5, cv2.LINE_AA)
+                cv2.putText(img, line, origin, cv2.FONT_HERSHEY_SIMPLEX, scale, (255, 255, 255), 2, cv2.LINE_AA)
+            for j, (x, y, confidence) in enumerate(keypoints):
+                if thresholds[j] > 0 and confidence <= thresholds[j] and np.isfinite([x, y]).all():
+                    cv2.circle(img, (int(x), int(y)), 7, (255, 0, 0), 2)
+        imgs_out.append(img)
     return imgs_out

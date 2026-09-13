@@ -29,6 +29,27 @@ video_path: "${output_dir}/0_input_video.mp4"
 static_cam: False
 verbose: False
 use_dpvo: False
+vitpose_conf_thr_lower_body: 0.5  # Heatmap score; 0 disables interpolation.
+vitpose_conf_thr_upper_body: 0.3
+# COCO17 order. 0 preserves the raw joint; replace an inherited value to tune it.
+vitpose_joint_conf_thr:
+  - 0  # nose
+  - 0  # left eye
+  - 0  # right eye
+  - 0  # left ear
+  - 0  # right ear
+  - ${vitpose_conf_thr_upper_body}  # left shoulder
+  - ${vitpose_conf_thr_upper_body}  # right shoulder
+  - ${vitpose_conf_thr_upper_body}  # left elbow
+  - ${vitpose_conf_thr_upper_body}  # right elbow
+  - ${vitpose_conf_thr_upper_body}  # left wrist
+  - ${vitpose_conf_thr_upper_body}  # right wrist
+  - ${vitpose_conf_thr_lower_body}  # left hip
+  - ${vitpose_conf_thr_lower_body}  # right hip
+  - ${vitpose_conf_thr_lower_body}  # left knee
+  - ${vitpose_conf_thr_lower_body}  # right knee
+  - ${vitpose_conf_thr_lower_body}  # left ankle
+  - ${vitpose_conf_thr_lower_body}  # right ankle
 f_mm: null  # focal length of fullframe camera in mm
 
 paths:
@@ -36,6 +57,7 @@ paths:
   bbx_xyxy_video_overlay: ${preprocess_dir}/bbx_xyxy_video_overlay.mp4
   vit_features: ${preprocess_dir}/vit_features.pt
   vitpose: ${preprocess_dir}/vitpose.pt
+  vitpose_raw: ${preprocess_dir}/vitpose_raw.pt
   vitpose_video_overlay: ${preprocess_dir}/vitpose_video_overlay.mp4
   hmr4d_results: ${output_dir}/hmr4d_results.pt
   incam_video: ${output_dir}/1_incam.mp4

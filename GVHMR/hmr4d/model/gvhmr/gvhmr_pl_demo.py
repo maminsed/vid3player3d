@@ -17,7 +17,7 @@ class DemoPL(pl.LightningModule):
         """auto add batch dim
         data: {
             "length": int, or Torch.Tensor,
-            "kp2d": (F, 3)
+            "kp2d": (F, 17, 3)
             "bbx_xys": (F, 3)
             "K_fullimg": (F, 3, 3)
             "cam_angvel": (F, 3)

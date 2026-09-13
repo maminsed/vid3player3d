@@ -20,7 +20,8 @@ class VitPoseExtractor:
         self.tqdm_leave = tqdm_leave
 
     @torch.no_grad()
-    def extract(self, video_path, bbx_xys, img_ds=0.5):
+    def extract(self, video_path, bbx_xys, img_ds=0.5, conf_thr=0.5, return_raw=False):
+        """Return processed (F, 17, 3) poses; return_raw also returns raw XY/scores."""
         # Get the batch
         if isinstance(video_path, str):
             imgs, bbx_xys = get_batch(video_path, bbx_xys, img_ds=img_ds)
@@ -69,7 +70,41 @@ class VitPoseExtractor:
             vitpose.append(kp2d.detach().cpu().clone())
 
         vitpose = torch.cat(vitpose, dim=0).clone()  # (F, 17, 3)
-        return vitpose
+        processed = interpolate_low_confidence(vitpose, conf_thr)
+        return (processed, vitpose) if return_raw else processed
+
+
+def interpolate_low_confidence(keypoints, conf_thr=0.5):
+    """Fill low-confidence XY per joint over time.
+
+    Input/output: (frames, joints, 3). Scores <= conf_thr are missing.
+    Edge gaps hold the nearest valid position; joints without valid frames
+    remain unchanged. conf_thr may be a scalar or one threshold per joint;
+    zero disables filtering for that joint. No motion smoothing
+    is applied to reliable positions. Filled joints get validity 1 in channel 2
+    so GVHMR uses them (its confidence mask is > 0.5). This is NOT a model
+    confidence estimate; retain the unmodified input for raw heatmap scores.
+    """
+    thresholds = np.broadcast_to(np.asarray(conf_thr, dtype=float), (keypoints.shape[1],))
+    if not np.isfinite(thresholds).all() or (thresholds < 0).any():
+        raise ValueError("conf_thr must contain finite, non-negative thresholds")
+    result = keypoints.clone()
+    for joint in range(keypoints.shape[1]):
+        if thresholds[joint] == 0:
+            continue
+        values = keypoints[:, joint]
+        valid = (values[:, 2] > thresholds[joint]) & torch.isfinite(values).all(dim=-1)
+        anchors = torch.where(valid)[0]
+        missing = torch.where(~valid)[0]
+        if len(anchors) == 0 or len(missing) == 0:
+            continue
+        right = torch.searchsorted(anchors, missing)
+        left = anchors[(right - 1).clamp(min=0)]
+        right = anchors[right.clamp(max=len(anchors) - 1)]
+        weight = ((missing - left) / (right - left).clamp(min=1)).to(values.dtype)
+        result[missing, joint, :2] = torch.lerp(values[left, :2], values[right, :2], weight[:, None])
+        result[missing, joint, 2] = 1.0
+    return result
 
 
 def get_heatmap_preds(heatmap, normalize_keypoints=True, thr=0.0, soft=False):
