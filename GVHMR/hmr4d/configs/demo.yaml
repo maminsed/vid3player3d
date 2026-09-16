@@ -29,8 +29,9 @@ video_path: "${output_dir}/0_input_video.mp4"
 static_cam: False
 verbose: False
 use_dpvo: False
-vitpose_conf_thr_lower_body: 0.5  # Heatmap score; 0 disables interpolation.
-vitpose_conf_thr_upper_body: 0.3
+vitpose_lr_max_frames: 3  # Repair only strongly supported, brief leg-label swaps.
+vitpose_conf_thr_lower_body: 0.4  # Heatmap score; 0 disables interpolation.
+vitpose_conf_thr_upper_body: 0.4
 # COCO17 order. 0 preserves the raw joint; replace an inherited value to tune it.
 vitpose_joint_conf_thr:
   - 0  # nose
@@ -59,7 +60,10 @@ paths:
   vitpose: ${preprocess_dir}/vitpose.pt
   vitpose_raw: ${preprocess_dir}/vitpose_raw.pt
   vitpose_video_overlay: ${preprocess_dir}/vitpose_video_overlay.mp4
+  vitpose_lr_swaps: ${preprocess_dir}/vitpose_lr_swaps.json
   hmr4d_results: ${output_dir}/hmr4d_results.pt
+  hmr4d_spikes_plot: ${output_dir}/hmr4d_spikes.png
+  hmr4d_spikes_csv: ${output_dir}/hmr4d_spikes.csv
   incam_video: ${output_dir}/1_incam.mp4
   global_video: ${output_dir}/2_global.mp4
   incam_global_horiz_video: ${output_dir}/${video_name}_3_incam_global_horiz.mp4

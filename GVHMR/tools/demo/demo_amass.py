@@ -29,6 +29,9 @@ from GVHMR.hmr4d.utils.vis.cv2_utils import draw_bbx_xyxy_on_image_batch, draw_c
 
 from GVHMR.hmr4d.utils.preproc import Tracker, Extractor, VitPoseExtractor, SimpleVO
 from GVHMR.hmr4d.utils.preproc.vitpose import interpolate_low_confidence
+from GVHMR.hmr4d.utils.motion_diagnostics import (
+    repair_short_lr_swaps, save_lr_swap_report, save_hmr4d_spike_plot,
+)
 
 from GVHMR.hmr4d.utils.geo.hmr_cam import get_bbx_xys_from_xyxy, estimate_K, convert_K_to_K4, create_camera_sensor
 from GVHMR.hmr4d.utils.geo_transform import compute_cam_angvel
@@ -172,22 +175,28 @@ def parse_args_to_cfg():
     return cfg, amass_settings
 
 
-def save_vitpose_debug_images(video, raw_pose, processed_pose, thresholds, output_dir):
-    """Save the first 30 repaired frames side by side, using raw scores on both."""
+def save_vitpose_debug_images(video, raw_pose, processed_pose, thresholds, output_dir, lr_swap_events=None,
+                              relabelled_pose=None):
+    """Compare up to 30 suspect/interpolated frames; use raw scores on both panels."""
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     # Remove only our previous comparisons so reruns cannot leave stale frames.
     for old_image in output_dir.glob("vitpose_frame_*.png"):
         old_image.unlink()
-    repaired_frames = torch.where((processed_pose != raw_pose).any(dim=-1).any(dim=-1))[0][:30].tolist()
-    for frame_index in repaired_frames:
+    repaired_frames = torch.where((processed_pose != raw_pose).any(dim=-1).any(dim=-1))[0].tolist()
+    suspect_frames = [f for e in lr_swap_events or [] for f in range(e["start_frame"], e["end_frame"] + 1)]
+    debug_frames = sorted(list(dict.fromkeys(suspect_frames + repaired_frames))[:30])
+    for frame_index in debug_frames:
         poses = torch.stack([raw_pose[frame_index], processed_pose[frame_index]])
-        poses[..., 2] = raw_pose[frame_index, :, 2]
+        # Scores follow corrected labels, but are never replaced by interpolated validity=1.
+        scores_pose = raw_pose if relabelled_pose is None else relabelled_pose
+        poses[1, :, 2] = scores_pose[frame_index, :, 2]
         panels = draw_coco17_skeleton_batch(
             [video[frame_index], video[frame_index]], poses, show_confidence=True,
             joint_conf_thr=thresholds, frame_indices=[frame_index, frame_index],
+            lr_swap_events=lr_swap_events,
         )
-        for i, title in enumerate(["Original ViTPose", "Filtered / interpolated ViTPose"]):
+        for i, title in enumerate(["Original ViTPose", "Leg labels corrected / confidence interpolated"]):
             panels[i] = cv2.copyMakeBorder(panels[i], 40, 0, 0, 0, cv2.BORDER_CONSTANT, value=(0, 0, 0))
             cv2.putText(panels[i], title, (8, 28), cv2.FONT_HERSHEY_SIMPLEX,
                         0.8, (255, 255, 255), 2, cv2.LINE_AA)
@@ -195,7 +204,7 @@ def save_vitpose_debug_images(video, raw_pose, processed_pose, thresholds, outpu
         path = output_dir / f"vitpose_frame_{frame_index:06d}.png"
         if not cv2.imwrite(str(path), cv2.cvtColor(comparison, cv2.COLOR_RGB2BGR)):
             raise OSError(f"Could not save ViTPose comparison: {path}")
-    Log.info(f"[ViTPose] Saved {len(repaired_frames)} comparisons to {output_dir}")
+    Log.info(f"[ViTPose] Saved {len(debug_frames)} comparisons to {output_dir}")
 
 
 @torch.no_grad()
@@ -238,21 +247,35 @@ def run_preprocess(cfg):
             torch.save(raw_vitpose, paths.vitpose_raw)
             del vitpose_extractor
         thresholds = list(cfg.vitpose_joint_conf_thr)
-        vitpose = interpolate_low_confidence(raw_vitpose, thresholds)
+        relabelled_pose, lr_swap_events = repair_short_lr_swaps(
+            raw_vitpose, bbx_xys, max_frames=cfg.vitpose_lr_max_frames)
+        vitpose = interpolate_low_confidence(relabelled_pose, thresholds)
         changed = not Path(paths.vitpose).exists() or not torch.equal(vitpose, torch.load(paths.vitpose))
         if changed:
             torch.save(vitpose, paths.vitpose)
-        filled = (vitpose != raw_vitpose).any(dim=-1).sum().item()
+        filled = (vitpose != relabelled_pose).any(dim=-1).sum().item()
         Log.info(f"[ViTPose] joint thresholds={thresholds}; filled {filled} joints; raw scores in {paths.vitpose_raw}")
+        if verbose:
+            save_lr_swap_report(lr_swap_events, paths.vitpose_lr_swaps, max_frames=cfg.vitpose_lr_max_frames)
+            Log.info(f"[ViTPose L/R] Repair report: {paths.vitpose_lr_swaps}")
+        Log.info(f"[ViTPose L/R] Repaired {len(lr_swap_events)} strongly supported brief leg swaps")
+        for event in lr_swap_events:
+            Log.info(f"[ViTPose L/R] {event['limb']} frames {event['start_frame']}-{event['end_frame']} "
+                     f"({event['start_frame'] / 30:.3f}-{event['end_frame'] / 30:.3f}s); relabelled pairs {event['pairs']}")
+        if changed and Path(paths.hmr4d_results).exists():
+            Log.warning("[ViTPose] Keypoints changed, but cached HMR4D results will still be reused. "
+                     "Regenerate downstream results to see the correction.")
         if verbose:
             video = read_video_np(video_path)
             overlay_pose = vitpose.clone()
-            overlay_pose[..., 2] = raw_vitpose[..., 2]
+            overlay_pose[..., 2] = relabelled_pose[..., 2]
             video_overlay = draw_coco17_skeleton_batch(video, overlay_pose,
-                                                     show_confidence=True, joint_conf_thr=thresholds)
+                                                     show_confidence=True, joint_conf_thr=thresholds,
+                                                     lr_swap_events=lr_swap_events)
             save_debug_video(video_overlay, paths.vitpose_video_overlay)
             save_vitpose_debug_images(video, raw_vitpose, vitpose, thresholds,
-                                      Path(cfg.preprocess_dir) / "img_debug")
+                                      Path(cfg.preprocess_dir) / "img_debug", lr_swap_events=lr_swap_events,
+                                      relabelled_pose=relabelled_pose)
 
     with log_stage("Image features"):
         # Get vit features
@@ -292,6 +315,7 @@ def run_preprocess(cfg):
                 Log.info(f"[Preprocess] slam results from {paths.slam}")
 
     Log.info(f"[Preprocess] End. Time elapsed: {Log.time()-tic:.2f}s")
+    return lr_swap_events
 
 
 def load_data_dict(cfg):
@@ -591,7 +615,7 @@ if __name__ == "__main__":
     Log.info(f'[GPU]: {torch.cuda.get_device_properties("cuda")}')
 
     # ===== Preprocess and save to disk ===== #
-    run_preprocess(cfg)
+    lr_swap_events = run_preprocess(cfg)
     data = load_data_dict(cfg)
 
     # ===== HMR4D ===== #
@@ -608,6 +632,12 @@ if __name__ == "__main__":
         torch.save(pred, paths.hmr4d_results)
     else:
         pred = torch.load(paths.hmr4d_results)
+
+    if cfg.verbose:
+        with log_stage("HMR4D spike diagnostics"):
+            save_hmr4d_spike_plot(pred, paths.hmr4d_spikes_plot,
+                                 lr_swap_events=lr_swap_events)
+            Log.info(f"[HMR4D] Final motion graph: {paths.hmr4d_spikes_plot}")
 
     # ===== Save AMASS format ===== #
     save_amass_format(amass_settings['amass_output'], pred)

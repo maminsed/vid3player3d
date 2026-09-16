@@ -187,7 +187,7 @@ def normalize_kp2d(obs_kp2d, bbx_xys, clamp_scale_min=False):
     """
     obs_xy = obs_kp2d[..., :2]  # (B, L, J, 2)
     obs_conf = obs_kp2d[..., 2]  # (B, L, J)
-    center = bbx_xys[..., :2]
+    center = bbx_xys[..., :2] 
     scale = bbx_xys[..., [2]]
 
     # Mark keypoints outside the bounding box as invisible

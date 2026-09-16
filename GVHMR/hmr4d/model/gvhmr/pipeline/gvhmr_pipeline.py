@@ -1,3 +1,4 @@
+from GVHMR.hmr4d.network.gvhmr.relative_transformer import NetworkEncoderRoPE
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -39,7 +40,7 @@ class Pipeline(nn.Module):
         self.weights = args.weights  # loss weights
 
         # Networks
-        self.denoiser3d = instantiate(args_denoiser3d, _recursive_=False)
+        self.denoiser3d:NetworkEncoderRoPE = instantiate(args_denoiser3d, _recursive_=False)
         # Log.info(self.denoiser3d)
 
         # Normalizer

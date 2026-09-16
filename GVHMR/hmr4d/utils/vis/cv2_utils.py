@@ -110,41 +110,51 @@ def draw_kpts_with_conf_batch(frames, kp2d_batch, conf_batch, thickness=2):
 
 
 def draw_coco17_skeleton(img, keypoints, conf_thr=0):
-    use_conf_thr = True if keypoints.shape[1] == 3 else False
+    """Draw anatomical sides on RGB frames: left orange, right cyan."""
+    keypoints = to_numpy(keypoints)
     img = img.copy()
     # fmt:off
     coco_skel = [[15, 13], [13, 11], [16, 14], [14, 12], [11, 12], [5, 11], [6, 12], [5, 6], [5, 7], [6, 8], [7, 9], [8, 10], [1, 2], [0, 1], [0, 2], [1, 3], [2, 4], [3, 5], [4, 6]]            
     # fmt:on
-    for bone in coco_skel:
-        if use_conf_thr:
-            kp1 = keypoints[bone[0]][:2].astype(int)
-            kp2 = keypoints[bone[1]][:2].astype(int)
-            kp1_c = keypoints[bone[0]][2]
-            kp2_c = keypoints[bone[1]][2]
-            if kp1_c > conf_thr and kp2_c > conf_thr:
-                img = cv2.line(img, (kp1[0], kp1[1]), (kp2[0], kp2[1]), (0, 255, 0), 4)
-            if kp1_c > conf_thr:
-                img = cv2.circle(img, (kp1[0], kp1[1]), 6, (0, 255, 0), -1)
-            if kp2_c > conf_thr:
-                img = cv2.circle(img, (kp2[0], kp2[1]), 6, (0, 255, 0), -1)
-
-        else:
-            kp1 = keypoints[bone[0]][:2].astype(int)
-            kp2 = keypoints[bone[1]][:2].astype(int)
-            img = cv2.line(img, (kp1[0], kp1[1]), (kp2[0], kp2[1]), (0, 255, 0), 4)
+    left = {1, 3, 5, 7, 9, 11, 13, 15}
+    right = {2, 4, 6, 8, 10, 12, 14, 16}
+    left_color, right_color, center_color = (255, 155, 40), (0, 220, 255), (210, 210, 210)
+    visible = np.isfinite(keypoints[:, :2]).all(axis=-1)
+    if keypoints.shape[1] == 3:
+        visible &= keypoints[:, 2] > conf_thr
+    for a, b in coco_skel:
+        color = left_color if a in left and b in left else (
+            right_color if a in right and b in right else center_color)
+        if visible[a] and visible[b]:
+            cv2.line(img, tuple(keypoints[a, :2].astype(int)), tuple(keypoints[b, :2].astype(int)), color, 4)
+    for j in np.flatnonzero(visible):
+        color = left_color if j in left else right_color if j in right else center_color
+        cv2.circle(img, tuple(keypoints[j, :2].astype(int)), 6, color, -1)
     return img
 
 
 def draw_coco17_skeleton_batch(imgs, keypoints_batch, show_confidence=False, joint_conf_thr=None,
-                             frame_indices=None):
+                             frame_indices=None, lr_swap_events=None):
     assert len(imgs) == len(keypoints_batch)
     keypoints_batch = to_numpy(keypoints_batch)
-    thresholds = np.broadcast_to(joint_conf_thr, (17,))
+    thresholds = np.broadcast_to(0 if joint_conf_thr is None else joint_conf_thr, (17,))
+    flagged = {}
+    for event in lr_swap_events or []:
+        for frame in range(event["start_frame"], event["end_frame"] + 1):
+            flagged.setdefault(frame, []).append(event["limb"])
     imgs_out = []
     for i in range(len(imgs)):
         keypoints = keypoints_batch[i]
         # Show filled positions too, while reporting the original model scores.
         img = draw_coco17_skeleton(imgs[i], keypoints[:, :2] if show_confidence else keypoints, 0)
+        frame_index = i if frame_indices is None else frame_indices[i]
+        legend = "LEFT: orange | RIGHT: cyan (anatomical sides)"
+        if frame_index in flagged:
+            legend += " | L/R swap interval: " + ", ".join(flagged[frame_index])
+        scale = min(0.8, img.shape[1] / 1400)
+        origin = (8, img.shape[0] - 12)
+        cv2.putText(img, legend, origin, cv2.FONT_HERSHEY_SIMPLEX, scale, (0, 0, 0), 5, cv2.LINE_AA)
+        cv2.putText(img, legend, origin, cv2.FONT_HERSHEY_SIMPLEX, scale, (255, 255, 255), 2, cv2.LINE_AA)
         if show_confidence:
             names = ["nose", "L eye", "R eye", "L ear", "R ear", "L shoulder", "R shoulder",
                      "L elbow", "R elbow", "L wrist", "R wrist", "L hip", "R hip",
@@ -153,7 +163,7 @@ def draw_coco17_skeleton_batch(imgs, keypoints_batch, show_confidence=False, joi
             lines = [f"Frame {frame_index} | raw confidence / threshold (0 = off)"]
             lines += ["   ".join(f"{names[j]}: {keypoints[j, 2]:.2f}/{thresholds[j]:g}" for j in range(k, min(k + 3, 17)))
                       for k in range(0, 17, 3)]
-            lines.append("Red = below interpolation threshold")
+            lines.append("Red rings = below interpolation threshold")
             scale = min(0.8, img.shape[1] / 1050)
             spacing = max(14, int(34 * scale))
             for row, line in enumerate(lines):

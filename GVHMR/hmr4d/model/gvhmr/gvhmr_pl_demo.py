@@ -5,12 +5,13 @@ from GVHMR.hmr4d.utils.pylogger import Log
 from GVHMR.hmr4d.configs import MainStore, builds
 
 from GVHMR.hmr4d.utils.geo.hmr_cam import normalize_kp2d
+from GVHMR.hmr4d.model.gvhmr.pipeline.gvhmr_pipeline import Pipeline
 
 
 class DemoPL(pl.LightningModule):
     def __init__(self, pipeline):
         super().__init__()
-        self.pipeline = instantiate(pipeline, _recursive_=False)
+        self.pipeline:Pipeline = instantiate(pipeline, _recursive_=False)
 
     @torch.no_grad()
     def predict(self, data, static_cam=False):
