@@ -58,6 +58,53 @@ For example:
 python uhc/utils/convert_amass_isaac_correct_ground.py --amass_data outputs/demo/my_video/my_video_amass.pkl --out_dir data/motion_lib/my_video_corrected
 ```
 
+Run these commands from `vid2player3d` in the project's environment. Add
+`--no_show` to save plots without opening windows. For the original and corrected
+left/right foot-height visualization, use:
+
+```bash
+python uhc/utils/plot_ground_contacts_simple.py \
+  --amass_data /path/to/video_amass.pkl \
+  --num_seq 1 --out_dir /path/to/plots --no_show
+```
+
+### Shared functions and translation conventions
+
+Both scripts parse arguments inside `main(argv=None)` and can be imported without
+starting conversion or initializing SMPL/MuJoCo. The plotting script imports its
+foot-contact detection and sequence-correction functions from
+`convert_amass_isaac_correct_ground.py`; maintain the correction algorithm there.
+
+`correct_smpl_sequence()` is the shared pipeline for reconstructing the original
+SMPL mesh, applying `correct_ground_height()`, and reconstructing the corrected
+mesh. It returns the original and corrected vertices and translations.
+`smpl_robot_context()` provides the SMPL robot and owns temporary XML/geometry
+files, cleaning them up when processing finishes or fails.
+
+SMPL model translation and skeleton root position use different origins:
+
+```python
+root_trans = trans + skeleton_tree.local_translation[0].numpy()
+corrected_trans = corrected_root_trans - skeleton_tree.local_translation[0].numpy()
+```
+
+The corrected mesh uses `corrected_trans`, while `SkeletonState` uses
+`corrected_root_trans`. `build_motion_output()` preserves this distinction in the
+motion dictionary's `trans` and `root_trans` fields, trims all frame arrays
+consistently, and computes `min_verts_h` from the corrected render mesh. Existing
+motion libraries must be regenerated to incorporate this fix.
+
+For array-only callers, `correct_ground_height()` accepts `out_dir` and
+`show_plots` explicitly; it does not read global CLI arguments. The plotting
+script uses vertical correction with the default settings; the converter also
+supports optional court-based XY correction through its existing CLI flags.
+
+Regression checks (from `vid2player3d`):
+
+```bash
+MPLBACKEND=Agg python -m unittest discover -s uhc/utils/tests -v
+```
+
 ## 7. Tunable Parameters
 
 The following parameters in the script can be adjusted to fine-tune the algorithm's behavior:

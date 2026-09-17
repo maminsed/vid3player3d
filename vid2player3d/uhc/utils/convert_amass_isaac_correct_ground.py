@@ -1,66 +1,46 @@
-import joblib
-import numpy as np
-import pandas as pd
-import os
-import sys
+"""Ground correction helpers and AMASS-to-Isaac motion library conversion.
+
+Importing this module does not parse arguments, load motion data, or initialize
+SMPL/MuJoCo. Simulation dependencies are loaded only when converting a sequence.
+"""
+
 import argparse
 import ast
+from contextlib import contextmanager
+import os
+from pathlib import Path
+import sys
+import tempfile
+
+import joblib
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
 from scipy.signal import find_peaks
 from sklearn.linear_model import LinearRegression, RANSACRegressor
-from sklearn.ensemble import RandomForestRegressor
-import matplotlib.pyplot as plt
 
-sys.path.append(os.getcwd())
-from embodied_pose.utils.motion_lib import MotionLib
-import torch
-from scipy.spatial.transform import Rotation as sRot
-import yaml
-from tqdm import tqdm
 
-from uhc.smpllib.smpl_parser import SMPL_BONE_ORDER_NAMES as joint_names
-from uhc.smpllib.smpl_local_robot import Robot as LocalRobot
-
-from poselib.poselib.skeleton.skeleton3d import SkeletonTree, SkeletonMotion, SkeletonState
-
-parser = argparse.ArgumentParser()
-parser.add_argument('--amass_data', type=str, default="data/amass/amass_copycat_take5_5.pkl")
-parser.add_argument('--tennisproject_data', type=str, default=None)
-parser.add_argument('--out_dir', type=str, default="data/motion_lib/amass")
-parser.add_argument('--num_seq', type=int, default=None)
-parser.add_argument('--num_motion_libs', type=int, default=14)
-parser.add_argument('--disable_xy_correction', action='store_true')
-parser.add_argument('--tp_xy_units', type=str, default='pixels', choices=['meters', 'pixels'])
-parser.add_argument('--tp_pixel_to_meters', type=float, default=0.01003)
-parser.add_argument('--tp_frame_window', type=int, default=5)
-parser.add_argument('--tp_frame_offset', type=int, default=0)
-parser.add_argument('--tp_flip_y', action='store_true')
-parser.add_argument('--tp_xy_smoothing', type=int, default=0)
-parser.add_argument('--tp_net_x1', type=float, default=286.0)
-parser.add_argument('--tp_net_y1', type=float, default=1748.0)
-parser.add_argument('--tp_net_x2', type=float, default=1379.0)
-parser.add_argument('--tp_net_y2', type=float, default=1748.0)
-parser.add_argument('--trim_frames', type=int, default=0)
-args = parser.parse_args()
-
-num_seq = args.num_seq
-num_motion_libs = args.num_motion_libs
-
-os.makedirs(args.out_dir, exist_ok=True)
-meta_data = {
-    "amass_data": args.amass_data,
-    "tennisproject_data": args.tennisproject_data,
-    "num_seq": num_seq,
-    "num_motion_libs": num_motion_libs,
-    "disable_xy_correction": args.disable_xy_correction,
-    "tp_xy_units": args.tp_xy_units,
-    "tp_pixel_to_meters": args.tp_pixel_to_meters,
-    "tp_frame_window": args.tp_frame_window,
-    "tp_frame_offset": args.tp_frame_offset,
-    "tp_flip_y": args.tp_flip_y,
-    "tp_xy_smoothing": args.tp_xy_smoothing,
-    "tp_net": [[args.tp_net_x1, args.tp_net_y1], [args.tp_net_x2, args.tp_net_y2]],
-}
-yaml.safe_dump(meta_data, open(f'{args.out_dir}/args.yml', 'w'))
+def build_arg_parser():
+    parser = argparse.ArgumentParser(description="Convert AMASS motions with ground correction")
+    parser.add_argument('--amass_data', type=str, default="data/amass/amass_copycat_take5_5.pkl")
+    parser.add_argument('--tennisproject_data', type=str, default=None)
+    parser.add_argument('--out_dir', type=str, default="data/motion_lib/amass")
+    parser.add_argument('--num_seq', type=int, default=None)
+    parser.add_argument('--num_motion_libs', type=int, default=14)
+    parser.add_argument('--disable_xy_correction', action='store_true')
+    parser.add_argument('--tp_xy_units', type=str, default='pixels', choices=['meters', 'pixels'])
+    parser.add_argument('--tp_pixel_to_meters', type=float, default=0.01003)
+    parser.add_argument('--tp_frame_window', type=int, default=5)
+    parser.add_argument('--tp_frame_offset', type=int, default=0)
+    parser.add_argument('--tp_flip_y', action='store_true')
+    parser.add_argument('--tp_xy_smoothing', type=int, default=0)
+    parser.add_argument('--tp_net_x1', type=float, default=286.0)
+    parser.add_argument('--tp_net_y1', type=float, default=1748.0)
+    parser.add_argument('--tp_net_x2', type=float, default=1379.0)
+    parser.add_argument('--tp_net_y2', type=float, default=1748.0)
+    parser.add_argument('--trim_frames', type=int, default=0)
+    parser.add_argument('--no_show', action='store_true', help='Save plots without opening windows')
+    return parser
 
 
 def safe_literal_eval(value):
@@ -163,73 +143,6 @@ def prepare_xy_context(args, output_video_name):
         "net_center": net_center,
     })
     return xy_context
-
-
-amass_data = joblib.load(args.amass_data)
-amass_file_name = os.path.basename(args.amass_data)
-if amass_file_name.endswith("_amass.pkl"):
-    output_video_name = amass_file_name.replace("_amass.pkl", ".mp4")
-elif amass_file_name.endswith(".pkl"):
-    output_video_name = amass_file_name.replace(".pkl", ".mp4")
-else:
-    output_video_name = f"{amass_file_name}.mp4"
-print(f"debug: 47: output_video_name: {output_video_name}")
-xy_context = prepare_xy_context(args, output_video_name)
-info = joblib.load('data/misc/smpl_body_info.pkl')
-
-# body_shapes
-all_beta = [x['beta'][:10] for x in amass_data.values()]
-_, index = np.unique([",".join([f"{x:.6f}" for x in beta]) for beta in all_beta], return_index=True)
-index.sort()
-beta_arr = [all_beta[i] for i in index]
-beta_mapping = dict()
-for i, beta in enumerate(beta_arr):
-    key = ",".join([f"{x:.6f}" for x in beta])
-    beta_mapping[key] = i
-print(f'AMASS data has {len(beta_mapping)} unique body shapes!')
-joblib.dump({'beta_arr': beta_arr, 'beta_mapping': beta_mapping}, f'{args.out_dir}/shape_data.pkl')
-
-robot_cfg = {
-    "mesh": True,
-    "model": "smpl",
-    "body_params": {},
-    "joint_params": {},
-    "geom_params": {},
-    "actuator_params": {},
-}
-
-model_xml_path = f"./embodied_pose/data/mjcf/smpl_mesh_humanoid_v1_convert.xml"
-
-smpl_local_robot = LocalRobot(
-    robot_cfg,
-    data_dir= "data/smpl",
-    model_xml_path=model_xml_path
-)
-
-
-mujoco_joint_names = [
-    'Pelvis', 'L_Hip', 'L_Knee', 'L_Ankle', 'L_Toe', 'R_Hip', 'R_Knee',
-    'R_Ankle', 'R_Toe', 'Torso', 'Spine', 'Chest', 'Neck', 'Head', 'L_Thorax',
-    'L_Shoulder', 'L_Elbow', 'L_Wrist', 'L_Hand', 'R_Thorax', 'R_Shoulder',
-    'R_Elbow', 'R_Wrist', 'R_Hand'
-]
-smpl_2_mujoco = [
-    joint_names.index(q) for q in mujoco_joint_names
-    if q in joint_names
-]
-
-amass_full_motion_dict = {}
-sequences = np.array(list(amass_data.keys()))
-if num_seq is not None:
-    sequences = sequences[:num_seq]
-
-seq_mapping = {seq_name.item(): seq_idx for seq_idx, seq_name in enumerate(sequences)}
-motion_lib_seq_arr = np.array_split(sequences, num_motion_libs)
-
-seq_name_splits = {}
-for i, seq_arr in enumerate(motion_lib_seq_arr):
-    seq_name_splits[i] = [seq_name.item()[2:] for seq_name in seq_arr]
-joblib.dump(seq_name_splits, f'{args.out_dir}/seq_name_splits.pkl')
 
 
 def get_foot_vertices(verts):
@@ -378,7 +291,7 @@ def fit_ground_plane_ransac_with_feet(verts, foot_contact_info, time_coords):
     
     return model
 
-def get_multi_frequency_windows(T, base_window=15, frequencies=[1, 2]):
+def get_multi_frequency_windows(T, base_window=15, frequencies=(1, 2)):
     """
     Generate overlapping windows at multiple frequencies for robust estimation.
     
@@ -403,7 +316,9 @@ def get_multi_frequency_windows(T, base_window=15, frequencies=[1, 2]):
     
     return windows
 
-def correct_ground_height(verts, root_trans, fps=30.0, base_window=15, plot_results=True, sequence_name="", xy_context=None):
+def correct_ground_height(verts, root_trans, fps=30.0, base_window=15,
+                          plot_results=True, sequence_name="", xy_context=None,
+                          out_dir=".", show_plots=True):
     """
     Correct the ground height using multi-frequency sampling and RANSAC with foot information.
     First applies local plane corrections, then shifts to align with z=0.
@@ -415,6 +330,9 @@ def correct_ground_height(verts, root_trans, fps=30.0, base_window=15, plot_resu
         base_window: Base window size for multi-frequency sampling
         plot_results: Whether to create plots showing the correction
         sequence_name: Name of the sequence for plot titles
+        xy_context: Optional court tracking configuration from prepare_xy_context
+        out_dir: Directory for diagnostic plots
+        show_plots: Whether to display diagnostic plots interactively
     
     Returns:
         corrected_root_trans: (T, 3) corrected root translations
@@ -567,7 +485,7 @@ def correct_ground_height(verts, root_trans, fps=30.0, base_window=15, plot_resu
                 corrected_root_trans[t, 0] = corrected_root_trans[t - 1, 0]
                 corrected_root_trans[t, 1] = corrected_root_trans[t - 1, 1]
 
-    if xy_context["xy_smoothing"] > 1:
+    if xy_context.get("xy_smoothing", 0) > 1:
         kernel_size = int(xy_context["xy_smoothing"])
         if kernel_size % 2 == 0:
             kernel_size += 1
@@ -579,13 +497,15 @@ def correct_ground_height(verts, root_trans, fps=30.0, base_window=15, plot_resu
     if plot_results:
         create_ground_correction_plots(
             time_coords, original_heights, corrected_heights, 
-            valley_points, window_boundaries, sequence_name
+            valley_points, window_boundaries, sequence_name,
+            out_dir=out_dir, show=show_plots,
         )
     
     return corrected_root_trans
 
 def create_ground_correction_plots(time_coords, original_heights, corrected_heights, 
-                                  valley_points, window_boundaries, sequence_name):
+                                  valley_points, window_boundaries, sequence_name,
+                                  out_dir=".", show=True):
     """
     Create plots showing the ground correction process.
     
@@ -596,6 +516,8 @@ def create_ground_correction_plots(time_coords, original_heights, corrected_heig
         valley_points: List of (frame_idx, height) tuples for detected valleys
         window_boundaries: List of (start_frame, end_frame) tuples for windows
         sequence_name: Name of the sequence for plot titles
+        out_dir: Directory in which to save the plot
+        show: Whether to display the plot interactively
     """
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8))
     
@@ -639,158 +561,267 @@ def create_ground_correction_plots(time_coords, original_heights, corrected_heig
     plt.tight_layout()
     
     # Save the plot
-    plot_filename = f"ground_correction_{sequence_name}.png"
-    plot_filename = os.path.join(args.out_dir, plot_filename)
-    plt.savefig(plot_filename, dpi=300, bbox_inches='tight')
+    os.makedirs(out_dir, exist_ok=True)
+    safe_name = str(sequence_name).replace("/", "_")
+    plot_filename = os.path.join(out_dir, f"ground_correction_{safe_name}.png")
+    fig.savefig(plot_filename, dpi=300, bbox_inches='tight')
     print(f"Ground correction plot saved as: {plot_filename}")
     
     # Show the plot
-    plt.show()
+    if show:
+        plt.show()
+    plt.close(fig)
 
-print(f"debug: 523: len(motion_lib_seq_arr): {len(motion_lib_seq_arr)}")
-for i, motion_lib_seqs in enumerate(tqdm(motion_lib_seq_arr)):
-    
-    motion_lib_input_dict = dict()
-    render_data_dict = dict()
 
-    for key_name in motion_lib_seqs:
-        key_name = key_name.item()
-        smpl_data_entry = amass_data[key_name]
-        file_name = f"data/amass/singles/{key_name}.npy"
-        seq_len = smpl_data_entry['pose_aa'].shape[0]
+@contextmanager
+def smpl_robot_context(data_dir="data/smpl"):
+    """Own temporary XML/geometry files and clean them up even on failure."""
+    from vid2player3d.uhc.smpllib.smpl_local_robot import Robot as LocalRobot
 
-        pose_aa = smpl_data_entry['pose_aa'].copy()
-        trans = smpl_data_entry['trans_orig'].copy()
-        beta = smpl_data_entry['beta'][:10].copy()
-        gender = smpl_data_entry['gender']
-        fps = 30.0
+    robot_cfg = {
+        "mesh": True,
+        "model": "smpl",
+        "body_params": {},
+        "joint_params": {},
+        "geom_params": {},
+        "actuator_params": {},
+    }
+    with tempfile.TemporaryDirectory(prefix="vid3player-smpl-") as model_dir:
+        robot = LocalRobot(
+            robot_cfg,
+            data_dir=data_dir,
+            model_xml_path=os.path.join(model_dir, "smpl_mesh_humanoid_v1_convert.xml"),
+        )
+        try:
+            yield robot
+        finally:
+            robot.clean_up()
 
-        if isinstance(gender, np.ndarray):
-            gender = gender.item()
-        if isinstance(gender, bytes):
-            gender = gender.decode("utf-8")
-        if gender == "neutral":
-            gender_number = [0]
-            smpl_parser = smpl_local_robot.smpl_parser_n
-        elif gender == "male":
-            gender_number = [1]
-            smpl_parser = smpl_local_robot.smpl_parser_m
-        elif gender == "female":
-            gender_number = [2]
-            smpl_parser = smpl_local_robot.smpl_parser_f
-        else:
-            import ipdb
-            ipdb.set_trace()
-            raise Exception("Gender Not Supported!!")
-        
-        batch_size = pose_aa.shape[0]
-        pose_aa = np.concatenate([pose_aa[:, :66], np.zeros((batch_size, 6))], axis=1)  # TODO: need to extract correct handle rotations instead of zero
-        pose_quat = sRot.from_rotvec(pose_aa.reshape(-1, 3)).as_quat().reshape(batch_size, 24, 4)[..., smpl_2_mujoco, :]
-        smpl_local_robot.load_from_skeleton(betas=torch.from_numpy(beta[None, ]), gender=gender_number)
+
+def correct_smpl_sequence(smpl_data_entry, smpl_local_robot, fps=30.0,
+                          base_window=15, plot_results=True, sequence_name="",
+                          xy_context=None, out_dir=".", show_plots=True):
+    """Reconstruct and correct a sequence for both conversion and visualization.
+
+    ``trans`` is SMPL model translation; ``root_trans`` is the pelvis world
+    position. Returned original/corrected vertices use the corresponding SMPL
+    translations, while skeleton states must use ``corrected_root_trans``.
+    """
+    import torch
+    from scipy.spatial.transform import Rotation as sRot
+    from uhc.smpllib.smpl_parser import SMPL_BONE_ORDER_NAMES as joint_names
+    from vid2player3d.poselib.poselib.skeleton.skeleton3d import SkeletonTree
+
+    pose_aa = smpl_data_entry['pose_aa'].copy()
+    trans = smpl_data_entry['trans_orig'].copy()
+    beta = smpl_data_entry['beta'][:10].copy()
+    gender = smpl_data_entry['gender']
+    if isinstance(gender, np.ndarray):
+        gender = gender.item()
+    if isinstance(gender, bytes):
+        gender = gender.decode("utf-8")
+    if gender not in ("neutral", "male", "female"):
+        raise ValueError(f"Unsupported gender: {gender!r}")
+    gender_number, parser_attribute = {
+        "neutral": (0, "smpl_parser_n"),
+        "male": (1, "smpl_parser_m"),
+        "female": (2, "smpl_parser_f"),
+    }[gender]
+    smpl_parser = getattr(smpl_local_robot, parser_attribute)
+
+    mujoco_joint_names = [
+        'Pelvis', 'L_Hip', 'L_Knee', 'L_Ankle', 'L_Toe', 'R_Hip', 'R_Knee',
+        'R_Ankle', 'R_Toe', 'Torso', 'Spine', 'Chest', 'Neck', 'Head', 'L_Thorax',
+        'L_Shoulder', 'L_Elbow', 'L_Wrist', 'L_Hand', 'R_Thorax', 'R_Shoulder',
+        'R_Elbow', 'R_Wrist', 'R_Hand',
+    ]
+    smpl_2_mujoco = [joint_names.index(name) for name in mujoco_joint_names]
+    batch_size = pose_aa.shape[0]
+    pose_aa = np.concatenate([pose_aa[:, :66], np.zeros((batch_size, 6))], axis=1)
+    pose_quat = sRot.from_rotvec(pose_aa.reshape(-1, 3)).as_quat().reshape(
+        batch_size, 24, 4
+    )[..., smpl_2_mujoco, :]
+
+    with torch.no_grad():
+        smpl_local_robot.load_from_skeleton(
+            betas=torch.from_numpy(beta[None, :]), gender=[gender_number]
+        )
         smpl_local_robot.write_xml()
-        skeleton_tree = SkeletonTree.from_mjcf(model_xml_path)
-        root_trans = trans + skeleton_tree.local_translation[0].numpy()
-        new_sk_state = SkeletonState.from_rotation_and_root_translation(
-            skeleton_tree,
-            torch.from_numpy(pose_quat),
-            torch.from_numpy(root_trans),
-            is_local=True)
-
-        verts, joints = smpl_parser.get_joints_verts(
+        skeleton_tree = SkeletonTree.from_mjcf(smpl_local_robot.model_xml_path)
+        pelvis_offset = skeleton_tree.local_translation[0].numpy()
+        root_trans = trans + pelvis_offset
+        verts, _ = smpl_parser.get_joints_verts(
             pose=torch.from_numpy(pose_aa),
-            th_betas=torch.from_numpy(beta[None, ]),
-            th_trans=torch.from_numpy(trans)
+            th_betas=torch.from_numpy(beta[None, :]),
+            th_trans=torch.from_numpy(trans),
         )
-
-        # Apply ground correction to keep character properly grounded
-        print(f"Applying ground correction for sequence {key_name}")
         corrected_root_trans = correct_ground_height(
-            verts.numpy(), 
-            root_trans, 
-            fps=fps,
-            sequence_name=key_name,
-            xy_context=xy_context,
+            verts.numpy(), root_trans, fps=fps, base_window=base_window,
+            plot_results=plot_results, sequence_name=sequence_name,
+            xy_context=xy_context, out_dir=out_dir, show_plots=show_plots,
         )
-
-        # corrected_trans = corrected_root_trans - skeleton_tree.local_translation[0].numpy()
-        
-        # Update the skeleton state with corrected root translation
-        new_sk_state = SkeletonState.from_rotation_and_root_translation(
-            skeleton_tree,
-            torch.from_numpy(pose_quat),
-            torch.from_numpy(corrected_root_trans),
-            is_local=True)
-
-        # Recalculate vertices with corrected root translation
-        verts, joints = smpl_parser.get_joints_verts(
+        # Convert pelvis world position back to SMPL model translation.
+        corrected_trans = corrected_root_trans - pelvis_offset
+        corrected_verts, _ = smpl_parser.get_joints_verts(
             pose=torch.from_numpy(pose_aa),
-            th_betas=torch.from_numpy(beta[None, ]),
-            th_trans=torch.from_numpy(corrected_root_trans)
+            th_betas=torch.from_numpy(beta[None, :]),
+            th_trans=torch.from_numpy(corrected_trans),
         )
 
-        # min_verts_h = verts[..., 2].min().item()
+    return {
+        "pose_aa": pose_aa,
+        "pose_quat": pose_quat,
+        "beta": beta,
+        "gender": gender,
+        "fps": fps,
+        "skeleton_tree": skeleton_tree,
+        "trans": trans,
+        "root_trans": root_trans,
+        "verts": verts,
+        "corrected_trans": corrected_trans,
+        "corrected_root_trans": corrected_root_trans,
+        "corrected_verts": corrected_verts,
+    }
 
-        n = args.trim_frames
-        if n > 0:
-            pose_quat = pose_quat[n:-n]
-            corrected_root_trans = corrected_root_trans[n:-n]
-            verts = verts[n:-n]
-            pose_aa = pose_aa[n:-n]
 
-        # Save render data for this sequence
-        render_data_dict[key_name] = {
-            'verts': verts.clone(),  # (T, V, 3) torch tensor
-            'fps': fps,
-        }
+def build_motion_output(sequence, seq_name, seq_idx, beta_idx, trim_frames=0):
+    """Build simulation and render outputs using consistent corrected positions."""
+    import torch
+    from vid2player3d.poselib.poselib.skeleton.skeleton3d import SkeletonMotion, SkeletonState
 
-        min_verts_h = verts[..., 2].min(dim=-1)[0].mean().item()
-
-        new_sk_state = SkeletonState.from_rotation_and_root_translation(
-            skeleton_tree,
-            torch.from_numpy(pose_quat),
-            torch.from_numpy(corrected_root_trans),
-            is_local=True)
-
-        beta_key = ",".join([f"{x:.6f}" for x in beta])
-
-        new_motion = SkeletonMotion.from_skeleton_state(new_sk_state, fps=fps)
-        new_motion_out = new_motion.to_dict()
-        new_motion_out['seq_name'] = key_name
-        new_motion_out['seq_idx'] = seq_mapping[key_name]
-        new_motion_out['trans'] = corrected_root_trans
-        new_motion_out['root_trans'] = corrected_root_trans  # Use corrected root translation
-        new_motion_out['pose_aa'] = pose_aa
-        new_motion_out['beta'] = beta
-        new_motion_out['beta_idx'] = beta_mapping[beta_key]
-        new_motion_out['gender'] = gender
-        new_motion_out['min_verts_h'] = min_verts_h
-        new_motion_out['body_scale'] = 1.0
-        new_motion_out['__name__'] = "SkeletonMotion"
-        motion_lib_input_dict[key_name] = new_motion_out
-        # amass_data[key_name]["trans_orig"] = corrected_root_trans.astype(np.float32) # (T, 3) or (T, 3) corrected
-    if len(motion_lib_input_dict) == 0:
-        print(f"Skipping save for i={i}")
-        continue
-    motion_lib = MotionLib(motion_file=motion_lib_input_dict,
-        dof_body_ids=info['dof_body_ids'],
-        dof_offsets=info['dof_offsets'],
-        key_body_ids=info['key_body_ids'],
-        device='cpu',
-        clean_up=True
+    frame_count = len(sequence['pose_aa'])
+    if trim_frames < 0 or frame_count - 2 * trim_frames < 2:
+        raise ValueError("trim_frames must be nonnegative and leave at least two frames for velocities")
+    frames = slice(trim_frames, -trim_frames if trim_frames else None)
+    corrected_trans = sequence['corrected_trans'][frames]
+    corrected_root_trans = sequence['corrected_root_trans'][frames]
+    verts = sequence['corrected_verts'][frames]
+    state = SkeletonState.from_rotation_and_root_translation(
+        sequence['skeleton_tree'],
+        torch.from_numpy(sequence['pose_quat'][frames]),
+        torch.from_numpy(corrected_root_trans),
+        is_local=True,
     )
+    motion_out = SkeletonMotion.from_skeleton_state(state, fps=sequence['fps']).to_dict()
+    motion_out.update({
+        'seq_name': seq_name,
+        'seq_idx': seq_idx,
+        'trans': corrected_trans,
+        'root_trans': corrected_root_trans,
+        'pose_aa': sequence['pose_aa'][frames],
+        'beta': sequence['beta'],
+        'beta_idx': beta_idx,
+        'gender': sequence['gender'],
+        'min_verts_h': verts[..., 2].min(dim=-1)[0].mean().item(),
+        'body_scale': 1.0,
+        '__name__': "SkeletonMotion",
+    })
+    render_data = {'verts': verts.clone(), 'fps': sequence['fps']}
+    return motion_out, render_data
 
-    torch.save(motion_lib, f"{args.out_dir}/mlib_part_{i:05d}.pth")
 
-    render_pkl_path = f"{args.out_dir}/mlib_part_{i:05d}_render.pkl"
-    joblib.dump(render_data_dict, render_pkl_path)
-    print(f"Saved render data to {render_pkl_path}")
+def main(argv=None):
+    args = build_arg_parser().parse_args(argv)
+    if args.num_motion_libs < 1:
+        raise ValueError("num_motion_libs must be positive")
+    # MotionLib imports Isaac Gym; keep this before importing torch directly.
+    from embodied_pose.utils.motion_lib import MotionLib
+    import torch
+    import yaml
+    from tqdm import tqdm
 
-    del motion_lib_input_dict
-    del motion_lib
-    del render_data_dict
+    num_seq = args.num_seq
+    num_motion_libs = args.num_motion_libs
+
+    os.makedirs(args.out_dir, exist_ok=True)
+    meta_data = {
+        "amass_data": args.amass_data,
+        "tennisproject_data": args.tennisproject_data,
+        "num_seq": num_seq,
+        "num_motion_libs": num_motion_libs,
+        "disable_xy_correction": args.disable_xy_correction,
+        "tp_xy_units": args.tp_xy_units,
+        "tp_pixel_to_meters": args.tp_pixel_to_meters,
+        "tp_frame_window": args.tp_frame_window,
+        "tp_frame_offset": args.tp_frame_offset,
+        "tp_flip_y": args.tp_flip_y,
+        "tp_xy_smoothing": args.tp_xy_smoothing,
+        "tp_net": [[args.tp_net_x1, args.tp_net_y1], [args.tp_net_x2, args.tp_net_y2]],
+        "trim_frames": args.trim_frames,
+    }
+    with open(os.path.join(args.out_dir, 'args.yml'), 'w') as metadata_file:
+        yaml.safe_dump(meta_data, metadata_file)
+    amass_data = joblib.load(args.amass_data)
+    amass_file_name = os.path.basename(args.amass_data)
+    if amass_file_name.endswith("_amass.pkl"):
+        output_video_name = amass_file_name.replace("_amass.pkl", ".mp4")
+    elif amass_file_name.endswith(".pkl"):
+        output_video_name = amass_file_name.replace(".pkl", ".mp4")
+    else:
+        output_video_name = f"{amass_file_name}.mp4"
+    print(f"Output video name: {output_video_name}")
+    xy_context = prepare_xy_context(args, output_video_name)
+    info = joblib.load('data/misc/smpl_body_info.pkl')
+
+    # body_shapes
+    all_beta = [x['beta'][:10] for x in amass_data.values()]
+    _, index = np.unique([",".join([f"{x:.6f}" for x in beta]) for beta in all_beta], return_index=True)
+    index.sort()
+    beta_arr = [all_beta[i] for i in index]
+    beta_mapping = dict()
+    for i, beta in enumerate(beta_arr):
+        key = ",".join([f"{x:.6f}" for x in beta])
+        beta_mapping[key] = i
+    print(f'AMASS data has {len(beta_mapping)} unique body shapes!')
+    joblib.dump({'beta_arr': beta_arr, 'beta_mapping': beta_mapping}, f'{args.out_dir}/shape_data.pkl')
+
+    sequences = np.array(list(amass_data.keys()))
+    if num_seq is not None:
+        sequences = sequences[:num_seq]
+
+    seq_mapping = {seq_name.item(): seq_idx for seq_idx, seq_name in enumerate(sequences)}
+    motion_lib_seq_arr = np.array_split(sequences, num_motion_libs)
+
+    seq_name_splits = {}
+    for i, seq_arr in enumerate(motion_lib_seq_arr):
+        seq_name_splits[i] = [seq_name.item()[2:] for seq_name in seq_arr]
+    joblib.dump(seq_name_splits, f'{args.out_dir}/seq_name_splits.pkl')
+    with smpl_robot_context() as smpl_local_robot:
+        for i, motion_lib_seqs in enumerate(tqdm(motion_lib_seq_arr)):
+            motion_lib_input_dict = {}
+            render_data_dict = {}
+            for key_name in motion_lib_seqs:
+                key_name = key_name.item()
+                print(f"Applying ground correction for sequence {key_name}")
+                sequence = correct_smpl_sequence(
+                    amass_data[key_name], smpl_local_robot, sequence_name=key_name,
+                    xy_context=xy_context, out_dir=args.out_dir,
+                    show_plots=not args.no_show,
+                )
+                beta_key = ",".join(f"{x:.6f}" for x in sequence['beta'])
+                motion_out, render_data = build_motion_output(
+                    sequence, key_name, seq_mapping[key_name], beta_mapping[beta_key],
+                    trim_frames=args.trim_frames,
+                )
+                motion_lib_input_dict[key_name] = motion_out
+                render_data_dict[key_name] = render_data
+
+            if not motion_lib_input_dict:
+                continue
+            motion_lib = MotionLib(
+                motion_file=motion_lib_input_dict,
+                dof_body_ids=info['dof_body_ids'],
+                dof_offsets=info['dof_offsets'],
+                key_body_ids=info['key_body_ids'],
+                device='cpu',
+                clean_up=True,
+            )
+            torch.save(motion_lib, f"{args.out_dir}/mlib_part_{i:05d}.pth")
+            render_pkl_path = f"{args.out_dir}/mlib_part_{i:05d}_render.pkl"
+            joblib.dump(render_data_dict, render_pkl_path)
+            print(f"Saved render data to {render_pkl_path}")
+            del motion_lib
 
 
-# out_pkl = os.path.join(args.out_dir, "amass_data_corrected.pkl")
-# joblib.dump(amass_data, out_pkl)
-# print(f"Saved AMASS-style data to {out_pkl}")
-smpl_local_robot.clean_up()
+if __name__ == "__main__":
+    main()
