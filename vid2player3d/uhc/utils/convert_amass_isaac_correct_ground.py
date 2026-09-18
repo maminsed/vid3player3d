@@ -19,8 +19,6 @@ import numpy as np
 import pandas as pd
 from scipy.signal import find_peaks
 from sklearn.linear_model import LinearRegression, RANSACRegressor
-from vid2player3d.embodied_pose.utils.motion_lib import MotionLib
-import torch
 from tqdm import tqdm
 
 # TennisProject/court_reference.py and main.py. These are reference-image
@@ -58,6 +56,8 @@ def build_arg_parser():
     parser.add_argument('--num_seq', type=int, default=None)
     parser.add_argument('--num_motion_libs', type=int, default=1)
     parser.add_argument('--no_show', action='store_true', help='Save plots without opening windows')
+    parser.add_argument('--verbose', action='store_true',
+                        help='Save a CUDA-rendered corrected court MP4 and suppress plot windows')
     return parser
 
 
@@ -187,7 +187,7 @@ def load_correction_inputs(gvhmr_dir, csv_path, disable_xy=False):
         'gvhmr_dir': str(directory), 'tennisproject_data': str(csv_path),
         'amass_data': str(amass_paths[0]), 'source': source,
         'sequence_name': str(sequence_name), 'frame_count': count, 'fps': fps,
-        'frame_join': 'CSV global_frame = JSON source.start_frame + motion frame',
+        'frame_join': 'CSV global_frame = source.start_frame + motion frame; end_frame is exclusive; no skipped frames',
         'input_video_size': [int(width), int(height)],
         'xy_enabled': not disable_xy,
         'coordinate_system': {'units': 'meters', 'origin': 'net center on ground',
@@ -267,13 +267,13 @@ def load_correction_inputs(gvhmr_dir, csv_path, disable_xy=False):
         'method': 'solvePnP with saved K and homography court correspondences; zero distortion assumed',
         'intrinsics_source': 'hmr4d_results.pt/K_fullimg (GVHMR normally estimates focal length)',
         'rotation_convention': 'p_camera = R_court_to_camera @ p_court + t_court_to_camera',
-        'source_frames': source_frames.tolist(), 'intrinsics_640x360': k.tolist(),
-        'court_to_camera_rotation': rotations.tolist(), 'court_to_camera_translation': translations.tolist(),
-        'reprojection_rms_640x360_px': errors,
+        'intrinsics_640x360': k,
+        'court_to_camera_rotation': rotations, 'court_to_camera_translation': translations,
+        'reprojection_rms_640x360_px': np.asarray(errors),
         'reprojection_rms_median_px': float(np.median(errors)),
         'reprojection_rms_max_px': float(np.max(errors)),
-        'world_to_court_yaw_radians': yaw.tolist(),
-        'discarded_tilt_radians': residual.tolist(),
+        'world_to_court_yaw_radians': yaw,
+        'discarded_tilt_radians': residual,
         'hip_confidence_note': 'Processed ViTPose scores include validity=1 for upstream interpolated joints',
     }
     print(f'Court calibration: median/max RMS {np.median(errors):.2f}/{max(errors):.2f}px at 640x360')
@@ -305,13 +305,39 @@ def apply_camera_xy(root_trans, grounded_root, joints, pose_aa, context):
 
 
 def save_correction_metadata(out_dir, args, provenance, sequences):
+    """Write a short YAML summary and lossless per-frame NumPy diagnostics.
+
+    The pickle mirrors the camera/sequences sections of the YAML. Array row i
+    corresponds to source.start_frame + i; source.end_frame is exclusive.
+    Copies keep repeated saves (including video metadata updates) non-mutating.
+    """
     import yaml
 
     metadata = dict(provenance)
     metadata['arguments'] = {key: str(value) if isinstance(value, Path) else value
                              for key, value in vars(args).items()}
-    metadata['sequences'] = {str(name): sequence['alignment_metadata'] for name, sequence in sequences.items()}
+    diagnostics = {'camera': {}, 'sequences': {}}
+    if 'camera' in metadata:
+        camera = metadata['camera'] = dict(metadata['camera'])
+        for key in ('intrinsics_640x360', 'court_to_camera_rotation',
+                    'court_to_camera_translation', 'reprojection_rms_640x360_px',
+                    'world_to_court_yaw_radians', 'discarded_tilt_radians'):
+            if key in camera:
+                diagnostics['camera'][key] = np.asarray(camera.pop(key))
+    metadata['sequences'] = {}
+    for name, sequence in sequences.items():
+        summary = dict(sequence['alignment_metadata'])
+        arrays = {}
+        for key in ('reconstructed_hip_midpoint_m', 'original_root_m', 'corrected_root_m'):
+            if key in summary:
+                arrays[key] = np.asarray(summary.pop(key))
+        metadata['sequences'][str(name)] = summary
+        if arrays:
+            diagnostics['sequences'][str(name)] = arrays
     Path(out_dir).mkdir(parents=True, exist_ok=True)
+    if diagnostics['camera'] or diagnostics['sequences']:
+        metadata['diagnostics_file'] = 'correction_diagnostics.pkl'
+        joblib.dump(diagnostics, Path(out_dir) / metadata['diagnostics_file'])
     with (Path(out_dir) / 'args.yml').open('w') as stream:
         yaml.safe_dump(metadata, stream, sort_keys=False)
 
@@ -746,6 +772,7 @@ def draw_xy_comparison(ax_xy, ax_x, ax_y, original, corrected, fps, court_enable
 @contextmanager
 def smpl_robot_context(data_dir="data/smpl"):
     """Own temporary XML/geometry files and clean them up even on failure."""
+    _setup_project_imports()
     from vid2player3d.uhc.smpllib.smpl_local_robot import Robot as LocalRobot
 
     robot_cfg = {
@@ -842,9 +869,9 @@ def correct_smpl_sequence(smpl_data_entry, smpl_local_robot, fps=30.0,
                 comparison_world_to_court_rotation=yaw0.tolist(),
                 comparison_world_to_court_translation=comparison_offset.tolist(),
                 comparison_note='Fixed first-frame yaw and XY registration, original Z retained',
-                reconstructed_hip_midpoint_m=hip_world.tolist(),
-                original_root_m=root_trans.tolist(),
-                corrected_root_m=corrected_root_trans.tolist(),
+                reconstructed_hip_midpoint_m=hip_world,
+                original_root_m=root_trans,
+                corrected_root_m=corrected_root_trans,
             )
         # Convert pelvis world position back to SMPL model translation.
         corrected_trans = corrected_root_trans - pelvis_offset
@@ -920,14 +947,31 @@ def build_motion_output(sequence, seq_name, seq_idx, beta_idx):
     return motion_out, render_data
 
 
+def _setup_project_imports():
+    # Existing project modules use both repository-qualified and local imports.
+    project_dir = Path(__file__).resolve().parents[2]
+    for directory in (project_dir, project_dir.parent):
+        if str(directory) not in sys.path:
+            sys.path.insert(0, str(directory))
+
+
 def main(argv=None):
-    args = build_arg_parser().parse_args(argv)
+    parser = build_arg_parser()
+    args = parser.parse_args(argv)
+    _setup_project_imports()
+    # Isaac Gym must initialize before torch, including the CUDA preflight.
+    from vid2player3d.embodied_pose.utils.motion_lib import MotionLib
+    import torch
+
+    if args.verbose:
+        if args.disable_xy_correction:
+            parser.error('--verbose court video requires XY correction; remove --disable_xy_correction')
+        from vid2player3d.uhc.utils.debug_court_video import require_cuda_renderer, save_corrected_court_video
+        require_cuda_renderer()
     if args.num_motion_libs < 1:
         raise ValueError("num_motion_libs must be positive")
     if args.num_seq is not None and args.num_seq < 1:
         raise ValueError("num_seq must be positive")
-    # MotionLib imports Isaac Gym; keep this before importing torch directly.
-
     num_seq = args.num_seq
     num_motion_libs = args.num_motion_libs
 
@@ -971,7 +1015,7 @@ def main(argv=None):
                 sequence = correct_smpl_sequence(
                     amass_data[key_name], smpl_local_robot, sequence_name=key_name, fps=provenance["fps"],
                     xy_context=xy_context, out_dir=args.out_dir,
-                    show_plots=not args.no_show,
+                    show_plots=not (args.no_show or args.verbose),
                 )
                 completed[key_name] = {'alignment_metadata': sequence['alignment_metadata']}
                 save_correction_metadata(args.out_dir, args, provenance, completed)
@@ -981,6 +1025,19 @@ def main(argv=None):
                 )
                 motion_lib_input_dict[key_name] = motion_out
                 render_data_dict[key_name] = render_data
+
+                if args.verbose:
+                    smpl_parser = getattr(smpl_local_robot, {
+                        'neutral': 'smpl_parser_n', 'male': 'smpl_parser_m',
+                        'female': 'smpl_parser_f',
+                    }[sequence['gender']])
+                    video_metadata = save_corrected_court_video(
+                        render_data['verts'], smpl_parser.faces, render_data['fps'],
+                        Path(args.out_dir) / (Path(key_name).name + '_corrected_court.mp4'),
+                        COURT_WIDTH, COURT_LENGTH,
+                    )
+                    sequence['alignment_metadata']['debug_video'] = video_metadata
+                    save_correction_metadata(args.out_dir, args, provenance, completed)
 
             if not motion_lib_input_dict:
                 continue

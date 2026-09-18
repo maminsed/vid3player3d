@@ -36,6 +36,35 @@ Z correction alone, retaining the original GVHMR horizontal coordinates.
 The previous `--amass_data`, `--tp_*`, and `--trim_frames` options are removed.
 All GVHMR-selected frames are retained. `--no_show` saves without opening windows.
 
+### Corrected court video over SSH
+
+Add `--verbose` to the converter to save `<sequence>_corrected_court.mp4` in
+`--out_dir`. This also suppresses plot windows, so no display or GUI is needed:
+
+```bash
+python uhc/utils/convert_amass_isaac_correct_ground.py \
+  --gvhmr_dir ../GVHMR/outputs/demo_2/Adrian_Mannarino_vs._Jiri_Lehecka_reencoded-scene000-002 \
+  --csv ../TennisProject/res_2/Adrian_Mannarino_vs._Jiri_Lehecka_reencoded-scene000-002.csv \
+  --out_dir data/motion_lib/court_video_example --verbose
+```
+
+The 960x540 H.264 video retains every frame and the input FPS. It shows only the
+corrected body, with a fixed elevated rear camera on the negative-Y side, court
+lines and a simple net matching the existing tennis viewer. Camera framing fits
+all motion and the net; it never follows or rotates with the player. The court
+may extend outside the image so the body stays large enough to inspect.
+The mesh is exactly the one saved in `*_render.pkl`: no additional grounding,
+recentering, or heading changes are applied. Camera settings and video details
+are saved under the sequence's `debug_video` entry in `args.yml`.
+
+Rasterization and shading require CUDA and the existing PyTorch3D installation
+in `vid2player3d`. There is **no CPU rendering fallback**. H.264 encoding runs
+through FFmpeg on the CPU after GPU rendering. An early CUDA kernel check fails
+explicitly if the process cannot access the GPU (including a sandbox that hides
+it). No environment switch or dependency changes are required. Court rendering
+requires XY correction, so `--verbose` and `--disable_xy_correction` cannot be
+combined. Without `--verbose`, conversion does not import or run the renderer.
+
 ## Coordinates and frame matching
 
 The downstream `embodied_pose/run.py` creates `HumanoidSMPLIM` or its visualizer.
@@ -126,11 +155,20 @@ using a single first-frame yaw and XY offset to the corrected path. Its relative
 motion is unchanged. Labels distinguish this reference from the corrected path;
 the per-frame correction is never used to warp the reference trajectory.
 
-Both scripts write `args.yml` with input paths, source frame range, coordinate
-conventions, constants, per-frame camera intrinsics/extrinsics, reprojection
-errors, yaw corrections, discarded tilt, comparison registration, reconstructed
-hip positions, and original/corrected roots. No extra calibration artifact is
-required. Use distinct output directories to keep separate runs' metadata.
+Both scripts keep `args.yml` short: input paths, source start/end frames,
+coordinate conventions, constants, calibration error summaries, comparison
+registration, and optional video settings. `source.end_frame` is exclusive;
+every frame is retained, so no explicit frame-index array is saved.
+
+Per-frame arrays go in `correction_diagnostics.pkl` next to `args.yml`, which
+references it through `diagnostics_file`. Its `camera` dictionary contains
+intrinsics/extrinsics, reprojection errors, yaw corrections, and discarded tilt.
+Its `sequences[sequence_name]` dictionary contains `reconstructed_hip_midpoint_m`,
+`original_root_m`, and `corrected_root_m`. Positions are meters; original roots
+use the GVHMR frame and corrected roots use the court frame. Row `i` corresponds
+to `source.start_frame + i`. Load with `joblib.load(path)` to get NumPy arrays.
+With XY correction disabled there are no such arrays and no diagnostics file
+is written. Use distinct output directories to keep separate runs' metadata.
 
 ## Shared API and verification
 

@@ -7,7 +7,12 @@ import sys
 
 import matplotlib.pyplot as plt
 import numpy as np
-import vid2player3d.uhc.utils.convert_amass_isaac_correct_ground as ground
+
+if __package__:
+    from . import convert_amass_isaac_correct_ground as ground
+else:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    from uhc.utils import convert_amass_isaac_correct_ground as ground
 
 correct_smpl_sequence = ground.correct_smpl_sequence
 get_foot_vertices = ground.get_foot_vertices

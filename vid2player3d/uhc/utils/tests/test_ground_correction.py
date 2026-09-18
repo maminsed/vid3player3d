@@ -136,9 +136,55 @@ class InputAlignmentTests(unittest.TestCase):
 
     def test_exact_json_frame_join_resolution_and_path_prefix(self):
         _, context, metadata = ground.load_correction_inputs(self.directory, self.csv)
-        self.assertEqual(metadata['camera']['source_frames'], [7, 8, 9, 10])
+        self.assertEqual(metadata['source']['start_frame'], 7)
+        self.assertEqual(metadata['source']['end_frame'], 11)
+        self.assertNotIn('source_frames', metadata['camera'])
         np.testing.assert_allclose(context['hip_pixels'], np.tile([300., 225.], (4, 1)))
         np.testing.assert_allclose(context['intrinsic'][0], camera_fixture()[2])
+
+    def test_metadata_roundtrip_keeps_arrays_out_of_yaml_and_repeated_saves(self):
+        import yaml
+
+        _, _, provenance = ground.load_correction_inputs(self.directory, self.csv)
+        arrays = {key: np.arange(12, dtype=np.float32).reshape(4, 3)
+                  for key in ('reconstructed_hip_midpoint_m', 'original_root_m', 'corrected_root_m')}
+        alignment = dict(arrays, xy_enabled=True, comparison_world_to_court_translation=[1., 2., 0.])
+        sequences = {self.name: {'alignment_metadata': alignment}}
+        args = SimpleNamespace(gvhmr_dir=self.directory, verbose=False)
+        output = self.directory / 'output'
+        # Converter saves before correction, after correction, and after video.
+        ground.save_correction_metadata(output, args, provenance, {})
+        ground.save_correction_metadata(output, args, provenance, sequences)
+        alignment['debug_video'] = {'path': 'example.mp4', 'frames': 4}
+        ground.save_correction_metadata(output, args, provenance, sequences)
+        summary = yaml.safe_load((output / 'args.yml').read_text())
+        restored = joblib.load(output / summary['diagnostics_file'])
+        self.assertNotIn('source_frames', (output / 'args.yml').read_text())
+        self.assertEqual(summary['source']['start_frame'], 7)
+        self.assertEqual(summary['source']['end_frame'], 11)
+        self.assertEqual(summary['sequences'][self.name]['debug_video']['frames'], 4)
+        self.assertEqual(summary['sequences'][self.name]['comparison_world_to_court_translation'], [1., 2., 0.])
+        self.assertIn('reprojection_rms_median_px', summary['camera'])
+        for key, expected in arrays.items():
+            self.assertNotIn(key, summary['sequences'][self.name])
+            np.testing.assert_array_equal(restored['sequences'][self.name][key], expected)
+            self.assertEqual(restored['sequences'][self.name][key].dtype, expected.dtype)
+            self.assertIs(alignment[key], expected)
+        self.assertEqual(len(restored['camera']), 6)
+        for key, values in restored['camera'].items():
+            self.assertNotIn(key, summary['camera'])
+            np.testing.assert_array_equal(values, provenance['camera'][key])
+
+    def test_metadata_without_xy_needs_no_diagnostics_file(self):
+        import yaml
+
+        _, _, provenance = ground.load_correction_inputs(self.directory, self.csv, disable_xy=True)
+        output = self.directory / 'output'
+        ground.save_correction_metadata(output, SimpleNamespace(), provenance,
+                                        {self.name: {'alignment_metadata': {'xy_enabled': False}}})
+        summary = yaml.safe_load((output / 'args.yml').read_text())
+        self.assertNotIn('diagnostics_file', summary)
+        self.assertFalse((output / 'correction_diagnostics.pkl').exists())
 
     def test_missing_and_duplicate_frames_fail(self):
         for rows in (self.rows.iloc[:-1], pd.concat([self.rows, self.rows.iloc[:1]])):
