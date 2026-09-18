@@ -7,13 +7,13 @@
 
 import numpy as np
 import os
-from embodied_pose.utils import torch_utils
+from vid2player3d.embodied_pose.utils import torch_utils
 import yaml
 import joblib
 import torch
 
-from poselib.skeleton.skeleton3d import SkeletonMotion
-from poselib.core.rotation3d import *
+from vid2player3d.poselib.poselib.skeleton.skeleton3d import SkeletonMotion
+from vid2player3d.poselib.poselib.core.rotation3d import *
 
 
 USE_CACHE = True

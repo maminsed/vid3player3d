@@ -1,122 +1,150 @@
-# Advanced Ground Correction for AMASS Data
+# Ground and court correction
 
-This document explains the advanced ground correction algorithm implemented in `convert_amass_isaac_correct_ground.py`.
+Both scripts use `convert_amass_isaac_correct_ground.py` for input validation,
+camera reconstruction, body alignment, SMPL reconstruction, and Z correction.
+Importing the module does not load simulation dependencies or run conversion.
 
-## 1. Problem Statement
+## Inputs and commands
 
-When processing long motion sequences, simple height normalization based on the first frame can lead to a "drifting" effect where the character's feet gradually move up or down from the ground plane. This is especially problematic for animations that need to interact realistically with a flat ground surface.
-
-## 2. Solution: Dynamic Ground Correction
-
-This script implements an advanced ground correction algorithm to dynamically adjust the character's height throughout the animation, ensuring the feet stay properly grounded. The algorithm analyzes the motion sequence to identify ground contact points and adjusts the root translation to maintain a consistent ground level.
-
-## 3. Key Features
-
-- **Multi-Frequency Windowing**: Instead of analyzing the entire sequence at once, the algorithm uses multiple overlapping windows of different sizes (e.g., 15, 30 frames). This captures both local, short-term ground interactions and longer-term trends, ensuring smooth transitions without discrete jumps.
-
-- **Foot-Aware Ground Contact Detection**:
-    - It uses specific SMPL foot vertex indices to accurately track the position of the left and right feet.
-    - It detects "valleys" in the foot height data, which correspond to moments of ground contact.
-    - For added robustness, it checks if both feet are on the ground simultaneously and uses both for a more stable ground plane estimation when they are.
-
-- **Robust RANSAC Plane Fitting**:
-    - For each window, it fits a 3D plane (`Z = a*X + b*Y + c*T + d`) to the detected ground contact points.
-    - It uses the RANSAC (RANdom SAmple Consensus) algorithm, which is highly effective at ignoring outliers (e.g., noisy detections or frames where the character is airborne).
-
-- **Two-Step Correction for Smoothness and Consistency**:
-    1.  **Local Correction**: First, it corrects the character's height relative to the *local* plane fitted for each window. This preserves the nuances of the original motion (e.g., the character walking up a slight incline within the window).
-    2.  **Global Alignment**: Second, it calculates the offset of each local plane from the global `z=0` origin and applies a global shift. This ensures that while local motion is preserved, the character remains at a consistent global height, preventing long-term drift.
-
-## 4. Algorithm Flow
-
-1.  **Generate Windows**: Create a set of overlapping, multi-sized windows covering the entire animation.
-2.  **Process Each Window**: For each window:
-    a. **Detect Valleys**: Identify potential ground contact frames by finding valleys in the foot height data.
-    b. **Validate Foot Contact**: For each valley, check if one or both feet are on the ground.
-    c. **Fit Local Plane**: Use RANSAC to fit a robust ground plane to the validated contact points within the window.
-    d. **Store Predictions**: For each frame in the window, predict the local ground height and calculate the local plane's offset from `z=0`.
-3.  **Combine and Correct**: For each frame in the entire sequence:
-    a. **Weighted Average**: Collect predictions from all windows that overlap the current frame and compute a weighted average for both the local ground height and the plane offset. Weights are higher for predictions from windows where the frame is closer to the center.
-    b. **Apply Two-Step Correction**: Adjust the character's root translation `Z` value by first aligning to the local plane and then shifting the local plane to `z=0`.
-
-## 5. Visualization and Debugging
-
-The script automatically generates and saves plots (`ground_correction_{sequence_name}.png`) for each processed sequence. These plots help visualize:
--   The original vs. corrected foot heights.
--   The detected ground contact points (green dots).
--   The sliding windows used for estimation (vertical dashed lines).
--   The magnitude of the height correction applied at each frame.
-
-## 6. Usage
-
-To use the script, run it from the main project directory:
-```bash
-python uhc/utils/convert_amass_isaac_correct_ground.py --amass_data <path_to_your_amass.pkl> --out_dir <your_output_directory>
-```
-For example:
-```bash
-python uhc/utils/convert_amass_isaac_correct_ground.py --amass_data outputs/demo/my_video/my_video_amass.pkl --out_dir data/motion_lib/my_video_corrected
-```
-
-Run these commands from `vid2player3d` in the project's environment. Add
-`--no_show` to save plots without opening windows. For the original and corrected
-left/right foot-height visualization, use:
+Run from `vid2player3d` in the project's Python environment. Supply **one GVHMR
+clip output folder** and its matching TennisProject CSV:
 
 ```bash
+python uhc/utils/convert_amass_isaac_correct_ground.py \
+  --gvhmr_dir ../GVHMR/outputs/demo_2/Arthur_Rinderknech_vs._Carlos_Alcaraz_reencoded-scene007-000 \
+  --csv ../TennisProject/res_2/Arthur_Rinderknech_vs._Carlos_Alcaraz_reencoded-scene007-000.csv \
+  --out_dir data/motion_lib/court_example --no_show
+
 python uhc/utils/plot_ground_contacts_simple.py \
-  --amass_data /path/to/video_amass.pkl \
-  --num_seq 1 --out_dir /path/to/plots --no_show
+  --gvhmr_dir ../GVHMR/outputs/demo_2/Arthur_Rinderknech_vs._Carlos_Alcaraz_reencoded-scene007-000 \
+  --csv ../TennisProject/res_2/Arthur_Rinderknech_vs._Carlos_Alcaraz_reencoded-scene007-000.csv \
+  --out_dir /tmp/court_plots --no_show
 ```
 
-### Shared functions and translation conventions
+`--tennisproject_data` is an alias for `--csv`. The folder must contain exactly
+one `*_amass.pkl`, `0_input_video.json`, `0_input_video.mp4`,
+`preprocess/vitpose.pt`, and `hmr4d_results.pt`. Use the matching video artifacts;
+lengths, source identity, FPS, poses, translations, and body shape are checked.
+The loader reads these local pickle/PyTorch artifacts as trusted project data.
 
-Both scripts parse arguments inside `main(argv=None)` and can be imported without
-starting conversion or initializing SMPL/MuJoCo. The plotting script imports its
-foot-contact detection and sequence-correction functions from
-`convert_amass_isaac_correct_ground.py`; maintain the correction algorithm there.
+The converter's `--num_motion_libs` defaults to 1 and controls output groups,
+not frame sampling. Each folder currently represents one sequence; empty groups
+are skipped. `--num_seq` limits sequences and the plotter also supports
+`--sequence_name` substring matching. `--disable_xy_correction` runs the existing
+Z correction alone, retaining the original GVHMR horizontal coordinates.
 
-`correct_smpl_sequence()` is the shared pipeline for reconstructing the original
-SMPL mesh, applying `correct_ground_height()`, and reconstructing the corrected
-mesh. It returns the original and corrected vertices and translations.
-`smpl_robot_context()` provides the SMPL robot and owns temporary XML/geometry
-files, cleaning them up when processing finishes or fails.
+The previous `--amass_data`, `--tp_*`, and `--trim_frames` options are removed.
+All GVHMR-selected frames are retained. `--no_show` saves without opening windows.
 
-SMPL model translation and skeleton root position use different origins:
+## Coordinates and frame matching
+
+The downstream `embodied_pose/run.py` creates `HumanoidSMPLIM` or its visualizer.
+`HumanoidSMPL` sets Z-up and an upward ground normal; `MotionLib` passes stored
+root XY and rotations through. Tennis visualization uses a net at `(0, 0)`,
+width 10.97 m, and baselines at Y=+/-11.89 m. The controller places the near player
+at negative Y. Conversion therefore uses a right-handed, meter coordinate system:
+
+- X: reference-court right.
+- Y: toward the reference court's far baseline (near side is negative).
+- Z: upward; ground Z=0.
+- Quaternion order: XYZW, as required by PoseLib/Isaac Gym.
+
+CSV `global_frame = JSON source.start_frame + motion_frame`. The JSON end frame
+is exclusive. No guessed offsets, neighboring-frame averaging, or additional
+trimming are used. CSV `res_2/0-<name>.mp4` names are normalized before matching.
+Missing/duplicate rows and unusable calibration produce an explicit error.
+
+ViTPose contains full input-video pixel coordinates and COCO17 joints. Indices
+11 and 12 are left/right hips; their 2D midpoint approximates the pelvis image
+location. There is no pelvis joint. The image coordinates and saved intrinsics
+are scaled to TennisProject's **640x360** homography input coordinates. CSV
+`court_kps` use the original drawing resolution and are scaled as well, then
+checked against the homography to catch mismatched artifacts/resolutions.
+
+TennisProject's reference net endpoints are `(286,1748)` and `(1379,1748)`, so the
+center is `(832.5,1748)`. Reference pixel coordinates map to court meters with
+`[10.97/1093, -23.78/2374]`. These and the quality thresholds are file-level
+constants. The court length follows the downstream +/-11.89 m baseline drawing.
+
+## Camera-aware hip reconstruction and heading
+
+1. Fit each frame's court-to-camera rotation/translation with OpenCV `solvePnP`,
+   using the CSV homography's subpixel court correspondences and GVHMR's saved
+   `K_fullimg`. CSV court keypoints independently check the resolution convention.
+2. Infer GVHMR-world to court rotation from the camera extrinsics and the saved
+   camera-space/global SMPL root orientations. Apply its closest yaw rotation
+   to the body root orientation; preserve its gravity alignment and joint poses.
+3. Run the existing Z correction on the **original mesh and trajectory**, before
+   changing XY or yaw. Reconstruct the hip-midpoint height and its pose-dependent
+   offset from the pelvis root using the SMPL joints.
+4. Intersect the hip image ray with the plane at that reconstructed hip height.
+   Subtract the rotated hip-to-root offset to obtain the root's court XY.
+5. Rebuild the mesh and skeleton using the corrected root position and orientation.
+
+A ground homography applied directly to hips would incorrectly treat their
+height as zero. Here, reconstructed hip height is used even during crouches or
+jumps; the midpoint is still an anatomical/keypoint approximation.
+
+Camera intrinsics are usually **estimated** by GVHMR, not measured calibration.
+Zero lens distortion is assumed. Fits require a camera above the court, positive
+point depths, and at most 8 pixels RMS reprojection error at 640x360. This checks
+consistency, not ground-truth accuracy. No temporal XY smoothing is added. Saved
+ViTPose may already contain interpolated low-confidence joints (validity=1 is
+not model confidence), and upstream tracking/court inference has its own filters.
+
+The SMPL model translation and skeleton pelvis translation are different:
 
 ```python
-root_trans = trans + skeleton_tree.local_translation[0].numpy()
-corrected_trans = corrected_root_trans - skeleton_tree.local_translation[0].numpy()
+root_trans = trans + skeleton_tree.local_translation[0]
+corrected_trans = corrected_root_trans - skeleton_tree.local_translation[0]
 ```
 
-The corrected mesh uses `corrected_trans`, while `SkeletonState` uses
-`corrected_root_trans`. `build_motion_output()` preserves this distinction in the
-motion dictionary's `trans` and `root_trans` fields, trims all frame arrays
-consistently, and computes `min_verts_h` from the corrected render mesh. Existing
-motion libraries must be regenerated to incorporate this fix.
+The skeleton uses `corrected_root_trans`; the mesh uses `corrected_trans`.
+Heading alignment rotates about SMPL's true pelvis, accounting for the tiny
+rounding difference in the XML skeleton's pelvis offset.
 
-For array-only callers, `correct_ground_height()` accepts `out_dir` and
-`show_plots` explicitly; it does not read global CLI arguments. The plotting
-script uses vertical correction with the default settings; the converter also
-supports optional court-based XY correction through its existing CLI flags.
+## Existing Z correction
 
-Regression checks (from `vid2player3d`):
+The vertical algorithm is unchanged: identify candidate foot contacts, fit
+RANSAC ground models in overlapping 15/30-frame windows, then combine local
+height corrections. Its three-frame height averaging for contact detection is
+retained. This is not a hard foot constraint; corrected feet can still penetrate
+or float above Z=0, and the method does not establish ground-truth jump heights.
+Downstream `MotionLib.get_motion_state(adjust_height=True)` may additionally
+subtract `min_verts_h - ground_tolerance` from Z; no XY transform is applied there.
+
+## Outputs and diagnostics
+
+The converter writes `mlib_part_*.pth`, matching `*_render.pkl`, shape/split
+metadata, `args.yml`, and `ground_correction_<sequence>.png`. That image now
+includes XY trajectories and X/Y versus time alongside the Z diagnostics.
+The plotting script saves `trajectory_and_ground_contacts_<sequence>.png` with
+XY, X/Y over time, corrected 3D motion, and original/corrected foot heights.
+
+For meaningful trajectory comparisons, the **original** GVHMR path is registered
+using a single first-frame yaw and XY offset to the corrected path. Its relative
+motion is unchanged. Labels distinguish this reference from the corrected path;
+the per-frame correction is never used to warp the reference trajectory.
+
+Both scripts write `args.yml` with input paths, source frame range, coordinate
+conventions, constants, per-frame camera intrinsics/extrinsics, reprojection
+errors, yaw corrections, discarded tilt, comparison registration, reconstructed
+hip positions, and original/corrected roots. No extra calibration artifact is
+required. Use distinct output directories to keep separate runs' metadata.
+
+## Shared API and verification
+
+- `load_correction_inputs(folder, csv)` validates artifacts and prepares cameras.
+- `smpl_robot_context()` owns and cleans up temporary geometry.
+- `correct_smpl_sequence(entry, robot, xy_context=...)` runs the shared pipeline.
+- `build_motion_output(...)` serializes every frame with consistent poses/positions.
+- `draw_xy_comparison(...)` supplies the shared XY plotting logic.
 
 ```bash
 MPLBACKEND=Agg python -m unittest discover -s uhc/utils/tests -v
 ```
 
-## 7. Tunable Parameters
-
-The following parameters in the script can be adjusted to fine-tune the algorithm's behavior:
-
--   In `detect_ground_contacts_with_feet`:
-    -   `window_size=3`: The smoothing window for valley detection. Smaller is more sensitive.
-    -   `prominence=0.02`: The minimum prominence for a valley to be detected. Smaller is more sensitive.
-    -   `foot_threshold=0.05`: The maximum height difference between feet to be considered a dual-foot contact.
-
--   In `get_multi_frequency_windows`:
-    -   `base_window=15`: The smallest window size for plane fitting.
-    -   `frequencies=[1, 2]`: The multipliers for the base window size (creates windows of 15 and 30 frames).
-
--   In `fit_ground_plane_ransac_with_feet`:
-    -   The `RANSACRegressor` parameters can be tuned for more or less aggressive outlier rejection. 
+Tests cover synthetic elevated-hip camera geometry, body heading, mesh/skeleton
+alignment, unchanged Z behavior, frame matching/resolution, stale inputs, full
+frame retention, import safety, and plot output. Existing motion libraries must
+be regenerated to include court correction.

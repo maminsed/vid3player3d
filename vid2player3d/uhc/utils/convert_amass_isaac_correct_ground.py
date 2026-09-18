@@ -6,6 +6,7 @@ SMPL/MuJoCo. Simulation dependencies are loaded only when converting a sequence.
 
 import argparse
 import ast
+import json
 from contextlib import contextmanager
 import os
 from pathlib import Path
@@ -18,131 +19,301 @@ import numpy as np
 import pandas as pd
 from scipy.signal import find_peaks
 from sklearn.linear_model import LinearRegression, RANSACRegressor
+from vid2player3d.embodied_pose.utils.motion_lib import MotionLib
+import torch
+from tqdm import tqdm
+
+# TennisProject/court_reference.py and main.py. These are reference-image
+# pixels, not input-video pixels. Match the downstream renderer baselines at
+# +/-11.89 m and the controller's near-player side at negative Y.
+TP_IMAGE_SIZE = (640, 360)
+COURT_WIDTH = 10.97
+COURT_LENGTH = 23.78
+TP_NET_CENTER = np.array([832.5, 1748.0])
+TP_METERS_PER_PIXEL = np.array([COURT_WIDTH / 1093, -COURT_LENGTH / 2374])
+TP_COURT_POINTS = np.array([
+    (286, 561), (1379, 561), (286, 2935), (1379, 2935),
+    (423, 561), (423, 2935), (1242, 561), (1242, 2935),
+    (423, 1110), (1242, 1110), (423, 2386), (1242, 2386),
+    (832, 1110), (832, 2386),
+], dtype=np.float64)
+HIP_INDICES = (11, 12)  # GVHMR/hmr4d/configs/demo.yaml: COCO17.
+HIP_CONFIDENCE_THRESHOLD = 0.4
+MAX_COURT_REPROJECTION_PX = 8.0  # At 640x360, including estimated-K error.
+MAX_COURT_KEYPOINT_ERROR_PX = 2.0
+
+
+def add_input_arguments(parser):
+    parser.add_argument('--gvhmr_dir', type=Path, required=True,
+                        help='One GVHMR output folder containing AMASS, video, JSON and preprocess/')
+    parser.add_argument('--tennisproject_data', '--csv', dest='tennisproject_data',
+                        type=Path, required=True, help='Matching TennisProject CSV')
+    parser.add_argument('--disable_xy_correction', action='store_true')
 
 
 def build_arg_parser():
     parser = argparse.ArgumentParser(description="Convert AMASS motions with ground correction")
-    parser.add_argument('--amass_data', type=str, default="data/amass/amass_copycat_take5_5.pkl")
-    parser.add_argument('--tennisproject_data', type=str, default=None)
+    add_input_arguments(parser)
     parser.add_argument('--out_dir', type=str, default="data/motion_lib/amass")
     parser.add_argument('--num_seq', type=int, default=None)
-    parser.add_argument('--num_motion_libs', type=int, default=14)
-    parser.add_argument('--disable_xy_correction', action='store_true')
-    parser.add_argument('--tp_xy_units', type=str, default='pixels', choices=['meters', 'pixels'])
-    parser.add_argument('--tp_pixel_to_meters', type=float, default=0.01003)
-    parser.add_argument('--tp_frame_window', type=int, default=5)
-    parser.add_argument('--tp_frame_offset', type=int, default=0)
-    parser.add_argument('--tp_flip_y', action='store_true')
-    parser.add_argument('--tp_xy_smoothing', type=int, default=0)
-    parser.add_argument('--tp_net_x1', type=float, default=286.0)
-    parser.add_argument('--tp_net_y1', type=float, default=1748.0)
-    parser.add_argument('--tp_net_x2', type=float, default=1379.0)
-    parser.add_argument('--tp_net_y2', type=float, default=1748.0)
-    parser.add_argument('--trim_frames', type=int, default=0)
+    parser.add_argument('--num_motion_libs', type=int, default=1)
     parser.add_argument('--no_show', action='store_true', help='Save plots without opening windows')
     return parser
 
 
-def safe_literal_eval(value):
-    if isinstance(value, str):
-        try:
-            return ast.literal_eval(value)
-        except (SyntaxError, ValueError):
-            return None
-    return value
+def normalized_video_name(value):
+    name = Path(str(value)).name
+    if name.endswith(('.mp4', '.csv', '.pkl')):
+        name = name.rsplit('.', 1)[0]
+    return name[2:] if name.startswith('0-') else name
 
 
-def parse_xy_point(value):
-    parsed = safe_literal_eval(value)
-    if parsed is None:
-        return None
+def court_points_meters():
+    return np.column_stack(((TP_COURT_POINTS - TP_NET_CENTER) * TP_METERS_PER_PIXEL,
+                            np.zeros(len(TP_COURT_POINTS))))
+
+
+def estimate_court_camera(inv_matrix, intrinsic, court_kps=None):
+    """Fit court->OpenCV camera extrinsics; coordinates are 640x360 pixels.
+
+    H supplies subpixel court correspondences; rounded CSV court_kps validate
+    the coordinate scaling. The saved K is an estimate, so expose fit residuals.
+    """
+    import cv2
+
+    h = np.asarray(inv_matrix, dtype=np.float64)
+    k = np.asarray(intrinsic, dtype=np.float64)
+    if h.shape != (3, 3) or not np.isfinite(h).all() or np.linalg.matrix_rank(h) != 3:
+        raise ValueError('Missing or singular image-to-court homography')
+    if k.shape != (3, 3) or not np.isfinite(k).all() or k[0, 0] <= 0 or k[1, 1] <= 0:
+        raise ValueError('Invalid camera intrinsics')
+    image_points = cv2.perspectiveTransform(TP_COURT_POINTS[:, None], np.linalg.inv(h))[:, 0]
+    if not np.isfinite(image_points).all():
+        raise ValueError('Homography projects court points to infinity')
+    if court_kps is not None:
+        if court_kps.shape != (14, 2) or not np.isfinite(court_kps).all():
+            raise ValueError('Expected 14 finite court keypoints')
+        disagreement = np.linalg.norm(court_kps - image_points, axis=1).max()
+        if disagreement > MAX_COURT_KEYPOINT_ERROR_PX:
+            raise ValueError(f'Court keypoints/homography disagree by {disagreement:.2f}px; check resolution/source')
+    world_points = court_points_meters()
+    ok, rvec, tvec = cv2.solvePnP(world_points, image_points, k, None,
+                                 flags=cv2.SOLVEPNP_ITERATIVE)
+    if not ok:
+        raise ValueError('Court camera pose estimation failed')
+    rotation = cv2.Rodrigues(rvec)[0]
+    translation = tvec[:, 0]
+    center = -rotation.T @ translation
+    depth = (world_points @ rotation.T + translation)[:, 2]
+    projected = cv2.projectPoints(world_points, rvec, tvec, k, None)[0][:, 0]
+    rms = float(np.sqrt(np.mean(np.sum((projected - image_points) ** 2, axis=1))))
+    if not np.isfinite(rms) or rms > MAX_COURT_REPROJECTION_PX or center[2] <= 0 or np.any(depth <= 0):
+        raise ValueError(f'Invalid court camera fit (RMS={rms:.2f}px, camera height={center[2]:.2f}m)')
+    return rotation, translation, rms
+
+
+def intersect_rays_at_height(image_points, intrinsic, rotation, translation, heights):
+    """Intersect each camera ray with its known court Z plane (all batched)."""
+    pixels = np.column_stack((image_points, np.ones(len(image_points))))
+    rays_camera = np.linalg.solve(intrinsic, pixels[..., None])[..., 0]
+    camera_to_court = rotation.transpose(0, 2, 1)
+    rays = np.einsum('nij,nj->ni', camera_to_court, rays_camera)
+    centers = -np.einsum('nij,nj->ni', camera_to_court, translation)
+    if np.any(np.abs(rays[:, 2]) < 1e-6):
+        raise ValueError('Hip ray is parallel to the requested height plane')
+    distance = (heights - centers[:, 2]) / rays[:, 2]
+    if not np.isfinite(distance).all() or np.any(distance <= 0):
+        raise ValueError('Hip height intersects the viewing ray behind the camera')
+    return centers + distance[:, None] * rays
+
+
+def court_heading_rotations(camera_rotation, incam_root_rotation, amass_root_rotation):
+    """Project the inferred world->court rotation onto SO(2), preserving Z.
+
+    Camera/world SMPL root rotations describe the same body. Their relative
+    rotation supplies world->camera; court extrinsics complete the transform.
+    Only yaw is applied, keeping the existing gravity and height estimates.
+    """
+    from scipy.spatial.transform import Rotation
+
+    relative = camera_rotation.transpose(0, 2, 1) @ incam_root_rotation @ amass_root_rotation.transpose(0, 2, 1)
+    sine = relative[:, 1, 0] - relative[:, 0, 1]
+    cosine = relative[:, 0, 0] + relative[:, 1, 1]
+    if np.any(np.hypot(sine, cosine) < 1e-6):
+        raise ValueError('Cannot determine court yaw from the camera/body rotations')
+    yaw = np.arctan2(sine, cosine)
+    rotations = Rotation.from_euler('z', yaw).as_matrix()
+    residual = Rotation.from_matrix(rotations.transpose(0, 2, 1) @ relative).magnitude()
+    return rotations, yaw, residual
+
+
+def load_correction_inputs(gvhmr_dir, csv_path, disable_xy=False):
+    """Load one clip, validate artifact identity, and join exact source frames.
+
+    Missing/ambiguous frames and unusable calibration fail explicitly instead
+    of freezing the player or silently applying a different clip's trajectory.
+    """
+    import cv2
+    import torch
+    from scipy.spatial.transform import Rotation
+
+    directory, csv_path = Path(gvhmr_dir).resolve(), Path(csv_path).resolve()
+    amass_paths = sorted(directory.glob('*_amass.pkl'))
+    if len(amass_paths) != 1:
+        raise ValueError(f'Expected exactly one *_amass.pkl in {directory}, found {len(amass_paths)}')
+    data = joblib.load(amass_paths[0])
+    if len(data) != 1:
+        raise ValueError('A GVHMR clip folder must contain exactly one AMASS sequence')
+    sequence_name, entry = next(iter(data.items()))
+    metadata = json.loads((directory / '0_input_video.json').read_text())
+    source = metadata['source']
+    start, end = int(source['start_frame']), int(source['end_frame'])
+    count = len(entry['pose_aa'])
+    if count < 2 or end - start != count or len(entry['trans_orig']) != count:
+        raise ValueError('JSON frame range and AMASS lengths disagree (or fewer than two frames)')
+    fps = float(source['fps'])
+    if not np.isclose(fps, 30) or not np.isclose(float(entry.get('fps', fps)), fps):
+        raise ValueError('Expected matching 30 FPS GVHMR source and AMASS data')
+    video = cv2.VideoCapture(str(directory / '0_input_video.mp4'))
     try:
-        arr = np.asarray(parsed, dtype=np.float64)
-    except (TypeError, ValueError):
-        return None
-    arr = np.squeeze(arr)
-    if arr.ndim != 1 or arr.shape[0] < 2:
-        return None
-    return arr[:2]
-
-
-def parse_person_bottom_point(value, point_column):
-    parsed = safe_literal_eval(value)
-    if parsed is None:
-        return None
-
-    if point_column == 'person_points':
-        if not isinstance(parsed, (list, tuple, np.ndarray)) or len(parsed) < 2:
-            return None
-        return parse_xy_point(parsed[1])
-
-    return parse_xy_point(parsed)
-
-
-def prepare_xy_context(args, output_video_name):
-    xy_context = {
-        "enabled": False,
-        "xy_smoothing": max(0, int(args.tp_xy_smoothing)),
+        width, height = video.get(cv2.CAP_PROP_FRAME_WIDTH), video.get(cv2.CAP_PROP_FRAME_HEIGHT)
+        video_count, video_fps = video.get(cv2.CAP_PROP_FRAME_COUNT), video.get(cv2.CAP_PROP_FPS)
+    finally:
+        video.release()
+    if width <= 0 or height <= 0 or int(video_count) != count or not np.isclose(video_fps, fps):
+        raise ValueError('Input video dimensions/frame count/FPS disagree with metadata')
+    context = {'enabled': not disable_xy}
+    provenance = {
+        'gvhmr_dir': str(directory), 'tennisproject_data': str(csv_path),
+        'amass_data': str(amass_paths[0]), 'source': source,
+        'sequence_name': str(sequence_name), 'frame_count': count, 'fps': fps,
+        'frame_join': 'CSV global_frame = JSON source.start_frame + motion frame',
+        'input_video_size': [int(width), int(height)],
+        'xy_enabled': not disable_xy,
+        'coordinate_system': {'units': 'meters', 'origin': 'net center on ground',
+                              'x': 'reference court right', 'y': 'toward far baseline', 'z': 'up',
+                              'near_baseline_y': -COURT_LENGTH / 2,
+                              'quaternion_order': 'xyzw', 'handedness': 'right'},
+        'constants': {'tp_image_size': list(TP_IMAGE_SIZE), 'tp_net_center': TP_NET_CENTER.tolist(),
+                      'tp_meters_per_pixel': TP_METERS_PER_PIXEL.tolist(),
+                      'hip_indices': list(HIP_INDICES), 'hip_confidence_threshold': HIP_CONFIDENCE_THRESHOLD,
+                      'max_camera_reprojection_px': MAX_COURT_REPROJECTION_PX,
+                      'max_court_keypoint_error_px': MAX_COURT_KEYPOINT_ERROR_PX},
+        'xy_temporal_smoothing': False,
+        'z_correction': 'existing multi-window foot/RANSAC correction, before court alignment',
+        'downstream_height_adjustment': 'MotionLib may additionally subtract min_verts_h - ground_tolerance',
     }
+    if disable_xy:
+        provenance['coordinate_system'] = {'units': 'meters', 'z': 'up', 'xy': 'original GVHMR frame'}
+        return data, context, provenance
+    name = normalized_video_name(source['path'])
+    if normalized_video_name(amass_paths[0].stem[:-6]) != name:
+        raise ValueError('AMASS filename and JSON source video disagree')
+    df = pd.read_csv(csv_path)
+    if 'output_video_name' in df:
+        df = df[df.output_video_name.map(normalized_video_name) == name]
+    elif normalized_video_name(csv_path) != name:
+        raise ValueError('CSV filename does not match the source video')
+    if 'global_frame' not in df or 'inv_matrix' not in df or 'court_kps' not in df:
+        raise ValueError('CSV requires global_frame, inv_matrix and court_kps columns')
+    source_frames = np.arange(start, end)
+    selected = df[df.global_frame.isin(source_frames)]
+    if selected.global_frame.duplicated().any() or len(selected) != count:
+        raise ValueError('CSV must contain exactly one row for each source frame in the clip')
+    selected = selected.set_index('global_frame').loc[source_frames]
+    poses = torch.load(str(directory / 'preprocess/vitpose.pt'), map_location='cpu').numpy()
+    results = torch.load(str(directory / 'hmr4d_results.pt'), map_location='cpu')
+    k = results['K_fullimg'].numpy().astype(np.float64)
+    incam = results['smpl_params_incam']['global_orient'].numpy()
+    global_params = results['smpl_params_global']
+    global_orient = global_params['global_orient'].numpy()
+    if poses.shape != (count, 17, 3) or k.shape != (count, 3, 3) or incam.shape != (count, 3) or global_orient.shape != (count, 3):
+        raise ValueError('ViTPose, camera and AMASS frame counts/shapes disagree')
+    export_rotation = Rotation.from_euler('x', np.pi / 2).as_matrix()
+    amass_rotation = Rotation.from_rotvec(entry['pose_aa'][:, :3]).as_matrix()
+    expected_rotation = export_rotation @ Rotation.from_rotvec(global_orient).as_matrix()
+    expected_trans = global_params['transl'].numpy() @ export_rotation.T
+    expected_trans[:, 2] -= expected_trans[0, 2] - 0.92
+    if (not np.allclose(amass_rotation, expected_rotation, atol=1e-5)
+            or not np.allclose(entry['pose_aa'][:, 3:66], global_params['body_pose'].numpy(), atol=1e-5)
+            or not np.allclose(entry['trans_orig'], expected_trans, atol=1e-5)
+            or not np.allclose(entry['beta'][:10], global_params['betas'][0].numpy()[:10], atol=1e-5)):
+        raise ValueError('AMASS and hmr4d_results do not describe the same exported motion')
+    hips = poses[:, HIP_INDICES, :]
+    valid = np.isfinite(hips).all(axis=(1, 2)) & (hips[:, :, 2] > HIP_CONFIDENCE_THRESHOLD).all(axis=1)
+    if not valid.all():
+        raise ValueError(f'Unusable processed hip detections at motion frames {np.flatnonzero(~valid)[:10].tolist()}')
+    scale = np.array(TP_IMAGE_SIZE) / [width, height]
+    k[:, :2, :] *= scale[None, :, None]
+    rotations, translations, errors = [], [], []
+    for frame, row in selected.iterrows():
+        try:
+            # NumPy's CSV matrix string has whitespace/newlines, not commas.
+            values = np.fromstring(str(row.inv_matrix).replace('[', ' ').replace(']', ' '), sep=' ')
+            h = values.reshape(3, 3)
+            court_kps = np.asarray(ast.literal_eval(row.court_kps), dtype=np.float64) * scale
+            rotation, translation, error = estimate_court_camera(h, k[len(rotations)], court_kps)
+        except (ValueError, SyntaxError, TypeError) as exc:
+            raise ValueError(f'CSV global_frame {frame}: {exc}') from exc
+        rotations.append(rotation)
+        translations.append(translation)
+        errors.append(error)
+    rotations, translations = np.stack(rotations), np.stack(translations)
+    yaw_rotation, yaw, residual = court_heading_rotations(
+        rotations, Rotation.from_rotvec(incam).as_matrix(), amass_rotation)
+    context.update(intrinsic=k, camera_rotation=rotations, camera_translation=translations,
+                   hip_pixels=hips[:, :, :2].mean(axis=1) * scale, yaw_rotation=yaw_rotation)
+    provenance['camera'] = {
+        'method': 'solvePnP with saved K and homography court correspondences; zero distortion assumed',
+        'intrinsics_source': 'hmr4d_results.pt/K_fullimg (GVHMR normally estimates focal length)',
+        'rotation_convention': 'p_camera = R_court_to_camera @ p_court + t_court_to_camera',
+        'source_frames': source_frames.tolist(), 'intrinsics_640x360': k.tolist(),
+        'court_to_camera_rotation': rotations.tolist(), 'court_to_camera_translation': translations.tolist(),
+        'reprojection_rms_640x360_px': errors,
+        'reprojection_rms_median_px': float(np.median(errors)),
+        'reprojection_rms_max_px': float(np.max(errors)),
+        'world_to_court_yaw_radians': yaw.tolist(),
+        'discarded_tilt_radians': residual.tolist(),
+        'hip_confidence_note': 'Processed ViTPose scores include validity=1 for upstream interpolated joints',
+    }
+    print(f'Court calibration: median/max RMS {np.median(errors):.2f}/{max(errors):.2f}px at 640x360')
+    return data, context, provenance
 
-    if args.disable_xy_correction:
-        print("XY correction disabled via --disable_xy_correction")
-        return xy_context
 
-    if args.tennisproject_data is None:
-        print("Warning: --tennisproject_data is not provided. XY correction will be skipped.")
-        return xy_context
+def apply_camera_xy(root_trans, grounded_root, joints, pose_aa, context):
+    """Recover root XY from hip rays and pose-dependent hip/root offsets."""
+    from scipy.spatial.transform import Rotation
 
-    if args.tp_xy_units == 'meters' and args.tp_pixel_to_meters <= 0:
-        raise ValueError("--tp_pixel_to_meters must be > 0 when --tp_xy_units=meters")
+    yaw = context['yaw_rotation']
+    # SMPL rotates about its true rest pelvis; XML rounds that pivot slightly.
+    hip_relative = np.einsum('nij,nj->ni', yaw, joints[:, [1, 2]].mean(axis=1) - joints[:, 0])
+    hip_relative += joints[:, 0] - root_trans
+    hip_height = grounded_root[:, 2] + hip_relative[:, 2]
+    hip_world = intersect_rays_at_height(context['hip_pixels'], context['intrinsic'],
+                                        context['camera_rotation'], context['camera_translation'], hip_height)
+    corrected_root = grounded_root.copy()
+    corrected_root[:, :2] = hip_world[:, :2] - hip_relative[:, :2]
+    corrected_pose = pose_aa.copy()
+    corrected_pose[:, :3] = Rotation.from_matrix(
+        yaw @ Rotation.from_rotvec(pose_aa[:, :3]).as_matrix()).as_rotvec()
+    # A fixed first-frame registration lets plots compare trajectory changes
+    # without confusing a different world origin/heading with drift correction.
+    reference_root = (root_trans - root_trans[0]) @ yaw[0].T
+    reference_root[:, :2] += corrected_root[0, :2]
+    reference_root[:, 2] = root_trans[:, 2]
+    return corrected_root, corrected_pose, reference_root, hip_world
 
-    if args.tp_xy_units == 'pixels':
-        print("Warning: XY units are set to pixels. This keeps video scale but may not match metric world units.")
 
-    tp_data = pd.read_csv(args.tennisproject_data)
-    if 'output_video_name' in tp_data.columns:
-        tp_data = tp_data[tp_data['output_video_name'] == output_video_name]
-    else:
-        print("Warning: 'output_video_name' column missing in tennisproject CSV. Using all rows.")
+def save_correction_metadata(out_dir, args, provenance, sequences):
+    import yaml
 
-    if tp_data.empty:
-        print(f"Warning: no tennisproject rows found for '{output_video_name}'. XY correction will be skipped.")
-        return xy_context
-
-    frame_column = 'local_frame' if 'local_frame' in tp_data.columns else ('frame' if 'frame' in tp_data.columns else None)
-    if frame_column is None:
-        print("Warning: tennisproject CSV must contain 'local_frame' or 'frame'. XY correction will be skipped.")
-        return xy_context
-
-    if 'person_point_bottom' in tp_data.columns:
-        point_column = 'person_point_bottom'
-    elif 'person_points' in tp_data.columns:
-        point_column = 'person_points'
-    else:
-        print("Warning: tennisproject CSV missing person point columns. XY correction will be skipped.")
-        return xy_context
-
-    net_center = np.array([
-        (args.tp_net_x1 + args.tp_net_x2) / 2.0,
-        (args.tp_net_y1 + args.tp_net_y2) / 2.0,
-    ], dtype=np.float64)
-
-    print(f"XY correction enabled. net_center={net_center.tolist()}, units={args.tp_xy_units}")
-
-    xy_context.update({
-        "enabled": True,
-        "tp_data": tp_data,
-        "frame_column": frame_column,
-        "point_column": point_column,
-        "frame_window": max(0, int(args.tp_frame_window)),
-        "frame_offset": int(args.tp_frame_offset),
-        "xy_units": args.tp_xy_units,
-        "pixel_to_meters": float(args.tp_pixel_to_meters),
-        "flip_y": bool(args.tp_flip_y),
-        "xy_smoothing": max(0, int(args.tp_xy_smoothing)),
-        "net_center": net_center,
-    })
-    return xy_context
+    metadata = dict(provenance)
+    metadata['arguments'] = {key: str(value) if isinstance(value, Path) else value
+                             for key, value in vars(args).items()}
+    metadata['sequences'] = {str(name): sequence['alignment_metadata'] for name, sequence in sequences.items()}
+    Path(out_dir).mkdir(parents=True, exist_ok=True)
+    with (Path(out_dir) / 'args.yml').open('w') as stream:
+        yaml.safe_dump(metadata, stream, sort_keys=False)
 
 
 def get_foot_vertices(verts):
@@ -317,8 +488,8 @@ def get_multi_frequency_windows(T, base_window=15, frequencies=(1, 2)):
     return windows
 
 def correct_ground_height(verts, root_trans, fps=30.0, base_window=15,
-                          plot_results=True, sequence_name="", xy_context=None,
-                          out_dir=".", show_plots=True):
+                          plot_results=True, sequence_name="",
+                          out_dir=".", show_plots=True, diagnostics=None):
     """
     Correct the ground height using multi-frequency sampling and RANSAC with foot information.
     First applies local plane corrections, then shifts to align with z=0.
@@ -330,7 +501,6 @@ def correct_ground_height(verts, root_trans, fps=30.0, base_window=15,
         base_window: Base window size for multi-frequency sampling
         plot_results: Whether to create plots showing the correction
         sequence_name: Name of the sequence for plot titles
-        xy_context: Optional court tracking configuration from prepare_xy_context
         out_dir: Directory for diagnostic plots
         show_plots: Whether to display diagnostic plots interactively
     
@@ -361,8 +531,6 @@ def correct_ground_height(verts, root_trans, fps=30.0, base_window=15,
     frame_weights = [[] for _ in range(T)]
     frame_plane_offsets = [[] for _ in range(T)]  # Store plane offsets from z=0
 
-    if xy_context is None:
-        xy_context = {"enabled": False}
     
     # Process each window
     for window_idx, (start_frame, end_frame) in enumerate(windows):
@@ -455,44 +623,10 @@ def correct_ground_height(verts, root_trans, fps=30.0, base_window=15,
             # Update corrected heights for plotting
             corrected_heights[t] = current_min_z + global_height_diff
 
-        if xy_context["enabled"]:
-            aligned_t = t + xy_context["frame_offset"]
-            frame_window = xy_context["frame_window"]
-            frame_col = xy_context["frame_column"]
-            point_col = xy_context["point_column"]
-            frame_mask = (
-                (xy_context["tp_data"][frame_col] >= aligned_t - frame_window)
-                & (xy_context["tp_data"][frame_col] <= aligned_t + frame_window)
-            )
-            data_list = xy_context["tp_data"].loc[frame_mask, point_col].tolist()
-            parsed_data = [parse_person_bottom_point(entry, point_col) for entry in data_list]
-            parsed_data = [entry for entry in parsed_data if entry is not None]
-
-            if parsed_data:
-                tp_bottom_person_xy = np.mean(np.stack(parsed_data, axis=0), axis=0)
-                xy_new = tp_bottom_person_xy - xy_context["net_center"]
-
-                if xy_context["xy_units"] == 'meters':
-                    xy_new = xy_new * xy_context["pixel_to_meters"]
-
-                if xy_context["flip_y"]:
-                    xy_new[1] *= -1.0
-
-                corrected_root_trans[t, 0] = float(xy_new[0])
-                corrected_root_trans[t, 1] = float(xy_new[1])
-            elif t > 0:
-                print("prev x,y")
-                corrected_root_trans[t, 0] = corrected_root_trans[t - 1, 0]
-                corrected_root_trans[t, 1] = corrected_root_trans[t - 1, 1]
-
-    if xy_context.get("xy_smoothing", 0) > 1:
-        kernel_size = int(xy_context["xy_smoothing"])
-        if kernel_size % 2 == 0:
-            kernel_size += 1
-        kernel = np.ones(kernel_size, dtype=np.float64) / kernel_size
-        for axis in (0, 1):
-            corrected_root_trans[:, axis] = np.convolve(corrected_root_trans[:, axis], kernel, mode='same')
-    
+    if diagnostics is not None:
+        diagnostics.update(time_coords=time_coords, original_heights=original_heights,
+                           corrected_heights=corrected_heights, valley_points=valley_points,
+                           window_boundaries=window_boundaries)
     # Create plots if requested
     if plot_results:
         create_ground_correction_plots(
@@ -505,7 +639,8 @@ def correct_ground_height(verts, root_trans, fps=30.0, base_window=15,
 
 def create_ground_correction_plots(time_coords, original_heights, corrected_heights, 
                                   valley_points, window_boundaries, sequence_name,
-                                  out_dir=".", show=True):
+                                  out_dir=".", show=True, original_root=None,
+                                  corrected_root=None, fps=30.0, court_enabled=False):
     """
     Create plots showing the ground correction process.
     
@@ -519,7 +654,15 @@ def create_ground_correction_plots(time_coords, original_heights, corrected_heig
         out_dir: Directory in which to save the plot
         show: Whether to display the plot interactively
     """
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8))
+    if original_root is None:
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8))
+    else:
+        fig = plt.figure(figsize=(16, 13))
+        grid = fig.add_gridspec(3, 2)
+        ax1, ax2 = fig.add_subplot(grid[0, 0]), fig.add_subplot(grid[0, 1])
+        draw_xy_comparison(fig.add_subplot(grid[1:, 0]), fig.add_subplot(grid[1, 1]),
+                           fig.add_subplot(grid[2, 1]), original_root, corrected_root,
+                           fps, court_enabled)
     
     # Plot 1: Original vs Corrected Heights
     ax1.plot(time_coords, original_heights, 'b-', label='Original Heights', alpha=0.7)
@@ -571,6 +714,33 @@ def create_ground_correction_plots(time_coords, original_heights, corrected_heig
     if show:
         plt.show()
     plt.close(fig)
+
+
+def draw_xy_comparison(ax_xy, ax_x, ax_y, original, corrected, fps, court_enabled=True):
+    """Shared court trajectory and coordinate/time comparisons for both CLIs."""
+    label = 'Original GVHMR (first-frame court alignment)' if court_enabled else 'Original GVHMR'
+    ax_xy.plot(original[:, 0], original[:, 1], '--', label=label, alpha=0.8)
+    ax_xy.plot(corrected[:, 0], corrected[:, 1], label='Corrected')
+    ax_xy.scatter(*corrected[0, :2], c='green', marker='o', label='Start')
+    ax_xy.scatter(*corrected[-1, :2], c='red', marker='x', label='End')
+    if court_enabled:
+        w, l = COURT_WIDTH / 2, COURT_LENGTH / 2
+        ax_xy.plot([-w, w, w, -w, -w], [-l, -l, l, l, -l], color='gray', alpha=0.6)
+        ax_xy.plot([-w, w], [0, 0], color='black', label='Net')
+        for x in (-8.23 / 2, 8.23 / 2):
+            ax_xy.plot([x, x], [-l, l], color='gray', alpha=0.4)
+        for y in (-6.4, 6.4):
+            ax_xy.plot([-8.23 / 2, 8.23 / 2], [y, y], color='gray', alpha=0.4)
+    ax_xy.set(xlabel='X (m)', ylabel='Y (m)', title='Root XY trajectory')
+    ax_xy.set_aspect('equal', adjustable='datalim')
+    times = np.arange(len(original)) / fps
+    for axis, ax, name in ((0, ax_x, 'X'), (1, ax_y, 'Y')):
+        ax.plot(times, original[:, axis], '--', label=label)
+        ax.plot(times, corrected[:, axis], label='Corrected')
+        ax.set(xlabel='Time (s)', ylabel=f'{name} (m)', title=f'Root {name}: original vs corrected')
+    for ax in (ax_xy, ax_x, ax_y):
+        ax.legend(fontsize=8)
+        ax.grid(alpha=0.25)
 
 
 @contextmanager
@@ -638,9 +808,10 @@ def correct_smpl_sequence(smpl_data_entry, smpl_local_robot, fps=30.0,
     smpl_2_mujoco = [joint_names.index(name) for name in mujoco_joint_names]
     batch_size = pose_aa.shape[0]
     pose_aa = np.concatenate([pose_aa[:, :66], np.zeros((batch_size, 6))], axis=1)
-    pose_quat = sRot.from_rotvec(pose_aa.reshape(-1, 3)).as_quat().reshape(
-        batch_size, 24, 4
-    )[..., smpl_2_mujoco, :]
+    original_pose_aa = pose_aa.copy()
+    diagnostics = {}
+    xy_enabled = xy_context is not None and xy_context.get('enabled', False)
+    alignment_metadata = {'xy_enabled': xy_enabled}
 
     with torch.no_grad():
         smpl_local_robot.load_from_skeleton(
@@ -650,22 +821,47 @@ def correct_smpl_sequence(smpl_data_entry, smpl_local_robot, fps=30.0,
         skeleton_tree = SkeletonTree.from_mjcf(smpl_local_robot.model_xml_path)
         pelvis_offset = skeleton_tree.local_translation[0].numpy()
         root_trans = trans + pelvis_offset
-        verts, _ = smpl_parser.get_joints_verts(
+        verts, joints = smpl_parser.get_joints_verts(
             pose=torch.from_numpy(pose_aa),
             th_betas=torch.from_numpy(beta[None, :]),
             th_trans=torch.from_numpy(trans),
         )
         corrected_root_trans = correct_ground_height(
             verts.numpy(), root_trans, fps=fps, base_window=base_window,
-            plot_results=plot_results, sequence_name=sequence_name,
-            xy_context=xy_context, out_dir=out_dir, show_plots=show_plots,
+            plot_results=False, diagnostics=diagnostics,
         )
+        comparison_root = root_trans.copy()
+        comparison_verts = verts
+        if xy_enabled:
+            corrected_root_trans, pose_aa, comparison_root, hip_world = apply_camera_xy(
+                root_trans, corrected_root_trans, joints.numpy(), pose_aa, xy_context)
+            yaw0 = xy_context['yaw_rotation'][0]
+            comparison_offset = comparison_root[0] - root_trans[0] @ yaw0.T
+            comparison_verts = torch.from_numpy(verts.numpy() @ yaw0.T + comparison_offset)
+            alignment_metadata.update(
+                comparison_world_to_court_rotation=yaw0.tolist(),
+                comparison_world_to_court_translation=comparison_offset.tolist(),
+                comparison_note='Fixed first-frame yaw and XY registration, original Z retained',
+                reconstructed_hip_midpoint_m=hip_world.tolist(),
+                original_root_m=root_trans.tolist(),
+                corrected_root_m=corrected_root_trans.tolist(),
+            )
         # Convert pelvis world position back to SMPL model translation.
         corrected_trans = corrected_root_trans - pelvis_offset
         corrected_verts, _ = smpl_parser.get_joints_verts(
             pose=torch.from_numpy(pose_aa),
             th_betas=torch.from_numpy(beta[None, :]),
             th_trans=torch.from_numpy(corrected_trans),
+        )
+
+    pose_quat = sRot.from_rotvec(pose_aa.reshape(-1, 3)).as_quat().reshape(
+        batch_size, 24, 4
+    )[..., smpl_2_mujoco, :]
+    if plot_results:
+        create_ground_correction_plots(
+            **diagnostics, sequence_name=sequence_name, out_dir=out_dir, show=show_plots,
+            original_root=comparison_root, corrected_root=corrected_root_trans,
+            fps=fps, court_enabled=xy_enabled,
         )
 
     return {
@@ -681,18 +877,22 @@ def correct_smpl_sequence(smpl_data_entry, smpl_local_robot, fps=30.0,
         "corrected_trans": corrected_trans,
         "corrected_root_trans": corrected_root_trans,
         "corrected_verts": corrected_verts,
+        "original_pose_aa": original_pose_aa,
+        "comparison_root_trans": comparison_root,
+        "comparison_verts": comparison_verts,
+        "alignment_metadata": alignment_metadata,
     }
 
 
-def build_motion_output(sequence, seq_name, seq_idx, beta_idx, trim_frames=0):
+def build_motion_output(sequence, seq_name, seq_idx, beta_idx):
     """Build simulation and render outputs using consistent corrected positions."""
     import torch
     from vid2player3d.poselib.poselib.skeleton.skeleton3d import SkeletonMotion, SkeletonState
 
     frame_count = len(sequence['pose_aa'])
-    if trim_frames < 0 or frame_count - 2 * trim_frames < 2:
-        raise ValueError("trim_frames must be nonnegative and leave at least two frames for velocities")
-    frames = slice(trim_frames, -trim_frames if trim_frames else None)
+    if frame_count < 2:
+        raise ValueError("At least two frames are required for velocities")
+    frames = slice(None)
     corrected_trans = sequence['corrected_trans'][frames]
     corrected_root_trans = sequence['corrected_root_trans'][frames]
     verts = sequence['corrected_verts'][frames]
@@ -724,43 +924,18 @@ def main(argv=None):
     args = build_arg_parser().parse_args(argv)
     if args.num_motion_libs < 1:
         raise ValueError("num_motion_libs must be positive")
+    if args.num_seq is not None and args.num_seq < 1:
+        raise ValueError("num_seq must be positive")
     # MotionLib imports Isaac Gym; keep this before importing torch directly.
-    from embodied_pose.utils.motion_lib import MotionLib
-    import torch
-    import yaml
-    from tqdm import tqdm
 
     num_seq = args.num_seq
     num_motion_libs = args.num_motion_libs
 
     os.makedirs(args.out_dir, exist_ok=True)
-    meta_data = {
-        "amass_data": args.amass_data,
-        "tennisproject_data": args.tennisproject_data,
-        "num_seq": num_seq,
-        "num_motion_libs": num_motion_libs,
-        "disable_xy_correction": args.disable_xy_correction,
-        "tp_xy_units": args.tp_xy_units,
-        "tp_pixel_to_meters": args.tp_pixel_to_meters,
-        "tp_frame_window": args.tp_frame_window,
-        "tp_frame_offset": args.tp_frame_offset,
-        "tp_flip_y": args.tp_flip_y,
-        "tp_xy_smoothing": args.tp_xy_smoothing,
-        "tp_net": [[args.tp_net_x1, args.tp_net_y1], [args.tp_net_x2, args.tp_net_y2]],
-        "trim_frames": args.trim_frames,
-    }
-    with open(os.path.join(args.out_dir, 'args.yml'), 'w') as metadata_file:
-        yaml.safe_dump(meta_data, metadata_file)
-    amass_data = joblib.load(args.amass_data)
-    amass_file_name = os.path.basename(args.amass_data)
-    if amass_file_name.endswith("_amass.pkl"):
-        output_video_name = amass_file_name.replace("_amass.pkl", ".mp4")
-    elif amass_file_name.endswith(".pkl"):
-        output_video_name = amass_file_name.replace(".pkl", ".mp4")
-    else:
-        output_video_name = f"{amass_file_name}.mp4"
-    print(f"Output video name: {output_video_name}")
-    xy_context = prepare_xy_context(args, output_video_name)
+    amass_data, xy_context, provenance = load_correction_inputs(
+        args.gvhmr_dir, args.tennisproject_data, args.disable_xy_correction)
+    completed = {}
+    save_correction_metadata(args.out_dir, args, provenance, completed)
     info = joblib.load('data/misc/smpl_body_info.pkl')
 
     # body_shapes
@@ -794,14 +969,15 @@ def main(argv=None):
                 key_name = key_name.item()
                 print(f"Applying ground correction for sequence {key_name}")
                 sequence = correct_smpl_sequence(
-                    amass_data[key_name], smpl_local_robot, sequence_name=key_name,
+                    amass_data[key_name], smpl_local_robot, sequence_name=key_name, fps=provenance["fps"],
                     xy_context=xy_context, out_dir=args.out_dir,
                     show_plots=not args.no_show,
                 )
+                completed[key_name] = {'alignment_metadata': sequence['alignment_metadata']}
+                save_correction_metadata(args.out_dir, args, provenance, completed)
                 beta_key = ",".join(f"{x:.6f}" for x in sequence['beta'])
                 motion_out, render_data = build_motion_output(
                     sequence, key_name, seq_mapping[key_name], beta_mapping[beta_key],
-                    trim_frames=args.trim_frames,
                 )
                 motion_lib_input_dict[key_name] = motion_out
                 render_data_dict[key_name] = render_data
