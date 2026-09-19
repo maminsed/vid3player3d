@@ -15,8 +15,11 @@ class DebugCourtVideoTests(unittest.TestCase):
         import torch
 
         for bounds in (np.array([[-2, -13, -.2], [2, -7, 3]]),
-                       np.array([[-9, -20, -1], [10, 17, 5]])):
+                       np.array([[-9, -20, -1], [10, 17, 5]]),
+                       np.array([[7, -15, 0], [12, -10, 3]])):
             eye, target = video.fixed_rear_camera(bounds, 10.97)
+            self.assertEqual(eye[0], 0)
+            self.assertEqual(target[0], 0)
             self.assertLess(eye[1], bounds[0, 1])
             self.assertGreater(eye[2], 0)
             rotation, translation = look_at_view_transform(
@@ -28,10 +31,13 @@ class DebugCourtVideoTests(unittest.TestCase):
                                        principal_point=((width / 2, height / 2),),
                                        image_size=((height, width),))
             points = list(product(*zip(*bounds))) + list(product((-6.395, 6.395), (0,), (0, 1.1)))
+            points += list(product((-5.485, 5.485), (-11.89, 11.89), (0,)))
             pixels = camera.transform_points_screen(torch.tensor(points, dtype=torch.float32))
-            self.assertTrue((pixels[:, :2] > 0).all())
-            self.assertTrue((pixels[:, 0] < width).all())
-            self.assertTrue((pixels[:, 1] < height).all())
+            margin = (1 - video.CAMERA_FRAME_FILL) / 2
+            self.assertTrue((pixels[:, 0] >= margin * width - .01).all())
+            self.assertTrue((pixels[:, 1] >= margin * height - .01).all())
+            self.assertTrue((pixels[:, 0] <= (1 - margin) * width + .01).all())
+            self.assertTrue((pixels[:, 1] <= (1 - margin) * height + .01).all())
             self.assertTrue((pixels[:, 2] > 0).all())
 
     def test_missing_cuda_fails_instead_of_using_cpu(self):

@@ -18,7 +18,7 @@ for DIR in "$GVHMR_ROOT_DIR"/*; do
     TP_FILE_NAME="$TP_ROOT_DIR"/"$FILE_NAME".csv
     echo "TP_FILE_NAME: $TP_FILE_NAME GVHMR_DIR: $DIR" &>> logs/mylogs.txt
     
-    python -u \
+    TQDM_DISABLE=1 PYTHONPATH=../ python -u \
         uhc/utils/convert_amass_isaac_correct_ground.py \
         --gvhmr_dir "$DIR" \
         --tennisproject_data "$TP_FILE_NAME" \

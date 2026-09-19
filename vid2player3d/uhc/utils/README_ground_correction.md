@@ -48,13 +48,19 @@ python uhc/utils/convert_amass_isaac_correct_ground.py \
   --out_dir data/motion_lib/court_video_example --verbose
 ```
 
-The 960x540 H.264 video retains every frame and the input FPS. It shows only the
-corrected body, with a fixed elevated rear camera on the negative-Y side, court
+The 960x540 H.264 video retains every frame and the input FPS. It shows the
+corrected body in orange and the original in translucent light blue (45% opacity),
+with an on-screen legend, a fixed elevated rear camera centered on X=0 on the negative-Y side, court
 lines and a simple net matching the existing tennis viewer. Camera framing fits
-all motion and the net; it never follows or rotates with the player. The court
-may extend outside the image so the body stays large enough to inspect.
-The mesh is exactly the one saved in `*_render.pkl`: no additional grounding,
-recentering, or heading changes are applied. Camera settings and video details
+both motions, the full court and the net with 10% margins at the image edges.
+The camera aims along the court centerline and moves back as needed to fit the full
+clip; it never follows or rotates with the player.
+The corrected mesh is exactly the one saved in `*_render.pkl`: no additional
+grounding, recentering, or heading changes are applied. The original uses the
+same fixed first-frame yaw/XY registration as the plots, preserving its relative
+motion and original height. It is not realigned every frame. Depth occlusion is
+preserved, so either body can hide parts of the other, and the court can hide
+feet below the surface. Camera settings, comparison colors/opacity, and video details
 are saved under the sequence's `debug_video` entry in `args.yml`.
 
 Rasterization and shading require CUDA and the existing PyTorch3D installation

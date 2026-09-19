@@ -57,7 +57,7 @@ def build_arg_parser():
     parser.add_argument('--num_motion_libs', type=int, default=1)
     parser.add_argument('--no_show', action='store_true', help='Save plots without opening windows')
     parser.add_argument('--verbose', action='store_true',
-                        help='Save a CUDA-rendered corrected court MP4 and suppress plot windows')
+                        help='Save a CUDA-rendered original/corrected court MP4 and suppress plot windows')
     return parser
 
 
@@ -1035,6 +1035,7 @@ def main(argv=None):
                         render_data['verts'], smpl_parser.faces, render_data['fps'],
                         Path(args.out_dir) / (Path(key_name).name + '_corrected_court.mp4'),
                         COURT_WIDTH, COURT_LENGTH,
+                        comparison_verts=sequence['comparison_verts'],
                     )
                     sequence['alignment_metadata']['debug_video'] = video_metadata
                     save_correction_metadata(args.out_dir, args, provenance, completed)

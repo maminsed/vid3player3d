@@ -1,4 +1,4 @@
-"""CUDA-only, display-free video of corrected SMPL vertices in court coordinates."""
+"""CUDA-only, display-free comparison of SMPL motions in court coordinates."""
 
 from itertools import product
 from pathlib import Path
@@ -10,6 +10,10 @@ import numpy as np
 VIDEO_SIZE = (960, 540)
 VERTICAL_FOV = 45.0
 CAMERA_ELEVATION = 20.0
+CAMERA_FRAME_FILL = .80  # Leave 10% of the image free at each edge.
+CORRECTED_COLOR = (.85, .55, .25)
+ORIGINAL_COLOR = (.55, .85, 1.)
+ORIGINAL_OPACITY = .45
 
 
 def require_cuda_renderer():
@@ -72,18 +76,19 @@ def court_geometry(width, length):
     return tuple(np.concatenate(items) for items in (vertices, faces, colors))
 
 
-def fixed_rear_camera(bounds, width, image_size=VIDEO_SIZE):
-    """Fit all motion bounds and the net, keeping one camera for the clip."""
+def fixed_rear_camera(bounds, width, image_size=VIDEO_SIZE, *, court_length=23.78):
+    """Fit both motions and the full court from its centerline, with extra room."""
     motion_corners = np.array(list(product(*zip(*bounds))))
     net_corners = np.array(list(product((-width / 2 - .91, width / 2 + .91),
                                         (0.,), (0., 1.1))))
+    court_corners = np.array(list(product((-width / 2, width / 2),
+                                          (-court_length / 2, court_length / 2), (0.,))))
     points = np.concatenate((motion_corners, net_corners))
-    target = (points.min(0) + points.max(0)) / 2
-    target[2] = .8
+    # Aim along the court centerline even if the player stays on one side.
+    target = np.array([0., (points[:, 1].min() + points[:, 1].max()) / 2, .8])
+    points = np.concatenate((points, court_corners))
     elevation = np.deg2rad(CAMERA_ELEVATION)
-    # Slight rear diagonal, always on the negative-Y (near-player) side.
-    backward = np.array([.12 * np.cos(elevation), -np.cos(elevation), np.sin(elevation)])
-    backward /= np.linalg.norm(backward)
+    backward = np.array([0., -np.cos(elevation), np.sin(elevation)])
     forward = -backward
     right = np.cross(forward, [0, 0, 1])
     right /= np.linalg.norm(right)
@@ -92,16 +97,19 @@ def fixed_rear_camera(bounds, width, image_size=VIDEO_SIZE):
     tan_v = np.tan(np.deg2rad(VERTICAL_FOV / 2))
     tan_h = tan_v * image_size[0] / image_size[1]
     depth = relative @ forward
-    distance = max(np.max(np.abs(relative @ right) / (.88 * tan_h) - depth),
-                   np.max(np.abs(relative @ up) / (.88 * tan_v) - depth), 5.)
+    distance = max(np.max(np.abs(relative @ right) / (CAMERA_FRAME_FILL * tan_h) - depth),
+                   np.max(np.abs(relative @ up) / (CAMERA_FRAME_FILL * tan_v) - depth), 5.)
     return target + backward * distance, target
 
 
-def save_corrected_court_video(verts, faces, fps, output_path, court_width, court_length):
+def save_corrected_court_video(verts, faces, fps, output_path, court_width, court_length,
+                              comparison_verts=None):
     """Render exact saved vertices, without recentering or changing their height.
 
-    Only one body frame is uploaded at a time. Rasterization and shading run on
-    CUDA; completed RGB frames are streamed to FFmpeg for H.264 encoding.
+    Optional original vertices must already have the plots' fixed first-frame
+    court registration. Draw them in translucent light blue, preserving their Z.
+    Only the current frames are uploaded. Rasterization, shading and blending
+    run on CUDA; RGB frames are streamed to FFmpeg for H.264 encoding.
     """
     import cv2
     import imageio.v2 as imageio
@@ -119,9 +127,18 @@ def save_corrected_court_video(verts, faces, fps, output_path, court_width, cour
         raise ValueError('Expected vertices with shape (frames, vertices, 3)')
     if not torch.isfinite(verts).all() or not np.isfinite(fps) or fps <= 0:
         raise ValueError('Video vertices and positive FPS must be finite')
+    if comparison_verts is not None:
+        comparison_verts = torch.as_tensor(comparison_verts).detach()
+        if comparison_verts.shape != verts.shape or not torch.isfinite(comparison_verts).all():
+            raise ValueError('Original comparison vertices must be finite and match corrected vertices shape')
     width, height = VIDEO_SIZE
     bounds = torch.stack((verts.amin(dim=(0, 1)), verts.amax(dim=(0, 1)))).cpu().numpy()
-    eye, target = fixed_rear_camera(bounds, court_width)
+    if comparison_verts is not None:
+        original_bounds = torch.stack((comparison_verts.amin(dim=(0, 1)),
+                                       comparison_verts.amax(dim=(0, 1)))).cpu().numpy()
+        bounds = np.stack((np.minimum(bounds[0], original_bounds[0]),
+                           np.maximum(bounds[1], original_bounds[1])))
+    eye, target = fixed_rear_camera(bounds, court_width, court_length=court_length)
     rotation, translation = look_at_view_transform(
         eye=[eye.tolist()], at=[target.tolist()], up=((0, 0, 1),), device='cuda')
     focal = height / (2 * np.tan(np.deg2rad(VERTICAL_FOV / 2)))
@@ -135,8 +152,10 @@ def save_corrected_court_video(verts, faces, fps, output_path, court_width, cour
     court_verts = torch.as_tensor(court_verts, dtype=torch.float32, device='cuda')
     all_faces = torch.cat((torch.as_tensor(np.asarray(faces, dtype=np.int64), device='cuda'),
                           torch.as_tensor(court_faces, dtype=torch.int64, device='cuda') + verts.shape[1]))
-    all_colors = torch.cat((torch.tensor([.85, .55, .25], device='cuda').expand(verts.shape[1], 3),
+    all_colors = torch.cat((torch.tensor(CORRECTED_COLOR, device='cuda').expand(verts.shape[1], 3),
                            torch.as_tensor(court_colors, dtype=torch.float32, device='cuda')))
+    original_colors = all_colors.clone()
+    original_colors[:verts.shape[1]] = torch.tensor(ORIGINAL_COLOR, device='cuda')
     renderer = MeshRenderer(
         rasterizer=MeshRasterizer(cameras=camera, raster_settings=RasterizationSettings(
             image_size=(height, width), faces_per_pixel=1, blur_radius=0,
@@ -152,14 +171,38 @@ def save_corrected_court_video(verts, faces, fps, output_path, court_width, cour
                                pixelformat='yuv420p', macro_block_size=None,
                                ffmpeg_params=['-crf', '26', '-preset', 'fast']) as writer:
             with torch.no_grad():
-                for i in tqdm(range(len(verts)), desc='Rendering corrected court (CUDA)'):
+                for i in tqdm(range(len(verts)), desc='Rendering court comparison (CUDA)'):
                     frame_verts = torch.cat((verts[i].to(device='cuda', dtype=torch.float32), court_verts))
                     mesh = Meshes(verts=[frame_verts], faces=[all_faces],
                                   textures=TexturesVertex(verts_features=[all_colors]))
-                    rgb = renderer(mesh)[0, ..., :3].clamp(0, 1)
+                    fragments = renderer.rasterizer(mesh)
+                    rgb = renderer.shader(fragments, mesh)[0, ..., :3].clamp(0, 1)
+                    if comparison_verts is not None:
+                        original_mesh = Meshes(
+                            verts=[torch.cat((comparison_verts[i].to(device='cuda', dtype=torch.float32),
+                                              court_verts))], faces=[all_faces],
+                            textures=TexturesVertex(verts_features=[original_colors]))
+                        original_fragments = renderer.rasterizer(original_mesh)
+                        original_rgb = renderer.shader(original_fragments, original_mesh)[0, ..., :3].clamp(0, 1)
+                        # Blend only original-body pixels, respecting the court/net
+                        # and opaque corrected body's depth. Do not tint the court.
+                        original_face = original_fragments.pix_to_face[0, ..., 0]
+                        visible = (original_face >= 0) & (original_face < len(faces))
+                        visible &= ((fragments.pix_to_face[0, ..., 0] < 0)
+                                    | (original_fragments.zbuf[0, ..., 0] <= fragments.zbuf[0, ..., 0]))
+                        alpha = visible[..., None] * ORIGINAL_OPACITY
+                        rgb = rgb * (1 - alpha) + original_rgb * alpha
                     frame = (rgb * 255).to(torch.uint8).cpu().numpy()
-                    cv2.putText(frame, 'Corrected motion | frame %d | %.2f s' % (i, i / fps),
-                                (12, 25), cv2.FONT_HERSHEY_SIMPLEX, .55, (25, 25, 25), 1, cv2.LINE_AA)
+                    cv2.rectangle(frame, (8, 8), (445, 80 if comparison_verts is not None else 55),
+                                  (25, 25, 25), -1)
+                    cv2.putText(frame, 'Frame %d | %.2f s' % (i, i / fps),
+                                (16, 26), cv2.FONT_HERSHEY_SIMPLEX, .5, (240, 240, 240), 1, cv2.LINE_AA)
+                    cv2.putText(frame, 'Corrected', (16, 47), cv2.FONT_HERSHEY_SIMPLEX,
+                                .5, tuple(int(c * 255) for c in CORRECTED_COLOR), 1, cv2.LINE_AA)
+                    if comparison_verts is not None:
+                        cv2.putText(frame, 'Original (first-frame aligned, translucent)', (16, 69),
+                                    cv2.FONT_HERSHEY_SIMPLEX, .5,
+                                    tuple(int(c * 255) for c in ORIGINAL_COLOR), 1, cv2.LINE_AA)
                     writer.append_data(frame)
         video = cv2.VideoCapture(str(temporary_path))
         try:
@@ -179,9 +222,15 @@ def save_corrected_court_video(verts, faces, fps, output_path, court_width, cour
         'path': str(output_path.resolve()), 'renderer': 'pytorch3d', 'device': 'cuda',
         'gpu': torch.cuda.get_device_name(), 'resolution': [width, height],
         'fps': float(fps), 'frames': len(verts), 'codec': 'h264',
-        'camera': {'type': 'fixed_rear', 'framing': 'All corrected motion and net; court may extend outside frame',
+        'camera': {'type': 'fixed_rear', 'framing': 'Centered on court; both motions, full court and net with 10% edge margins',
                    'eye_m': eye.tolist(), 'target_m': target.tolist(),
                    'up': [0, 0, 1], 'vertical_fov_degrees': VERTICAL_FOV},
         'court_width_m': court_width, 'court_length_m': court_length,
         'net_height_m': 1.07, 'vertices': 'Exact corrected mesh; no additional position or height changes',
+        'corrected_color_rgb': list(CORRECTED_COLOR),
+        'original_comparison': {
+            'enabled': comparison_verts is not None, 'color_rgb': list(ORIGINAL_COLOR),
+            'opacity': ORIGINAL_OPACITY,
+            'alignment': 'Fixed first-frame yaw and XY registration, original Z retained; same as plots',
+        },
     }
