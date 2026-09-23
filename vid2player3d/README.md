@@ -122,6 +122,9 @@ We also provide code for training the high-level policy in [vid2player](vid2play
 python vid2player/run.py --cfg federer_train_stage_1 --rl_device cuda:0 --headless
 python vid2player/run.py --cfg federer_train_stage_2 --rl_device cuda:0 --headless
 python vid2player/run.py --cfg federer_train_stage_3 --rl_device cuda:0 --headless
+
+#test:
+PYTHONPATH=. python -u vid2player/run.py --cfg tennis_test --test --checkpoint latest --num_envs 1 --episode_length 300 --rl_device cuda:0
 ```
 
 
@@ -158,3 +161,83 @@ Here are additional references for reproducing the video annotation pipeline:
 
 # Contact
 For any question regarding this project, please contact Haotian Zhang via haotianz@nvidia.com.
+
+### Headless imitation debug videos (SSH)
+
+From `vid2player3d`, record a lightweight skeleton video without a display:
+
+```bash
+PYTHONPATH=.:.. python embodied_pose/run.py --cfg tennis_im_testing_2 \
+  --rl_device cuda:0 --test --headless --verbose \
+  --checkpoint results/amass_im/models/Humanoid_latest.pth \
+  --rec_fname out/recording/amass_debug.mp4
+```
+
+`--headless --verbose` (or `--headless --record`) records environment 0 during
+training, `--play`, or `--test`. The 512x256 MP4 shows a perspective 3D skeleton view with a floor grid:
+blue is the simulated body and orange is its reference target. It uses Pillow
+and imageio/FFmpeg on CPU, with no GUI or OpenGL renderer. The camera follows the
+simulated pelvis horizontally and keeps the floor at world Z=0.
+
+For testing/playback, the default video is stored with the evaluation report at
+`<results_dir>/<cfg>/evaluations/<timestamp>/motion.mp4`. For training, it remains
+`out/recording/debug_<timestamp>.mp4`. `--rec_fname` overrides either location;
+relative paths are relative to the working directory. Parent directories are created.
+`--num_rec_frames` defaults to 300; reaching the limit closes the video but lets
+the run continue. Earlier completion or Ctrl-C finalizes the frames recorded so
+far. `--rec_once` instead uses the longest loaded motion's duration as the limit.
+The default playback FPS matches the control timestep (30 FPS with these configs);
+`--rec_fps` overrides playback speed without changing simulation or sampling.
+
+Playback checkpoints accept a direct `.pth` path, a suffix such as `latest`, or
+`base` to use the configuration's `pretrained_model_cp`. Before tennis training,
+use the AMASS path above; `tennis_im_testing_2`'s `base` points to the tennis
+training output, which may not exist yet.
+
+### Imitation evaluation reports
+
+Every ordinary `--test` or `--play` run writes a new folder under
+`<results_dir>/<cfg>/evaluations/<timestamp>/`, whether or not video is enabled:
+
+- `history.csv`: per-step rewards, reward components, body-position error, pelvis
+  position error, root-aligned body-position error, reference time and done flags.
+- `summary.json`: per-episode reward totals, mean/max errors and stopping reason.
+- `metrics.png`: reward, tracking-error and reward-component curves.
+- `console.log`: Python console output during runner execution.
+- `config.json`: arguments and configuration used for the run.
+- `motion.mp4`: when headless recording is enabled and no custom filename is set.
+
+Errors are measured in meters against the reference body origins, averaged over
+bodies without reward weights. Root-aligned error removes pelvis translation,
+not heading differences. These are tracking errors, not a count of discrete
+mistakes. Metrics cover the actual rollout, even after the video frame limit.
+The summary distinguishes height-based early termination, motion completion and
+episode limits; interrupted runs preserve collected history and partial reports.
+Dataset export has its own output workflow and does not create tracking reports.
+
+300 recording frames is a maximum (10 seconds at 30 FPS), not a minimum episode
+length. A 14-second source motion can produce a short video if the simulated body
+hits its termination height threshold. `--num_rec_frames 450` raises the recording
+cap, but does not bypass termination. For deliberate debugging beyond a fall,
+set `env.enableEarlyTermination: False` in a separate debug configuration; motion
+completion and episode limits still apply, and this changes the evaluation.
+
+Imitation training writes epoch-aggregated TensorBoard metrics under
+`<results_dir>/<cfg>/train/<experiment>/summaries`; for example, launch
+`tensorboard --logdir output/tennis_im_training_2/train` to inspect training history.
+
+Evaluation history also includes `head_height_m`, `reference_head_height_m`,
+`head_termination_height_m` (the effective threshold), and `head_below_threshold`.
+The height plot compares simulated and reference head body-origin world Z with
+the threshold; this is not the top or bottom of the head mesh. Being below the
+threshold only causes termination when early termination is enabled, after the
+initial two steps, and when the head is not an excluded contact body.
+
+Training additionally writes `metrics.jsonl` (one JSON object per epoch) next to
+its `summaries/` directory. It includes actor/critic and bounds losses, entropy,
+KL, clipping fraction, learning rate, rewards/components, alive ratio, episode
+lengths when available, and timings/FPS. Losses are averages of optimizer
+minibatches collected during that training epoch, not individual batch records.
+TensorBoard uses training epoch as the horizontal step; the `frame` metric
+retains the rollout-frame counter. Files are flushed each epoch. This persistence
+was added to the custom imitation loop; older runs may have empty event files.

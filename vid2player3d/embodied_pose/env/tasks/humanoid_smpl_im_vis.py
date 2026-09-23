@@ -5,7 +5,6 @@
 # distribution of this software and related documentation without an express
 # license agreement from NVIDIA CORPORATION is strictly prohibited.
 
-from mujoco_py import load_model_from_path, MjSim
 import glfw
 import imageio
 from datetime import datetime
@@ -15,7 +14,6 @@ from isaacgym.torch_utils import *
 from embodied_pose.env.tasks.humanoid_smpl_im import HumanoidSMPLIM
 from embodied_pose.utils.torch_transform import ypr_euler_from_quat, angle_axis_to_quaternion
 from embodied_pose.utils.tools import create_vis_model_xml
-from embodied_pose.utils.mjviewer import MjViewer
 
 
 class HumanoidSMPLIMVis(HumanoidSMPLIM):
@@ -71,6 +69,8 @@ class HumanoidSMPLIMVis(HumanoidSMPLIM):
 
     def _setup_humanoid_misc(self, humanoid_files):
         if self.show_mj_viewer:
+            from mujoco_py import load_model_from_path, MjSim
+            from embodied_pose.utils.mjviewer import MjViewer
             num_vis_humanoids = 3
             model_file = next(iter(humanoid_files.values())) #SUS?
             # print(f"Loading model file: {model_file}")

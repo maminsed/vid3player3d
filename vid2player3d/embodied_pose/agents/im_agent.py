@@ -1,6 +1,7 @@
 import torch 
 import time
 import os
+import json
 import numpy as np
 from torch import nn
 from torch import optim
@@ -255,6 +256,17 @@ class ImitatorAgent(common_agent.CommonAgent):
                     if self.has_self_play_config:
                         self.self_play_manager.update(self)
                 
+                # Persist epoch aggregates; the custom loop bypasses CommonAgent's logger.
+                metrics = {key: float(value) for key, value in self.log_dict.items()}
+                metrics['epoch_num'] = int(epoch_num)
+                metrics['frame'] = int(frame)
+                metrics_path = os.path.join(self.experiment_dir, 'metrics.jsonl')
+                with open(metrics_path, 'a') as metrics_file:
+                    metrics_file.write(json.dumps(metrics) + '\n')
+                for key, value in metrics.items():
+                    self.writer.add_scalar(key, value, epoch_num)
+                self.writer.flush()
+
                 # save models
                 latest_model_file = os.path.join(self.network_path, f"{self.config['name']}_latest")
                 if self.save_freq > 0:

@@ -18,7 +18,7 @@ env:
   keyBodies: ["R_Ankle", "L_Ankle", "L_Hand", "R_Hand"]
   contactBodies: ["R_Ankle", "L_Ankle"]
   terminationBodyHeight: -0.5
-  terminationHeadHeight: 1.0
+  terminationHeadHeight: 0.6
   enableEarlyTermination: True
   motion_file: embodied_pose/cfg/tennis_motion_lib_2.yaml
   residual_force_scale: 31.85
@@ -124,12 +124,12 @@ params:
     normalize_advantage: True
     gamma: 0.99
     tau: 0.95
-    learning_rate: 1e-5
+    learning_rate: 5e-6
     lr_schedule: constant
     score_to_win: 20000
     max_epochs: 10000
     save_best_after: 50
-    save_frequency: 500
+    save_frequency: 200
     print_stats: True
     entropy_coef: 0.0
     truncate_grads: True

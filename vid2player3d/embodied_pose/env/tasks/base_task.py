@@ -162,6 +162,12 @@ class BaseTask():
         # compute observations, rewards, resets, ...
         self.post_physics_step()
 
+        if self.cfg['env'].get('headless_record', False):
+            if not hasattr(self, '_debug_video'):
+                from embodied_pose.utils.debug_video import DebugVideo
+                self._debug_video = DebugVideo(self)
+            self._debug_video.append(self)
+
         if self.dr_randomizations.get('observations', None):
             self.obs_buf = self.dr_randomizations['observations']['noise_lambda'](self.obs_buf)
 

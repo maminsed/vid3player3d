@@ -172,6 +172,21 @@ def main():
     cfg, cfg_train = load_cfg(args)
     print("Configuration loaded")
 
+    evaluation_dir = None
+    if args.test or args.play:
+        import json
+        from datetime import datetime
+        from pathlib import Path
+        evaluation_dir = Path(cfg['cfg_dir']) / 'evaluations' / datetime.now().strftime('%Y-%m-%d_%H-%M-%S-%f')
+        evaluation_dir.mkdir(parents=True, exist_ok=True)
+        cfg['env']['evaluation_dir'] = str(evaluation_dir)
+        (evaluation_dir / 'config.json').write_text(json.dumps(
+            {'args': vars(args), 'env': cfg['env'], 'policy': cfg_train['params']},
+            indent=2, default=str))
+        if cfg['env'].get('headless_record') and args.rec_fname is None:
+            cfg['env']['rec_fname'] = str(evaluation_dir / 'motion.mp4')
+        print(f'Evaluation output: {evaluation_dir.resolve()}')
+
     vargs = vars(args)
 
     print("\nInitializing algorithm observer...")
@@ -191,7 +206,11 @@ def main():
     print("Runner reset complete")
 
     print("\nStarting runner execution...")
-    runner.run(vargs)
+    from embodied_pose.utils.debug_video import close_debug_videos
+    try:
+        runner.run(vargs)
+    finally:
+        close_debug_videos()
     print("Runner execution complete")
 
     return

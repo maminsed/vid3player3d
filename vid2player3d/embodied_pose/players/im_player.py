@@ -78,6 +78,9 @@ class ImitatorPlayer(common_player.CommonPlayer):
     def restore(self, cp_name):
         print(f"\nRestoring checkpoint: {cp_name}")
         if cp_name is not None and cp_name != "base":
+            if os.path.isfile(cp_name) or cp_name.endswith('.pth') or os.path.sep in cp_name:
+                self.load_pretrained(cp_name)
+                return
             cp_path = os.path.join(self.network_path, f"{self.config['name']}_{cp_name}.pth")
             print(f"Loading checkpoint from: {cp_path}")
             checkpoint = torch.load(cp_path, map_location=self.device)
@@ -378,6 +381,20 @@ class ImitatorPlayer(common_player.CommonPlayer):
         return
 
     def run(self):
+        from embodied_pose.utils.evaluation_report import EvaluationReport
+        self.evaluation_report = None
+        if self.task.cfg['env'].get('evaluation_dir') and not self._export_dataset:
+            self.evaluation_report = EvaluationReport(self.task)
+        status = 'interrupted_or_error'
+        try:
+            result = self._run_with_report()
+            status = 'completed'
+            return result
+        finally:
+            if self.evaluation_report is not None:
+                self.evaluation_report.close(status)
+
+    def _run_with_report(self):
         print("\nStarting ImitatorPlayer.run()...")
         if self._export_dataset and self.motion_export_data is not None:
             return self._run_export_dataset()
@@ -459,6 +476,8 @@ class ImitatorPlayer(common_player.CommonPlayer):
 
                 print("Stepping environment...")
                 obs_dict, r, done, info = self.env_step(self.env, action)
+                if self.evaluation_report is not None:
+                    self.evaluation_report.append(game_idx, n + 1, r, done, info)
                 print(f"Reward: {r}, Done: {done}")
 
                 cr += r

@@ -165,7 +165,8 @@ def load_cfg(args):
 
     cfg['env']['export_dataset'] = args.export_dataset
     
-    cfg['env']['record'] = args.record
+    cfg['env']['headless_record'] = args.headless and (args.verbose or args.record)
+    cfg['env']['record'] = args.record and not args.headless
     if args.rec_fname is not None:
         cfg['env']['rec_fname'] = args.rec_fname
     if args.num_rec_frames is not None:
@@ -276,6 +277,8 @@ def get_args(benchmark=False):
         {"name": "--test_motion_file", "type": str, "default": None},
         {"name": "--motion_id", "type": int, "default": -1, "help": "Force a motion index; -1 keeps motion sampling enabled (exports iterate motions)."},
         {"name": "--motion_file_range", "type": str, "default": None},
+        {"name": "--verbose", "action": "store_true", "default": False,
+            "help": "With --headless, save a small skeleton debug video of environment 0"},
         {"name": "--record", "action": "store_true", "default": False},
         {"name": "--num_rec_frames", "type": int, "default": None},
         {"name": "--rec_fps", "type": int, "default": None},

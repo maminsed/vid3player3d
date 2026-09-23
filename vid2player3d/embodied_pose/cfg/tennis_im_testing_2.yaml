@@ -3,7 +3,8 @@ test_name: HumanoidSMPLIMVis
 env: 
   numEnvs: 1
   envSpacing: 5
-  episodeLength: 300
+  # to update number of frames recorded, pass --num_rec_frames <new-number> or --rec_once to get the longest video
+  episodeLength: 300 
   isFlagrun: False
   enableDebugVis: False
   pdControl: True
@@ -18,7 +19,7 @@ env:
   keyBodies: ["R_Ankle", "L_Ankle", "L_Hand", "R_Hand"]
   contactBodies: ["R_Ankle", "L_Ankle"]
   terminationBodyHeight: -0.5
-  terminationHeadHeight: 1.0
+  terminationHeadHeight: 0.7
   enableEarlyTermination: True
   motion_file: data/motion_lib_ik/Adrian_Mannarino_vs._Jiri_Lehecka_reencoded-scene000-000/mlib_part_00000.pth
   residual_force_scale: 31.85
