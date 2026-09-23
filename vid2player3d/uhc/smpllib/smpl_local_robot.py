@@ -87,7 +87,6 @@ def get_joint_geometries(
     verbose=False,
     min_num_vert = 50,
 ):
-    print(f"debug: 95: geom_dir: {geom_dir}")
 
     vert_to_joint = skin_weights.argmax(axis=1)
     hull_dict = {}
@@ -1143,7 +1142,6 @@ class Robot:
             atexit.register(self.clean_up)
 
     def set_model_xml_path(self, model_xml_path):
-        print(f"debug: 1146: setting xml_path: {model_xml_path}")
         self.model_xml_path = model_xml_path
         self.model_dir = osp.dirname(model_xml_path)
         self.geom_dir = f'{self.model_dir}/mesh/{uuid.uuid4()}'
@@ -1339,7 +1337,6 @@ class Robot:
                 #     for idx, suffix in enumerate(["_x", "_y", "_z"]):
                 #         if k + suffix in gear_dict:
                 #             size_dict[k][idx] *= gear_dict[k + suffix]
-            print(f"debug: 1341: geom_dir: {self.geom_dir}")
             self.hull_dict = get_joint_geometries(
                 verts,
                 joints,

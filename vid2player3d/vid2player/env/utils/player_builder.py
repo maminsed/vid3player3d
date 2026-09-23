@@ -129,7 +129,7 @@ class PlayerBuilder():
 
     def build_player_cfg(self):
         args = get_args()
-        test_controller = args.test
+        test_controller = args.test or args.play
         args.tmp = False
         args.test = True
         args.play = True

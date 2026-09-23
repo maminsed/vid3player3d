@@ -6,7 +6,7 @@ from vid2player.utils.pose import SMPLPose
 from vid2player.utils.konia_transform import angle_axis_to_rotation_matrix, rotation_matrix_to_angle_axis
 from vid2player.utils.torch_transform import rot6d_to_angle_axis, rot6d_to_rotmat, rotmat_to_rot6d
 
-from smpl_visualizer.smpl import SMPL, SMPL_MODEL_DIR
+from smpl_visualizer.smpl_visualizer.smpl import SMPL, SMPL_MODEL_DIR
 
 import math
 import torch

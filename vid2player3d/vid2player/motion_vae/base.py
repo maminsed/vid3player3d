@@ -404,4 +404,5 @@ class MotionVAEModel(object):
             output = output.view(-1, opt.num_future_predictions, opt.frame_size + 2)
             output_phase = output[:, :, -2:]
             output = output[:, :, :-2]
-        return output[:, 0], output_phase[:, 0]
+        phase = None if output_phase is None else output_phase[:, 0]
+        return output[:, 0], phase

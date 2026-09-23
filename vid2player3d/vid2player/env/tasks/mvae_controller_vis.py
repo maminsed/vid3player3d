@@ -3,9 +3,9 @@ from vid2player.utils.racket import infer_racket_from_smpl
 from vid2player.utils.common import AverageMeterUnSync, concat_torch
 from vid2player.utils.torch_transform import angle_axis_to_rotation_matrix, rotation_matrix_to_angle_axis
 
-from smpl_visualizer.vis_sport import SportVisualizer
-from smpl_visualizer.vis_scenepic import SportVisualizerHTML
-from smpl_visualizer.vis import images_to_video
+from smpl_visualizer.smpl_visualizer.vis_sport import SportVisualizer
+from smpl_visualizer.smpl_visualizer.vis_scenepic import SportVisualizerHTML
+from smpl_visualizer.smpl_visualizer.vis import images_to_video
 
 import os
 import torch

@@ -155,9 +155,10 @@ def load_cfg(args):
     os.makedirs(log_path, exist_ok=True)
 
     cfg['env']['controller_cfg_name'] = args.cfg
-    if args.test:
+    is_eval = args.test or args.play
+    if is_eval:
         cfg['name'] = cfg['test_name']
-    cfg['env']['is_train'] = not args.test
+    cfg['env']['is_train'] = not is_eval
     if args.test_motion_id is not None:
         cfg['env']['test_motion_id'] = args.test_motion_id
     

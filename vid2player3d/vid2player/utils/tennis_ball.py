@@ -3,7 +3,7 @@ from isaacgym import gymapi
 from isaacgym import gymtorch
 
 # from .io import * 
-from smpl_visualizer.vis_sport import SportVisualizer
+from smpl_visualizer.smpl_visualizer.vis_sport import SportVisualizer
 
 import numpy as np
 from math import sqrt, pi
