@@ -160,7 +160,7 @@ def load_cfg(args):
 
     if args.export_dataset and args.motion_id is not None and args.motion_id < 0:
         cfg['env']['sample_first_motions'] = True
-    elif args.motion_id is not None:
+    elif args.motion_id is not None and args.motion_id >= 0:
         cfg['env']['motion_id'] = args.motion_id
 
     cfg['env']['export_dataset'] = args.export_dataset
@@ -274,7 +274,7 @@ def get_args(benchmark=False):
         {"name": "--no_log", "action": "store_true", "default": False},
         {"name": "--cpu_motion_lib", "action": "store_true", "default": False},
         {"name": "--test_motion_file", "type": str, "default": None},
-        {"name": "--motion_id", "type": int, "default": -1, "help": "motion_id to playback."},
+        {"name": "--motion_id", "type": int, "default": -1, "help": "Force a motion index; -1 keeps motion sampling enabled (exports iterate motions)."},
         {"name": "--motion_file_range", "type": str, "default": None},
         {"name": "--record", "action": "store_true", "default": False},
         {"name": "--num_rec_frames", "type": int, "default": None},

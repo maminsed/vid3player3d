@@ -6,8 +6,8 @@
 # license agreement from NVIDIA CORPORATION is strictly prohibited.
 
 import sys
-sys.path.append('./')
-sys.path.append('./poselib')
+# sys.path.append('./')
+# sys.path.append('./poselib')
 
 from embodied_pose.utils.config import set_np_formatting, get_args, parse_sim_params, load_cfg
 from embodied_pose.utils.parse_task import parse_task
@@ -166,13 +166,11 @@ def main():
     print("\nStarting main execution...")
     set_np_formatting()
     args = get_args()
-    print(f"Arguments loaded: {args}")
+    print(f"Arguments loaded")
     
     print("\nLoading configuration...")
     cfg, cfg_train = load_cfg(args)
     print("Configuration loaded")
-    print(f"cfg_train: {cfg_train}")
-    print(f"cfg: {cfg}")
 
     vargs = vars(args)
 
@@ -185,7 +183,6 @@ def main():
     print("Algorithm runner built")
 
     print("\nLoading checkpoint...")
-    print(f"debug: 118: {cfg_train['params']['load_path']}")
     runner.load(cfg_train)
     print("Checkpoint loaded")
 

@@ -1,0 +1,66 @@
+# Paths are relative to this YAML file. Each entry must identify a motion-library .pth.
+motions:
+  - file: "../../data/motion_lib_ik/Adrian_Mannarino_vs._Jiri_Lehecka_reencoded-scene000-000/mlib_part_00000.pth"
+    weight: 1.0
+  - file: "../../data/motion_lib_ik/Adrian_Mannarino_vs._Jiri_Lehecka_reencoded-scene000-001/mlib_part_00000.pth"
+    weight: 1.0
+  - file: "../../data/motion_lib_ik/Adrian_Mannarino_vs._Jiri_Lehecka_reencoded-scene000-002/mlib_part_00000.pth"
+    weight: 1.0
+  - file: "../../data/motion_lib_ik/Adrian_Mannarino_vs._Jiri_Lehecka_reencoded-scene005-000/mlib_part_00000.pth"
+    weight: 1.0
+  - file: "../../data/motion_lib_ik/Adrian_Mannarino_vs._Jiri_Lehecka_reencoded-scene009-000/mlib_part_00000.pth"
+    weight: 1.0
+  - file: "../../data/motion_lib_ik/Adrian_Mannarino_vs._Jiri_Lehecka_reencoded-scene009-001/mlib_part_00000.pth"
+    weight: 1.0
+  - file: "../../data/motion_lib_ik/Adrian_Mannarino_vs._Jiri_Lehecka_reencoded-scene012-000/mlib_part_00000.pth"
+    weight: 1.0
+  - file: "../../data/motion_lib_ik/Adrian_Mannarino_vs._Jiri_Lehecka_reencoded-scene019-000/mlib_part_00000.pth"
+    weight: 1.0
+  - file: "../../data/motion_lib_ik/Adrian_Mannarino_vs._Jiri_Lehecka_reencoded-scene021-000/mlib_part_00000.pth"
+    weight: 1.0
+  - file: "../../data/motion_lib_ik/Adrian_Mannarino_vs._Jiri_Lehecka_reencoded-scene026-000/mlib_part_00000.pth"
+    weight: 1.0
+  - file: "../../data/motion_lib_ik/Alexander_Bublik_vs._Tommy_Paul_reencoded-scene000-000/mlib_part_00000.pth"
+    weight: 1.0
+  - file: "../../data/motion_lib_ik/Alexander_Bublik_vs._Tommy_Paul_reencoded-scene001-000/mlib_part_00000.pth"
+    weight: 1.0
+  # Not generated yet; uncomment this entry after conversion.
+  # - file: "../../data/motion_lib_ik/Alexander_Bublik_vs._Tommy_Paul_reencoded-scene002-000/mlib_part_00000.pth"
+  #   weight: 1.0
+  - file: "../../data/motion_lib_ik/Alexander_Bublik_vs._Tommy_Paul_reencoded-scene005-000/mlib_part_00000.pth"
+    weight: 1.0
+  - file: "../../data/motion_lib_ik/Alexander_Bublik_vs._Tommy_Paul_reencoded-scene005-001/mlib_part_00000.pth"
+    weight: 1.0
+  - file: "../../data/motion_lib_ik/Alexander_Bublik_vs._Tommy_Paul_reencoded-scene007-000/mlib_part_00000.pth"
+    weight: 1.0
+  - file: "../../data/motion_lib_ik/Alexander_Bublik_vs._Tommy_Paul_reencoded-scene011-000/mlib_part_00000.pth"
+    weight: 1.0
+  # Not generated yet; uncomment this entry after conversion.
+  # - file: "../../data/motion_lib_ik/Alexander_Bublik_vs._Tommy_Paul_reencoded-scene011-001/mlib_part_00000.pth"
+  #   weight: 1.0
+  - file: "../../data/motion_lib_ik/Alexander_Bublik_vs._Tommy_Paul_reencoded-scene017-000/mlib_part_00000.pth"
+    weight: 1.0
+  - file: "../../data/motion_lib_ik/Alexander_Bublik_vs._Tommy_Paul_reencoded-scene021-000/mlib_part_00000.pth"
+    weight: 1.0
+  - file: "../../data/motion_lib_ik/Alexander_Bublik_vs._Tommy_Paul_reencoded-scene021-001/mlib_part_00000.pth"
+    weight: 1.0
+  - file: "../../data/motion_lib_ik/Alexander_Bublik_vs._Tommy_Paul_reencoded-scene022-000/mlib_part_00000.pth"
+    weight: 1.0
+  - file: "../../data/motion_lib_ik/Alexander_Zverev_vs._Felix_Auger-Aliassime_reencoded-scene001-000/mlib_part_00000.pth"
+    weight: 1.0
+  - file: "../../data/motion_lib_ik/Alexander_Zverev_vs._Felix_Auger-Aliassime_reencoded-scene004-000/mlib_part_00000.pth"
+    weight: 1.0
+  - file: "../../data/motion_lib_ik/Alexander_Zverev_vs._Felix_Auger-Aliassime_reencoded-scene010-000/mlib_part_00000.pth"
+    weight: 1.0
+  - file: "../../data/motion_lib_ik/Alexander_Zverev_vs._Felix_Auger-Aliassime_reencoded-scene014-000/mlib_part_00000.pth"
+    weight: 1.0
+  - file: "../../data/motion_lib_ik/Alexander_Zverev_vs._Felix_Auger-Aliassime_reencoded-scene014-001/mlib_part_00000.pth"
+    weight: 1.0
+  - file: "../../data/motion_lib_ik/Alexander_Zverev_vs._Felix_Auger-Aliassime_reencoded-scene018-000/mlib_part_00000.pth"
+    weight: 1.0
+  - file: "../../data/motion_lib_ik/Alexander_Zverev_vs._Felix_Auger-Aliassime_reencoded-scene018-001/mlib_part_00000.pth"
+    weight: 1.0
+  - file: "../../data/motion_lib_ik/Alexander_Zverev_vs._Felix_Auger-Aliassime_reencoded-scene021-000/mlib_part_00000.pth"
+    weight: 1.0
+  - file: "../../data/motion_lib_ik/Alexander_Zverev_vs._Felix_Auger-Aliassime_reencoded-scene022-000/mlib_part_00000.pth"
+    weight: 1.0
