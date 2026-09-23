@@ -81,7 +81,7 @@ def main(argv=None):
     if args.num_seq is not None and args.num_seq < 1:
         raise ValueError('num_seq must be positive')
     data, context, provenance = ground.load_correction_inputs(
-        args.gvhmr_dir, args.tennisproject_data, args.disable_xy_correction)
+        args.gvhmr_dir, args.tennisproject_data, args.disable_xy_correction, args.disable_ik_correction)
     names = [name for name in data if not args.sequence_name or args.sequence_name in str(name)]
     if args.num_seq is not None:
         names = names[:args.num_seq]
@@ -92,7 +92,8 @@ def main(argv=None):
     with smpl_robot_context() as robot:
         for name in names:
             sequence = correct_smpl_sequence(data[name], robot, fps=provenance['fps'],
-                                             plot_results=False, sequence_name=str(name), xy_context=context)
+                                             plot_results=False, sequence_name=str(name), xy_context=context,
+                                             disable_ik=args.disable_ik_correction)
             fig = plot_trajectory_and_ground_contacts(
                 sequence['comparison_verts'].numpy(), sequence['comparison_root_trans'],
                 sequence['corrected_root_trans'], sequence['fps'], str(name),

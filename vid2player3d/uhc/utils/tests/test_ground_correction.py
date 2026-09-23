@@ -118,6 +118,7 @@ class InputAlignmentTests(unittest.TestCase):
         full_k = k.copy()
         full_k[:2] *= 2
         results = dict(K_fullimg=torch.from_numpy(np.tile(full_k, (count, 1, 1))),
+                       net_outputs={'static_conf_logits': torch.zeros(1, count, 6)},
                        smpl_params_incam={'global_orient': torch.from_numpy(np.tile(
                            Rotation.from_matrix(r @ export.as_matrix()).as_rotvec(), (count, 1)))},
                        smpl_params_global=dict(global_orient=torch.zeros(count, 3), transl=torch.zeros(count, 3),
@@ -148,7 +149,10 @@ class InputAlignmentTests(unittest.TestCase):
         _, _, provenance = ground.load_correction_inputs(self.directory, self.csv)
         arrays = {key: np.arange(12, dtype=np.float32).reshape(4, 3)
                   for key in ('reconstructed_hip_midpoint_m', 'original_root_m', 'corrected_root_m')}
-        alignment = dict(arrays, xy_enabled=True, comparison_world_to_court_translation=[1., 2., 0.])
+        ik_arrays = {'contact_mode': np.ones((4, 2), dtype=np.int8),
+                     'anchor_m': np.full((4, 2, 3), np.nan)}
+        alignment = dict(arrays, xy_enabled=True, comparison_world_to_court_translation=[1., 2., 0.],
+                         ik={'enabled': True}, ik_diagnostics=ik_arrays)
         sequences = {self.name: {'alignment_metadata': alignment}}
         args = SimpleNamespace(gvhmr_dir=self.directory, verbose=False)
         output = self.directory / 'output'
@@ -165,6 +169,10 @@ class InputAlignmentTests(unittest.TestCase):
         self.assertEqual(summary['sequences'][self.name]['debug_video']['frames'], 4)
         self.assertEqual(summary['sequences'][self.name]['comparison_world_to_court_translation'], [1., 2., 0.])
         self.assertIn('reprojection_rms_median_px', summary['camera'])
+        self.assertNotIn('ik_diagnostics', summary['sequences'][self.name])
+        self.assertTrue(summary['sequences'][self.name]['ik']['enabled'])
+        for key, expected in ik_arrays.items():
+            np.testing.assert_array_equal(restored['sequences'][self.name]['ik'][key], expected)
         for key, expected in arrays.items():
             self.assertNotIn(key, summary['sequences'][self.name])
             np.testing.assert_array_equal(restored['sequences'][self.name][key], expected)
@@ -197,6 +205,23 @@ class InputAlignmentTests(unittest.TestCase):
         joblib.dump({'demo_' + self.name: self.entry}, self.amass)
         with self.assertRaisesRegex(ValueError, 'same exported motion'):
             ground.load_correction_inputs(self.directory, self.csv)
+        with self.assertRaisesRegex(ValueError, 'same exported motion'):
+            ground.load_correction_inputs(self.directory, self.csv, disable_xy=True)
+
+    def test_ik_requires_predictions_unless_disabled(self):
+        path = self.directory / 'hmr4d_results.pt'
+        results = torch.load(path)
+        del results['net_outputs']
+        torch.save(results, path)
+        with self.assertRaisesRegex(ValueError, 'static_conf_logits'):
+            ground.load_correction_inputs(self.directory, self.csv)
+        ground.load_correction_inputs(self.directory, self.csv, disable_ik=True)
+
+    def test_cli_ik_default_and_disable_flag(self):
+        parser = ground.build_arg_parser()
+        required = ['--gvhmr_dir', 'clip', '--csv', 'clip.csv']
+        self.assertFalse(parser.parse_args(required).disable_ik_correction)
+        self.assertTrue(parser.parse_args(required + ['--disable-ik-correction']).disable_ik_correction)
 
 
 class GroundCorrectionTests(unittest.TestCase):
@@ -237,7 +262,7 @@ class GroundCorrectionTests(unittest.TestCase):
             load_from_skeleton=Mock(), write_xml=Mock(), model_xml_path='unused.xml',
         )
         with patch.object(SkeletonTree, 'from_mjcf', return_value=tree):
-            result = ground.correct_smpl_sequence(entry, robot, plot_results=False, **kwargs)
+            result = ground.correct_smpl_sequence(entry, robot, plot_results=False, disable_ik=True, **kwargs)
         np.testing.assert_array_equal(entry['trans_orig'], translations)
         return result, offset
 

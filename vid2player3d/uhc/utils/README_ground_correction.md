@@ -31,15 +31,17 @@ The converter's `--num_motion_libs` defaults to 1 and controls output groups,
 not frame sampling. Each folder currently represents one sequence; empty groups
 are skipped. `--num_seq` limits sequences and the plotter also supports
 `--sequence_name` substring matching. `--disable_xy_correction` runs the existing
-Z correction alone, retaining the original GVHMR horizontal coordinates.
+Z correction in the original GVHMR coordinate frame. Contact IK still runs
+unless `--disable-ik-correction` is also specified.
 
 The previous `--amass_data`, `--tp_*`, and `--trim_frames` options are removed.
 All GVHMR-selected frames are retained. `--no_show` saves without opening windows.
 
 ### Corrected court video over SSH
 
-Add `--verbose` to the converter to save `<sequence>_corrected_court.mp4` in
-`--out_dir`. This also suppresses plot windows, so no display or GUI is needed:
+Add `--verbose` to the converter to save two videos in `--out_dir`:
+`<sequence>_corrected_court.mp4` and `<sequence>_ik_comparison.mp4`.
+This also suppresses plot windows, so no display or GUI is needed:
 
 ```bash
 python uhc/utils/convert_amass_isaac_correct_ground.py \
@@ -48,20 +50,36 @@ python uhc/utils/convert_amass_isaac_correct_ground.py \
   --out_dir data/motion_lib/court_video_example --verbose
 ```
 
-The 960x540 H.264 video retains every frame and the input FPS. It shows the
-corrected body in orange and the original in translucent light blue (45% opacity),
-with an on-screen legend, a fixed elevated rear camera centered on X=0 on the negative-Y side, court
-lines and a simple net matching the existing tennis viewer. Camera framing fits
-both motions, the full court and the net with 10% margins at the image edges.
-The camera aims along the court centerline and moves back as needed to fit the full
-clip; it never follows or rotates with the player.
-The corrected mesh is exactly the one saved in `*_render.pkl`: no additional
-grounding, recentering, or heading changes are applied. The original uses the
-same fixed first-frame yaw/XY registration as the plots, preserving its relative
-motion and original height. It is not realigned every frame. Depth occlusion is
-preserved, so either body can hide parts of the other, and the court can hide
-feet below the surface. Camera settings, comparison colors/opacity, and video details
-are saved under the sequence's `debug_video` entry in `args.yml`.
+Both H.264 videos retain every frame and the input FPS:
+
+- **`_corrected_court.mp4` (960x540):** final result in orange, with original
+  GVHMR motion as a translucent blue ghost (45% opacity) in the same scene.
+  The original uses the plots' single first-frame yaw/XY registration, retaining
+  its original relative movement and Z. The elevated rear camera remains fixed,
+  framing both motions, the full court and net. Body/court depth occlusion is
+  preserved. A compact legend identifies the final body and original ghost.
+- **`_ik_comparison.mp4` (1920x540):** two 960x540 panels show **pre IK** in
+  blue on the left and **post IK** in orange on the right. Both have the same
+  corrected court root trajectory. Identical close-up cameras follow their
+  combined mesh bounds with a smoothed target and constant zoom/heading. The
+  bodies are fitted below the header with margins; no mesh offsets are applied.
+
+One small, combined top-left overlay on the side-by-side video reports frame/source frame, IK on/off,
+predicted left/right support mode, ankle/toe probabilities, blend weight,
+maximum ankle/toe displacement from pre IK (cm), selected anchor residual (cm),
+and selected joint horizontal speed before/after IK (cm/s). `LIMITED` means
+reach or rotation-change limits prevented the full solve. Frame-zero speeds
+and swing-frame anchor errors are `n/a`. The root translation and orientation
+are fixed. Contacts are predictions, not measured forces.
+
+Both views use court lines and a simple net matching the existing tennis viewer.
+The final mesh is exactly the one saved in `*_render.pkl`: no additional
+grounding, recentering, or heading changes are applied. The pre-IK panel uses
+the mesh immediately before contact correction. Feet below the court surface
+can be hidden. Camera settings, comparison colors, and video details are saved
+under the sequence's `debug_video` (full court) and `debug_video_ik` (close-up)
+entries in `args.yml`. For the moving camera, stored eye/target coordinates
+describe its initial frame.
 
 Rasterization and shading require CUDA and the existing PyTorch3D installation
 in `vid2player3d`. There is **no CPU rendering fallback**. H.264 encoding runs
@@ -115,6 +133,7 @@ constants. The court length follows the downstream +/-11.89 m baseline drawing.
 4. Intersect the hip image ray with the plane at that reconstructed hip height.
    Subtract the rotated hip-to-root offset to obtain the root's court XY.
 5. Rebuild the mesh and skeleton using the corrected root position and orientation.
+6. Apply contact-anchor leg IK, preserving that root translation and orientation.
 
 A ground homography applied directly to hips would incorrectly treat their
 height as zero. Here, reconstructed hip height is used even during crouches or
@@ -148,11 +167,67 @@ or float above Z=0, and the method does not establish ground-truth jump heights.
 Downstream `MotionLib.get_motion_state(adjust_height=True)` may additionally
 subtract `min_verts_h - ground_tolerance` from Z; no XY transform is applied there.
 
+## Contact-anchor IK and A/B comparison
+
+IK is enabled by default in both conversion and the plotting helper. Add
+`--disable-ik-correction` (also accepts `--disable_ik_correction`) for the
+pre-IK baseline. Use separate output directories for the two runs. The batch
+script forwards its arguments and accepts `MOTION_OUTPUT_ROOT`:
+
+```bash
+# Run from vid2player3d, in the existing environment.
+MOTION_OUTPUT_ROOT=data/motion_lib_2_ik bash extraction_pipeline.sh
+MOTION_OUTPUT_ROOT=data/motion_lib_2_no_ik bash extraction_pipeline.sh --disable-ik-correction
+```
+
+The converter reads `net_outputs/static_conf_logits` from `hmr4d_results.pt`.
+Missing predictions fail explicitly when IK is enabled. With IK disabled,
+available predictions still produce contact diagnostics, but poses stay
+unchanged. The two video panels then match and the overlay says `IK OFF`.
+
+`contact_ik.py` uses separate ankle/toe stationary probabilities with hysteresis
+(enter 0.8, exit 0.5), pre-IK skinned-foot minimum height between -0.10 and 0.08 m,
+and at least three consecutive frames per support mode. Foot vertices are
+selected from the actual SMPL skinning weights. Modes are swing, ankle, toe,
+and flat support. Anchors are fixed at the first frame of each accepted mode
+interval, including its existing height; this pass does not redo grounding.
+Flat support fixes ankle position and foot orientation. Toe support fixes the
+toe while allowing input foot rotation around it; ankle support fixes only
+the ankle. Three-frame smoothstep ramps reduce corrections near transitions.
+
+Analytic two-bone IK changes only hip, knee and ankle rotations. It retains
+the input knee bending side, constrains flexion to 5–155 degrees in the full
+geometric solve, and caps each local rotation correction at 60 degrees.
+Blending and correction caps can leave anchor error: these are conservative
+safeguards, not a guarantee of biomechanical feasibility. Unreachable anchors
+are reported rather than moving the root or stretching bones. No extra steps
+are synthesized. Final velocities and mesh height metadata are rebuilt from
+the corrected poses. Downstream height adjustment remains as described above.
+
+The original-vs-court trajectory plots are retained. `args.yml` includes IK
+settings and summary statistics. Per-frame
+arrays are under `correction_diagnostics.pkl['sequences'][sequence_name]['ik']`:
+support modes (0 swing, 1 ankle, 2 toe, 3 flat), probabilities, blend weights,
+anchors, residuals, limit flags, before/after ankle/toe positions, displacements,
+and horizontal speeds. Feet are ordered left/right, then ankle/toe. Speed
+summaries use adjacent frames in the same non-swing support mode, including
+blend frames. All persisted distances/speeds are meters and meters/second;
+the video and IK image panels convert them to centimeters.
+
 ## Outputs and diagnostics
 
 The converter writes `mlib_part_*.pth`, matching `*_render.pkl`, shape/split
 metadata, `args.yml`, and `ground_correction_<sequence>.png`. That image now
-includes XY trajectories and X/Y versus time alongside the Z diagnostics.
+includes a compact root XY trajectory on the player's half-court, X/Y versus
+time, and the Z diagnostics (before IK). IK panels show per-foot 3D displacement
+from pre IK (the larger of ankle/toe displacement, matching video `move`),
+remaining 3D anchor error, selected contact modes, and pre/post horizontal
+speed for adjacent frames in the same contact mode. Gaps in the speed curves
+mean swing or a mode transition, not zero speed. Crosses on the residual plot
+mark solver-limited frames. A summary gives mean/maximum foot displacement,
+contact/limited frame counts, and the unchanged root. The displacement mean
+includes all frames, including swing. Contact modes are model predictions,
+not measured ground contact; Z-fit valleys are separate from IK contacts.
 The plotting script saves `trajectory_and_ground_contacts_<sequence>.png` with
 XY, X/Y over time, corrected 3D motion, and original/corrected foot heights.
 
@@ -173,8 +248,9 @@ Its `sequences[sequence_name]` dictionary contains `reconstructed_hip_midpoint_m
 `original_root_m`, and `corrected_root_m`. Positions are meters; original roots
 use the GVHMR frame and corrected roots use the court frame. Row `i` corresponds
 to `source.start_frame + i`. Load with `joblib.load(path)` to get NumPy arrays.
-With XY correction disabled there are no such arrays and no diagnostics file
-is written. Use distinct output directories to keep separate runs' metadata.
+With XY correction disabled, camera/root correction arrays are absent; IK
+diagnostics are still saved when stationary predictions are available. Use
+distinct output directories to keep separate runs' metadata.
 
 ## Shared API and verification
 

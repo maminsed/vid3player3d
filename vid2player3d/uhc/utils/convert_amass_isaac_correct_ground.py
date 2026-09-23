@@ -47,6 +47,9 @@ def add_input_arguments(parser):
     parser.add_argument('--tennisproject_data', '--csv', dest='tennisproject_data',
                         type=Path, required=True, help='Matching TennisProject CSV')
     parser.add_argument('--disable_xy_correction', action='store_true')
+    parser.add_argument('--disable-ik-correction', '--disable_ik_correction',
+                        dest='disable_ik_correction', action='store_true',
+                        help='Disable contact-anchor leg IK (enabled by default); retain the same root trajectory')
 
 
 def build_arg_parser():
@@ -57,7 +60,7 @@ def build_arg_parser():
     parser.add_argument('--num_motion_libs', type=int, default=1)
     parser.add_argument('--no_show', action='store_true', help='Save plots without opening windows')
     parser.add_argument('--verbose', action='store_true',
-                        help='Save a CUDA-rendered original/corrected court MP4 and suppress plot windows')
+                        help='Save CUDA-rendered full-court ghost and close pre/post-IK MP4s; suppress plot windows')
     return parser
 
 
@@ -147,7 +150,7 @@ def court_heading_rotations(camera_rotation, incam_root_rotation, amass_root_rot
     return rotations, yaw, residual
 
 
-def load_correction_inputs(gvhmr_dir, csv_path, disable_xy=False):
+def load_correction_inputs(gvhmr_dir, csv_path, disable_xy=False, disable_ik=False):
     """Load one clip, validate artifact identity, and join exact source frames.
 
     Missing/ambiguous frames and unusable calibration fail explicitly instead
@@ -183,6 +186,16 @@ def load_correction_inputs(gvhmr_dir, csv_path, disable_xy=False):
     if width <= 0 or height <= 0 or int(video_count) != count or not np.isclose(video_fps, fps):
         raise ValueError('Input video dimensions/frame count/FPS disagree with metadata')
     context = {'enabled': not disable_xy}
+    result_path = directory / 'hmr4d_results.pt'
+    results = torch.load(str(result_path), map_location='cpu') if result_path.exists() else {}
+    logits = results.get('net_outputs', {}).get('static_conf_logits')
+    if logits is not None:
+        if tuple(logits.shape) != (1, count, 6) or not torch.isfinite(logits).all():
+            raise ValueError('GVHMR stationary logits must be finite with shape (1, frames, 6)')
+        context['stationary_probability'] = logits[0, :, :4].sigmoid().numpy()
+    elif not disable_ik:
+        raise ValueError('Contact IK requires net_outputs/static_conf_logits in hmr4d_results.pt; '
+                         'regenerate GVHMR results or use --disable-ik-correction')
     provenance = {
         'gvhmr_dir': str(directory), 'tennisproject_data': str(csv_path),
         'amass_data': str(amass_paths[0]), 'source': source,
@@ -200,9 +213,29 @@ def load_correction_inputs(gvhmr_dir, csv_path, disable_xy=False):
                       'max_camera_reprojection_px': MAX_COURT_REPROJECTION_PX,
                       'max_court_keypoint_error_px': MAX_COURT_KEYPOINT_ERROR_PX},
         'xy_temporal_smoothing': False,
+        'ik_enabled': not disable_ik,
         'z_correction': 'existing multi-window foot/RANSAC correction, before court alignment',
         'downstream_height_adjustment': 'MotionLib may additionally subtract min_verts_h - ground_tolerance',
     }
+    # Contact predictions must belong to this exported motion even when court
+    # XY correction is disabled. Keep the no-IK/no-XY legacy path independent.
+    if not disable_xy or not disable_ik:
+        global_params = results['smpl_params_global']
+        global_orient = global_params['global_orient'].numpy()
+        if (global_orient.shape != (count, 3)
+                or tuple(global_params['transl'].shape) != (count, 3)
+                or tuple(global_params['body_pose'].shape) != (count, 63)):
+            raise ValueError('GVHMR global motion and AMASS frame counts/shapes disagree')
+        export_rotation = Rotation.from_euler('x', np.pi / 2).as_matrix()
+        amass_rotation = Rotation.from_rotvec(entry['pose_aa'][:, :3]).as_matrix()
+        expected_rotation = export_rotation @ Rotation.from_rotvec(global_orient).as_matrix()
+        expected_trans = global_params['transl'].numpy() @ export_rotation.T
+        expected_trans[:, 2] -= expected_trans[0, 2] - 0.92
+        if (not np.allclose(amass_rotation, expected_rotation, atol=1e-5)
+                or not np.allclose(entry['pose_aa'][:, 3:66], global_params['body_pose'].numpy(), atol=1e-5)
+                or not np.allclose(entry['trans_orig'], expected_trans, atol=1e-5)
+                or not np.allclose(entry['beta'][:10], global_params['betas'][0].numpy()[:10], atol=1e-5)):
+            raise ValueError('AMASS and hmr4d_results do not describe the same exported motion')
     if disable_xy:
         provenance['coordinate_system'] = {'units': 'meters', 'z': 'up', 'xy': 'original GVHMR frame'}
         return data, context, provenance
@@ -222,23 +255,10 @@ def load_correction_inputs(gvhmr_dir, csv_path, disable_xy=False):
         raise ValueError('CSV must contain exactly one row for each source frame in the clip')
     selected = selected.set_index('global_frame').loc[source_frames]
     poses = torch.load(str(directory / 'preprocess/vitpose.pt'), map_location='cpu').numpy()
-    results = torch.load(str(directory / 'hmr4d_results.pt'), map_location='cpu')
     k = results['K_fullimg'].numpy().astype(np.float64)
     incam = results['smpl_params_incam']['global_orient'].numpy()
-    global_params = results['smpl_params_global']
-    global_orient = global_params['global_orient'].numpy()
     if poses.shape != (count, 17, 3) or k.shape != (count, 3, 3) or incam.shape != (count, 3) or global_orient.shape != (count, 3):
         raise ValueError('ViTPose, camera and AMASS frame counts/shapes disagree')
-    export_rotation = Rotation.from_euler('x', np.pi / 2).as_matrix()
-    amass_rotation = Rotation.from_rotvec(entry['pose_aa'][:, :3]).as_matrix()
-    expected_rotation = export_rotation @ Rotation.from_rotvec(global_orient).as_matrix()
-    expected_trans = global_params['transl'].numpy() @ export_rotation.T
-    expected_trans[:, 2] -= expected_trans[0, 2] - 0.92
-    if (not np.allclose(amass_rotation, expected_rotation, atol=1e-5)
-            or not np.allclose(entry['pose_aa'][:, 3:66], global_params['body_pose'].numpy(), atol=1e-5)
-            or not np.allclose(entry['trans_orig'], expected_trans, atol=1e-5)
-            or not np.allclose(entry['beta'][:10], global_params['betas'][0].numpy()[:10], atol=1e-5)):
-        raise ValueError('AMASS and hmr4d_results do not describe the same exported motion')
     hips = poses[:, HIP_INDICES, :]
     valid = np.isfinite(hips).all(axis=(1, 2)) & (hips[:, :, 2] > HIP_CONFIDENCE_THRESHOLD).all(axis=1)
     if not valid.all():
@@ -331,6 +351,8 @@ def save_correction_metadata(out_dir, args, provenance, sequences):
         for key in ('reconstructed_hip_midpoint_m', 'original_root_m', 'corrected_root_m'):
             if key in summary:
                 arrays[key] = np.asarray(summary.pop(key))
+        if 'ik_diagnostics' in summary:
+            arrays['ik'] = summary.pop('ik_diagnostics')
         metadata['sequences'][str(name)] = summary
         if arrays:
             diagnostics['sequences'][str(name)] = arrays
@@ -666,7 +688,8 @@ def correct_ground_height(verts, root_trans, fps=30.0, base_window=15,
 def create_ground_correction_plots(time_coords, original_heights, corrected_heights, 
                                   valley_points, window_boundaries, sequence_name,
                                   out_dir=".", show=True, original_root=None,
-                                  corrected_root=None, fps=30.0, court_enabled=False):
+                                  corrected_root=None, fps=30.0, court_enabled=False,
+                                  ik_diagnostics=None):
     """
     Create plots showing the ground correction process.
     
@@ -683,12 +706,14 @@ def create_ground_correction_plots(time_coords, original_heights, corrected_heig
     if original_root is None:
         fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8))
     else:
-        fig = plt.figure(figsize=(16, 13))
-        grid = fig.add_gridspec(3, 2)
-        ax1, ax2 = fig.add_subplot(grid[0, 0]), fig.add_subplot(grid[0, 1])
-        draw_xy_comparison(fig.add_subplot(grid[1:, 0]), fig.add_subplot(grid[1, 1]),
-                           fig.add_subplot(grid[2, 1]), original_root, corrected_root,
+        fig = plt.figure(figsize=(17, 12), layout='constrained')
+        grid = fig.add_gridspec(4, 3, width_ratios=(.85, 1.25, 1.25))
+        ax1, ax2 = fig.add_subplot(grid[0, 1]), fig.add_subplot(grid[0, 2])
+        draw_xy_comparison(fig.add_subplot(grid[:2, 0]), fig.add_subplot(grid[1, 1]),
+                           fig.add_subplot(grid[1, 2]), original_root, corrected_root,
                            fps, court_enabled)
+        draw_ik_diagnostics(fig, grid, ik_diagnostics, fps)
+    fig.suptitle(str(sequence_name), fontsize=11)
     
     # Plot 1: Original vs Corrected Heights
     ax1.plot(time_coords, original_heights, 'b-', label='Original Heights', alpha=0.7)
@@ -698,7 +723,7 @@ def create_ground_correction_plots(time_coords, original_heights, corrected_heig
     if valley_points:
         valley_times = [time_coords[idx] for idx, _ in valley_points]
         valley_heights = [height for _, height in valley_points]
-        ax1.scatter(valley_times, valley_heights, c='green', s=50, label='Ground Contact Points', zorder=5)
+        ax1.scatter(valley_times, valley_heights, c='green', s=30, label='Z-fit valleys (not IK contacts)', zorder=5)
     
     # Mark window boundaries
     for start_frame, end_frame in window_boundaries:
@@ -707,8 +732,8 @@ def create_ground_correction_plots(time_coords, original_heights, corrected_heig
     
     ax1.set_xlabel('Time (seconds)')
     ax1.set_ylabel('Height (Z-coordinate)')
-    ax1.set_title(f'Ground Correction Results - {sequence_name}')
-    ax1.legend()
+    ax1.set_title('Ground heights (before IK)')
+    ax1.legend(fontsize=8)
     ax1.grid(True, alpha=0.3)
     
     # Plot 2: Height Difference
@@ -723,11 +748,12 @@ def create_ground_correction_plots(time_coords, original_heights, corrected_heig
     
     ax2.set_xlabel('Time (seconds)')
     ax2.set_ylabel('Height Difference')
-    ax2.set_title('Height Correction Applied')
+    ax2.set_title('Height correction applied (before IK)')
     ax2.legend()
     ax2.grid(True, alpha=0.3)
     
-    plt.tight_layout()
+    if original_root is None:
+        fig.tight_layout()
     
     # Save the plot
     os.makedirs(out_dir, exist_ok=True)
@@ -742,23 +768,81 @@ def create_ground_correction_plots(time_coords, original_heights, corrected_heig
     plt.close(fig)
 
 
+def draw_ik_diagnostics(fig, grid, diagnostics, fps):
+    """Show IK-only displacement and contact quality in centimeters."""
+    summary_ax = fig.add_subplot(grid[2, 0])
+    summary_ax.axis('off')
+    if diagnostics is None:
+        summary_ax.text(0, 1, 'IK diagnostics unavailable', va='top')
+        return
+    d = diagnostics
+    times = np.arange(len(d['contact_mode'])) / fps
+    modes = d['contact_mode']
+    move_ax, error_ax = fig.add_subplot(grid[2, 1]), fig.add_subplot(grid[2, 2])
+    mode_ax = fig.add_subplot(grid[3, 0])
+    speed_axes = [fig.add_subplot(grid[3, 1]), fig.add_subplot(grid[3, 2])]
+    lines = ['IK ' + ('ON' if d['summary']['enabled'] else 'OFF'),
+             'Root XYZ / heading change: 0', '',
+             'Foot move: mean / maximum (cm)']
+    for side, (name, color) in enumerate((('Left', 'tab:blue'), ('Right', 'tab:orange'))):
+        displacement = d['foot_change_m'][:, side] * 100
+        move_ax.plot(times, displacement, color=color, label=name)
+        error_ax.plot(times, d['anchor_residual_m'][:, side] * 100, color=color, label=name)
+        limited = d['limited'][:, side]
+        error_ax.scatter(times[limited], d['anchor_residual_m'][limited, side] * 100,
+                         color=color, marker='x', label=f'{name} limited' if limited.any() else None)
+        mode_ax.step(times, modes[:, side], where='mid', color=color, label=name, alpha=.8)
+        # Exclude transitions and swing from sliding measurements; toe mode
+        # selects the toe joint, while ankle/flat select the ankle joint.
+        stable = np.r_[False, (modes[1:, side] != 0) &
+                       (modes[1:, side] == modes[:-1, side])]
+        ax = speed_axes[side]
+        for key, label, style in (('speed_before_mps', 'Pre IK', '--'),
+                                  ('speed_after_mps', 'Post IK', '-')):
+            ax.plot(times, np.where(stable, d[key][:, side] * 100, np.nan),
+                    style, label=label, linewidth=1.4)
+        ax.set(title=f'{name} foot XY speed during contact', ylabel='Speed (cm/s)')
+        lines.append(f'{name}: {displacement.mean():.2f} / {displacement.max():.2f}')
+    lines += ['', 'Selected contact frames (L / R):',
+              ' / '.join(str(int(n)) for n in (modes != 0).sum(axis=0)),
+              'Limited frames (L / R): ' + ' / '.join(str(int(n)) for n in d['limited'].sum(axis=0)),
+              '', 'Move = max ankle/toe 3D change.',
+              'Mean includes all frames.',
+              'Contacts are predictions.',
+              'Speed omits swing / transitions.']
+    summary_ax.text(0, 1, '\n'.join(lines), va='top', fontsize=9, linespacing=1.25)
+    move_ax.set(title='IK foot displacement (post vs pre)', ylabel='3D change (cm)')
+    error_ax.set(title='Distance remaining to contact anchor', ylabel='3D residual (cm)')
+    mode_ax.set(title='Selected IK contact mode', yticks=[0, 1, 2, 3],
+                yticklabels=['Swing', 'Ankle', 'Toe', 'Flat'], ylim=(-.2, 3.2))
+    for ax in (move_ax, error_ax, mode_ax, *speed_axes):
+        ax.set_xlabel('Time (s)')
+        ax.set_xlim(times[0], times[-1])
+        ax.legend(fontsize=8)
+        ax.grid(alpha=.25)
+
+
 def draw_xy_comparison(ax_xy, ax_x, ax_y, original, corrected, fps, court_enabled=True):
     """Shared court trajectory and coordinate/time comparisons for both CLIs."""
-    label = 'Original GVHMR (first-frame court alignment)' if court_enabled else 'Original GVHMR'
+    label = 'GVHMR (fixed alignment)' if court_enabled else 'Original GVHMR'
     ax_xy.plot(original[:, 0], original[:, 1], '--', label=label, alpha=0.8)
     ax_xy.plot(corrected[:, 0], corrected[:, 1], label='Corrected')
     ax_xy.scatter(*corrected[0, :2], c='green', marker='o', label='Start')
     ax_xy.scatter(*corrected[-1, :2], c='red', marker='x', label='End')
     if court_enabled:
         w, l = COURT_WIDTH / 2, COURT_LENGTH / 2
-        ax_xy.plot([-w, w, w, -w, -w], [-l, -l, l, l, -l], color='gray', alpha=0.6)
+        # Draw the player's half only; retain both trajectories in the bounds.
+        baseline = -l if np.median(corrected[:, 1]) <= 0 else l
+        ax_xy.plot([-w, w, w, -w, -w], [baseline, baseline, 0, 0, baseline], color='gray', alpha=0.6)
         ax_xy.plot([-w, w], [0, 0], color='black', label='Net')
         for x in (-8.23 / 2, 8.23 / 2):
-            ax_xy.plot([x, x], [-l, l], color='gray', alpha=0.4)
-        for y in (-6.4, 6.4):
-            ax_xy.plot([-8.23 / 2, 8.23 / 2], [y, y], color='gray', alpha=0.4)
+            ax_xy.plot([x, x], [baseline, 0], color='gray', alpha=0.4)
+        service = np.sign(baseline) * 6.4
+        ax_xy.plot([-8.23 / 2, 8.23 / 2], [service, service], color='gray', alpha=0.4)
+        ax_xy.plot([0, 0], [service, 0], color='gray', alpha=0.4)
     ax_xy.set(xlabel='X (m)', ylabel='Y (m)', title='Root XY trajectory')
-    ax_xy.set_aspect('equal', adjustable='datalim')
+    ax_xy.margins(.04)
+    ax_xy.set_aspect('equal', adjustable='box')
     times = np.arange(len(original)) / fps
     for axis, ax, name in ((0, ax_x, 'X'), (1, ax_y, 'Y')):
         ax.plot(times, original[:, axis], '--', label=label)
@@ -797,7 +881,7 @@ def smpl_robot_context(data_dir="data/smpl"):
 
 def correct_smpl_sequence(smpl_data_entry, smpl_local_robot, fps=30.0,
                           base_window=15, plot_results=True, sequence_name="",
-                          xy_context=None, out_dir=".", show_plots=True):
+                          xy_context=None, out_dir=".", show_plots=True, disable_ik=False):
     """Reconstruct and correct a sequence for both conversion and visualization.
 
     ``trans`` is SMPL model translation; ``root_trans`` is the pelvis world
@@ -875,11 +959,47 @@ def correct_smpl_sequence(smpl_data_entry, smpl_local_robot, fps=30.0,
             )
         # Convert pelvis world position back to SMPL model translation.
         corrected_trans = corrected_root_trans - pelvis_offset
-        corrected_verts, _ = smpl_parser.get_joints_verts(
+        corrected_verts, corrected_joints = smpl_parser.get_joints_verts(
             pose=torch.from_numpy(pose_aa),
             th_betas=torch.from_numpy(beta[None, :]),
             th_trans=torch.from_numpy(corrected_trans),
         )
+        pre_ik_pose = pose_aa.copy()
+        pre_ik_verts = corrected_verts.clone()
+        ik_diagnostics = None
+        probabilities = (xy_context or {}).get('stationary_probability')
+        if probabilities is None and not disable_ik:
+            raise ValueError('Contact IK requires stationary_probability in the correction context')
+        if probabilities is not None:
+            from uhc.utils.contact_ik import correct_contact_poses
+
+            _, rest_joints = smpl_parser.get_joints_verts(
+                pose=torch.zeros(1, 72), th_betas=torch.from_numpy(beta[None, :]),
+                th_trans=torch.zeros(1, 3))
+            # Use the body's actual skinning weights, not guessed vertex ranges.
+            skin = smpl_parser.lbs_weights.detach().cpu().numpy()
+            foot_heights = []
+            for ankle, toe in ((7, 10), (8, 11)):
+                vertices = np.flatnonzero(skin[:, [ankle, toe]].sum(axis=1) > .5)
+                if not len(vertices):
+                    raise ValueError('SMPL skinning weights contain no foot vertices')
+                foot_heights.append(pre_ik_verts[:, vertices, 2].min(dim=1)[0].numpy())
+            pose_aa, ik_diagnostics = correct_contact_poses(
+                pose_aa, corrected_joints[:, 0].numpy(), rest_joints[0].numpy(),
+                smpl_parser.parents[:24].cpu().numpy(), probabilities,
+                np.stack(foot_heights, axis=1), fps=fps, enabled=not disable_ik)
+            # Root translation never enters the solver as an optimization variable.
+            if not np.array_equal(pose_aa[:, :3], pre_ik_pose[:, :3]):
+                raise RuntimeError('Contact IK unexpectedly changed root orientation')
+            corrected_verts, _ = smpl_parser.get_joints_verts(
+                pose=torch.from_numpy(pose_aa), th_betas=torch.from_numpy(beta[None, :]),
+                th_trans=torch.from_numpy(corrected_trans))
+            alignment_metadata['ik'] = ik_diagnostics['summary']
+            alignment_metadata['ik_diagnostics'] = {
+                key: value for key, value in ik_diagnostics.items() if key != 'summary'}
+            print('Contact IK:', ik_diagnostics['summary'])
+        else:
+            alignment_metadata['ik'] = {'enabled': False, 'contact_source': 'unavailable'}
 
     pose_quat = sRot.from_rotvec(pose_aa.reshape(-1, 3)).as_quat().reshape(
         batch_size, 24, 4
@@ -888,7 +1008,7 @@ def correct_smpl_sequence(smpl_data_entry, smpl_local_robot, fps=30.0,
         create_ground_correction_plots(
             **diagnostics, sequence_name=sequence_name, out_dir=out_dir, show=show_plots,
             original_root=comparison_root, corrected_root=corrected_root_trans,
-            fps=fps, court_enabled=xy_enabled,
+            fps=fps, court_enabled=xy_enabled, ik_diagnostics=ik_diagnostics,
         )
 
     return {
@@ -904,6 +1024,9 @@ def correct_smpl_sequence(smpl_data_entry, smpl_local_robot, fps=30.0,
         "corrected_trans": corrected_trans,
         "corrected_root_trans": corrected_root_trans,
         "corrected_verts": corrected_verts,
+        "pre_ik_verts": pre_ik_verts,
+        "pre_ik_pose_aa": pre_ik_pose,
+        "ik_diagnostics": ik_diagnostics,
         "original_pose_aa": original_pose_aa,
         "comparison_root_trans": comparison_root,
         "comparison_verts": comparison_verts,
@@ -977,7 +1100,7 @@ def main(argv=None):
 
     os.makedirs(args.out_dir, exist_ok=True)
     amass_data, xy_context, provenance = load_correction_inputs(
-        args.gvhmr_dir, args.tennisproject_data, args.disable_xy_correction)
+        args.gvhmr_dir, args.tennisproject_data, args.disable_xy_correction, args.disable_ik_correction)
     completed = {}
     save_correction_metadata(args.out_dir, args, provenance, completed)
     info = joblib.load('data/misc/smpl_body_info.pkl')
@@ -1016,6 +1139,7 @@ def main(argv=None):
                     amass_data[key_name], smpl_local_robot, sequence_name=key_name, fps=provenance["fps"],
                     xy_context=xy_context, out_dir=args.out_dir,
                     show_plots=not (args.no_show or args.verbose),
+                    disable_ik=args.disable_ik_correction,
                 )
                 completed[key_name] = {'alignment_metadata': sequence['alignment_metadata']}
                 save_correction_metadata(args.out_dir, args, provenance, completed)
@@ -1036,8 +1160,19 @@ def main(argv=None):
                         Path(args.out_dir) / (Path(key_name).name + '_corrected_court.mp4'),
                         COURT_WIDTH, COURT_LENGTH,
                         comparison_verts=sequence['comparison_verts'],
+                        source_start_frame=provenance['source']['start_frame'],
+                        comparison_mode='ghost',
                     )
                     sequence['alignment_metadata']['debug_video'] = video_metadata
+                    ik_video_metadata = save_corrected_court_video(
+                        render_data['verts'], smpl_parser.faces, render_data['fps'],
+                        Path(args.out_dir) / (Path(key_name).name + '_ik_comparison.mp4'),
+                        COURT_WIDTH, COURT_LENGTH,
+                        comparison_verts=sequence['pre_ik_verts'],
+                        ik_diagnostics=sequence['ik_diagnostics'],
+                        source_start_frame=provenance['source']['start_frame'],
+                    )
+                    sequence['alignment_metadata']['debug_video_ik'] = ik_video_metadata
                     save_correction_metadata(args.out_dir, args, provenance, completed)
 
             if not motion_lib_input_dict:

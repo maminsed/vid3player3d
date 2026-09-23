@@ -1,6 +1,7 @@
 #!/bin/bash
 GVHMR_ROOT_DIR="../GVHMR/outputs/demo_2"
 TP_ROOT_DIR="../TennisProject/res_2"
+OUT_DIR="data/motion_lib_ik"
 mkdir -p logs/
 
 echo "STARTED OPERATION $(date)" &> logs/mylogs.txt
@@ -12,6 +13,11 @@ for DIR in "$GVHMR_ROOT_DIR"/*; do
     ((count++))
     FILE_NAME="$(basename "$DIR")"
 
+    if [ -e "$OUT_DIR/$FILE_NAME" ]; then
+        echo "$OUT_DIR/$FILE_NAME" already exists &>> logs/mylogs.txt
+        continue;
+    fi
+
     printf "\n\n==========\n" &>> logs/mylogs.txt
     printf "\n\n==========\n" &>> logs/pythonlogs.txt
     echo "Started FILE_NAME $FILE_NAME at $(date)" &>> logs/mylogs.txt
@@ -22,9 +28,9 @@ for DIR in "$GVHMR_ROOT_DIR"/*; do
         uhc/utils/convert_amass_isaac_correct_ground.py \
         --gvhmr_dir "$DIR" \
         --tennisproject_data "$TP_FILE_NAME" \
-        --out_dir data/motion_lib_2/"$FILE_NAME" \
-        --verbose \
+        --out_dir $OUT_DIR/"$FILE_NAME" \
          &>> logs/pythonlogs.txt
+        # --verbose \
 
     if [ $? -ne 0 ]; then
         echo "Failed FIle $FILE_NAME at $(date)" &>> logs/mylogs.txt
@@ -33,7 +39,7 @@ for DIR in "$GVHMR_ROOT_DIR"/*; do
         echo $FILE_NAME &>> logs/processed.txt
     fi
     
-    if [ "$count" -gt 3 ]; then
+    if [ "$count" -gt 30 ]; then
         break;
     fi
 
