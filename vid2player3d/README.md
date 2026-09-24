@@ -121,9 +121,23 @@ The basename comes from the original sequence name stored in the motion library,
 not the library shard filename. For `tennis_im_training_2`, the directory is
 `exports/tennis_motion_2/`. Files retain the existing joblib payload format.
 
+Each export run also writes `exports/<params.config.name>/metrics.csv`, with one
+row per saved motion. It includes the exported filename, motion/environment IDs,
+frame count and simulated duration, total/mean reward and reward components,
+completion fraction, survival/completion flags, stop reason, tracking errors in
+meters, and head-height diagnostics. `survived=1` means no early termination was
+observed during the exported rollout; `completed_motion=1` additionally requires
+reaching the reference motion's end. Episode/export step limits can leave a motion
+incomplete even when it survived. Rows are flushed after each saved motion, and
+the CSV is replaced on each export invocation (including single-motion exports).
+
+Player logging defaults to `INFO`, showing progress and one result per motion.
+Add `--log_level DEBUG` to include step-by-step diagnostics. `--verbose` retains
+its separate meaning of recording a debug video when headless.
+
 
 ### High-level policy
-We also provide code for training the high-level policy in [vid2player](vid2player). As described in the paper, we design a curriculum trained in three stages. You can run the following script to execute the curriculum training (assuming the checkpoints for the low-leve policy and motion embedding are available).
+We also provide code for training the high-level policy in [vid2player](vid2player). As described in the paper, we design a curriculum trained in three stages. You can run the following script to execute the curriculum training (assuming the checkpoints for the low-level policy and motion embedding are available).
 ```bash
 python vid2player/run.py --cfg federer_train_stage_1 --rl_device cuda:0 --headless
 python vid2player/run.py --cfg federer_train_stage_2 --rl_device cuda:0 --headless

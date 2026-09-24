@@ -19,6 +19,14 @@ import torch
 
 SIM_TIMESTEP = 1.0 / 60.0
 
+def _parse_log_level(value):
+    import argparse
+    level = value.upper()
+    if level not in ('DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'):
+        raise argparse.ArgumentTypeError('log level must be DEBUG, INFO, WARNING, ERROR, or CRITICAL')
+    return level
+
+
 def set_np_formatting():
     np.set_printoptions(edgeitems=30, infstr='inf',
                         linewidth=4000, nanstr='nan', precision=2,
@@ -291,6 +299,8 @@ def get_args(benchmark=False):
         {"name": "--camera", "type": str, "default": None},
         {"name": "--export_dataset", "action": "store_true", "default": False,
             "help": "Export the simulated motion to a dataset file."},
+        {"name": "--log_level", "type": _parse_log_level, "default": "INFO",
+            "help": "Player logging level; DEBUG enables per-step export diagnostics (default: INFO)."},
     ]
 
     if benchmark:

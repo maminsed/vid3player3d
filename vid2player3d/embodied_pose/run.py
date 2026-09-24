@@ -6,6 +6,7 @@
 # license agreement from NVIDIA CORPORATION is strictly prohibited.
 
 import sys
+import logging
 # sys.path.append('./')
 # sys.path.append('./poselib')
 
@@ -166,6 +167,7 @@ def main():
     print("\nStarting main execution...")
     set_np_formatting()
     args = get_args()
+    logging.basicConfig(level=args.log_level, format='%(levelname)s: %(message)s')
     print(f"Arguments loaded")
     
     print("\nLoading configuration...")

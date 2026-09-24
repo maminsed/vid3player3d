@@ -1,4 +1,5 @@
 import torch
+import logging
 import os
 import numpy as np
 import time
@@ -13,9 +14,12 @@ from rl_games.common.player import BasePlayer
 import embodied_pose.learning.common_player as common_player
 
 
+logger = logging.getLogger(__name__)
+
+
 class ImitatorPlayer(common_player.CommonPlayer):
     def __init__(self, config):
-        print("\nInitializing ImitatorPlayer...")
+        logger.debug("\nInitializing ImitatorPlayer...")
         BasePlayer.__init__(self, config)
         self.args = config['args']
         self.task = self.env.task
@@ -24,7 +28,7 @@ class ImitatorPlayer(common_player.CommonPlayer):
         self.network = config['network']
         self.network_path = config['network_path']
         
-        print("Setting up action space...")
+        logger.debug("Setting up action space...")
         self._setup_action_space()
         self.mask = [False]
 
@@ -32,83 +36,83 @@ class ImitatorPlayer(common_player.CommonPlayer):
 
         self.normalize_input = self.config['normalize_input']
         
-        print("Building network configuration...")
+        logger.debug("Building network configuration...")
         net_config = self._build_net_config()
-        print(f"Network config: {net_config}")
+        logger.debug(f"Network config: {net_config}")
         
-        print("Building network...")
+        logger.debug("Building network...")
         self._build_net(net_config)
-        print("Network built")
+        logger.debug("Network built")
 
         self.task.register_model(self.model)
 
         pretrained_model_cp = config.get('pretrained_model_cp', None)
         if self.args.checkpoint == 'base' and pretrained_model_cp is not None and not config.get('load_checkpoint', False):
-            print(f"\nLoading pretrained model from: {pretrained_model_cp}")
+            logger.debug(f"\nLoading pretrained model from: {pretrained_model_cp}")
             if type(pretrained_model_cp) is list:
                 for cp in pretrained_model_cp:
                     self.load_pretrained(cp)
             else:
                 self.load_pretrained(pretrained_model_cp)
         else:
-            print(f"Not loading pretrained model from: {pretrained_model_cp}")
+            logger.debug(f"Not loading pretrained model from: {pretrained_model_cp}")
 
         # Export dataset is optional - only initialize if explicitly requested
-        print(f"DEBUG: Full task cfg keys: {list(self.env.task.cfg.keys())}")
-        print(f"DEBUG: env cfg keys: {list(self.env.task.cfg.get('env', {}).keys())}")
+        logger.debug(f"DEBUG: Full task cfg keys: {list(self.env.task.cfg.keys())}")
+        logger.debug(f"DEBUG: env cfg keys: {list(self.env.task.cfg.get('env', {}).keys())}")
         
         # Check both locations for the export_dataset flag
         self._export_dataset = self.env.task.cfg.get('export_dataset', False)
         if not self._export_dataset:
             self._export_dataset = self.env.task.cfg.get('env', {}).get('export_dataset', False)
         
-        print(f"DEBUG: export_dataset flag = {self._export_dataset}")
+        logger.debug(f"DEBUG: export_dataset flag = {self._export_dataset}")
         self.motion_export_data = None
         if self._export_dataset:
-            print("Motion export enabled - will collect motion data during simulation")
+            logger.debug("Motion export enabled - will collect motion data during simulation")
             self.motion_export_data = {
                 'pose_aa': [],
                 'trans_orig': []
             }
         else:
-            print("Motion export disabled - no data will be collected")
+            logger.debug("Motion export disabled - no data will be collected")
 
-        print("ImitatorPlayer initialization complete")
+        logger.debug("ImitatorPlayer initialization complete")
 
     def restore(self, cp_name):
-        print(f"\nRestoring checkpoint: {cp_name}")
+        logger.debug(f"\nRestoring checkpoint: {cp_name}")
         if cp_name is not None and cp_name != "base":
             if os.path.isfile(cp_name) or cp_name.endswith('.pth') or os.path.sep in cp_name:
                 self.load_pretrained(cp_name)
                 return
             cp_path = os.path.join(self.network_path, f"{self.config['name']}_{cp_name}.pth")
-            print(f"Loading checkpoint from: {cp_path}")
+            logger.debug(f"Loading checkpoint from: {cp_path}")
             checkpoint = torch.load(cp_path, map_location=self.device)
             self.model.load_state_dict(checkpoint['model'])
             if self.normalize_input:
                 self.running_mean_std.load_state_dict(checkpoint['running_mean_std'])
-            print("Checkpoint loaded successfully")
+            logger.debug("Checkpoint loaded successfully")
         else:
-            print('No checkpoint provided.')
+            logger.debug('No checkpoint provided.')
 
     def load_pretrained(self, cp_path):
-        print(f"\nLoading pretrained model from: {cp_path}")
+        logger.debug(f"\nLoading pretrained model from: {cp_path}")
         checkpoint = torch.load(cp_path, map_location=self.device)
 
         if 'pytorch-lightning_version' in checkpoint:
             model_state_dict = self.model.a2c_network.state_dict()
-            print('loading model from Lighting checkpoint...')
-            print('Shared keys in model and lightning checkpoint:', [key for key in checkpoint['state_dict'] if key in model_state_dict])
-            print('Lightning keys not found in current model:', [key for key in checkpoint['state_dict'] if key not in model_state_dict])
-            print('Keys not found in lightning checkpoint:', [key for key in model_state_dict if key not in checkpoint['state_dict']])
+            logger.debug('loading model from Lighting checkpoint...')
+            logger.debug('%s %s', 'Shared keys in model and lightning checkpoint:', [key for key in checkpoint['state_dict'] if key in model_state_dict])
+            logger.debug('%s %s', 'Lightning keys not found in current model:', [key for key in checkpoint['state_dict'] if key not in model_state_dict])
+            logger.debug('%s %s', 'Keys not found in lightning checkpoint:', [key for key in model_state_dict if key not in checkpoint['state_dict']])
             self.model.a2c_network.load_state_dict(checkpoint['state_dict'], strict=False)
         else:
             model_state_dict = self.model.state_dict()
             missing_checkpoint_keys = [key for key in model_state_dict if key not in checkpoint['model']]
-            print('loading model from EmbodyPose checkpoint...')
-            print('Shared keys in model and checkpoint:', [key for key in model_state_dict if key in checkpoint['model']])
-            print('Keys not found in current model:', [key for key in checkpoint['model'] if key not in model_state_dict])
-            print('Keys not found in checkpoint:', missing_checkpoint_keys)
+            logger.debug('loading model from EmbodyPose checkpoint...')
+            logger.debug('%s %s', 'Shared keys in model and checkpoint:', [key for key in model_state_dict if key in checkpoint['model']])
+            logger.debug('%s %s', 'Keys not found in current model:', [key for key in checkpoint['model'] if key not in model_state_dict])
+            logger.debug('%s %s', 'Keys not found in checkpoint:', missing_checkpoint_keys)
 
             discard_pretrained_sigma = self.config.get('discard_pretrained_sigma', False)
             if discard_pretrained_sigma:
@@ -122,13 +126,13 @@ class ImitatorPlayer(common_player.CommonPlayer):
             load_rlgame_norm = len([key for key in missing_checkpoint_keys if 'running_obs' in key]) > 0
             if load_rlgame_norm:
                 if 'running_mean_std' in checkpoint:
-                    print('loading running_obs from rl game running_mean_std')
+                    logger.debug('loading running_obs from rl game running_mean_std')
                     self.model.a2c_network.running_obs.n = checkpoint['running_mean_std']['count'].long()
                     self.model.a2c_network.running_obs.mean[:] = checkpoint['running_mean_std']['running_mean'].float()
                     self.model.a2c_network.running_obs.var[:] = checkpoint['running_mean_std']['running_var'].float()
                     self.model.a2c_network.running_obs.std[:] = torch.sqrt(self.model.a2c_network.running_obs.var)
                 elif 'a2c_network.running_obs.running_mean' in checkpoint['model']:
-                    print('loading running_obs from rl game in model')
+                    logger.debug('loading running_obs from rl game in model')
                     obs_len = checkpoint['model']['a2c_network.running_obs.running_mean'].shape[0]
                     self.model.a2c_network.running_obs.n = checkpoint['model']['a2c_network.running_obs.count'].long()
                     self.model.a2c_network.running_obs.mean[:obs_len] = checkpoint['model']['a2c_network.running_obs.running_mean'].float()
@@ -185,12 +189,12 @@ class ImitatorPlayer(common_player.CommonPlayer):
         return res_dict
 
     def get_action(self, obs_dict, is_determenistic = False):
-        print("\nGetting action:")
+        logger.debug("\nGetting action:")
         obs = obs_dict['obs']
         if self.has_batch_dimension == False:
             obs = unsqueeze_obs(obs)
         obs = self._preproc_obs(obs)
-        print(f"Processed obs shape: {obs.shape}")
+        logger.debug(f"Processed obs shape: {obs.shape}")
         
         input_dict = {
             'is_train': False,
@@ -200,7 +204,7 @@ class ImitatorPlayer(common_player.CommonPlayer):
             'global_t_offset': obs_dict['global_t_offset'],
             'rnn_states' : self.states
         }
-        print("Running model inference...")
+        logger.debug("Running model inference...")
         with torch.no_grad():
             res_dict = self.model(input_dict)
         mu = res_dict['mus']
@@ -213,35 +217,35 @@ class ImitatorPlayer(common_player.CommonPlayer):
         if self.has_batch_dimension == False:
             current_action = torch.squeeze(current_action.detach())
 
-        print(f"Action shape: {current_action.shape}")
+        logger.debug(f"Action shape: {current_action.shape}")
         if self.clip_actions:
             return rescale_actions(self.actions_low, self.actions_high, torch.clamp(current_action, -1.0, 1.0))
         else:
             return current_action
 
     def env_step(self, env, actions):
-        print("\nEnvironment step details:")
+        logger.debug("\nEnvironment step details:")
         if not self.is_tensor_obses:
             actions = actions.cpu().numpy()
-            print(f"Actions shape: {actions.shape}")
+            logger.debug(f"Actions shape: {actions.shape}")
         else:
-            print(f"Actions shape: {actions.shape}, device: {actions.device}")
+            logger.debug(f"Actions shape: {actions.shape}, device: {actions.device}")
             
-        print("Calling env.step()...")
+        logger.debug("Calling env.step()...")
         obs, rewards, dones, infos = env.step(actions)
-        print(f"Environment returned:")
-        print(f"Obs shape: {obs.shape if hasattr(obs, 'shape') else 'No shape'}")
-        print(f"Rewards shape: {rewards.shape if hasattr(rewards, 'shape') else 'No shape'}")
-        print(f"Dones shape: {dones.shape if hasattr(dones, 'shape') else 'No shape'}")
-        print(f"Info keys: {infos.keys() if isinstance(infos, dict) else 'No info dict'}")
+        logger.debug(f"Environment returned:")
+        logger.debug(f"Obs shape: {obs.shape if hasattr(obs, 'shape') else 'No shape'}")
+        logger.debug(f"Rewards shape: {rewards.shape if hasattr(rewards, 'shape') else 'No shape'}")
+        logger.debug(f"Dones shape: {dones.shape if hasattr(dones, 'shape') else 'No shape'}")
+        logger.debug(f"Info keys: {infos.keys() if isinstance(infos, dict) else 'No info dict'}")
         
-        if isinstance(infos, dict):
+        if logger.isEnabledFor(logging.DEBUG) and isinstance(infos, dict):
             if 'terminate' in infos:
-                print(f"Terminate flags: {infos['terminate']}")
+                logger.debug(f"Terminate flags: {infos['terminate']}")
             if 'sub_rewards' in infos:
-                print("Sub rewards:")
+                logger.debug("Sub rewards:")
                 for i, (name, value) in enumerate(zip(infos['sub_rewards_names'].split(','), infos['sub_rewards'])):
-                    print(f"  {name}: {value}")
+                    logger.debug(f"  {name}: {value}")
 
         if hasattr(obs, 'dtype') and obs.dtype == np.float64:
             obs = np.float32(obs)
@@ -300,7 +304,7 @@ class ImitatorPlayer(common_player.CommonPlayer):
         if reset_env_ids.numel() == 0:
             return None
 
-        print(f"Resetting {reset_env_ids.numel()} completed background env(s): {reset_env_ids.detach().cpu().tolist()}")
+        logger.debug(f"Resetting {reset_env_ids.numel()} completed background env(s): {reset_env_ids.detach().cpu().tolist()}")
         if self.is_rnn and self.states is not None:
             for state in self.states:
                 state[:, reset_env_ids, :] = 0.0
@@ -308,16 +312,16 @@ class ImitatorPlayer(common_player.CommonPlayer):
         return self.env_reset(reset_env_ids)
 
     def _run_export_dataset(self):
-        print("\nStarting deterministic export over motion library...")
+        logger.debug("\nStarting deterministic export over motion library...")
         motion_ids = self._get_export_motion_ids()
         export_env_map = self._get_export_env_map()
-        print(f"Exporting {len(motion_ids)} motion(s): {motion_ids}")
+        logger.debug(f"Exporting {len(motion_ids)} motion(s): {motion_ids}")
 
         missing_motion_ids = [motion_id for motion_id in motion_ids if motion_id not in export_env_map]
         if missing_motion_ids:
-            print("WARNING: Some motion ids were not assigned their own env at sim creation.")
-            print(f"WARNING: Missing env ids for motions: {missing_motion_ids}")
-            print("WARNING: Falling back to env 0 for those motions; leave --num_envs unset or set it >= num motions for best exports.")
+            logger.warning("Some motion ids were not assigned their own env at sim creation.")
+            logger.warning(f"Missing env ids for motions: {missing_motion_ids}")
+            logger.warning("Falling back to env 0 for those motions; leave --num_envs unset or set it >= num motions for best exports.")
 
         render = self.render_env
         is_determenistic = self.is_determenistic
@@ -326,29 +330,41 @@ class ImitatorPlayer(common_player.CommonPlayer):
         if has_masks_func:
             has_masks = self.env.has_action_mask()
 
+        from embodied_pose.utils.export_report import ExportEvaluationReport
+
+        export_dir = os.path.join("exports", self.config['name'])
+        with ExportEvaluationReport(export_dir) as report:
+            logger.info("Exporting %d motion(s); metrics: %s", len(motion_ids), report.path)
+            self._export_motions(motion_ids, export_env_map, has_masks, is_determenistic, render, report)
+        logger.info("Export complete. Metrics: %s", report.path)
+
+    def _export_motions(self, motion_ids, export_env_map, has_masks, is_determenistic, render, report):
+        from embodied_pose.utils.export_report import ExportMotionMetrics
+
         for export_idx, motion_id in enumerate(motion_ids):
             export_env_id = export_env_map.get(motion_id, 0)
             rollout_steps = self._get_export_rollout_steps(motion_id)
-            print("\n" + "="*60)
-            print(f"Exporting motion {motion_id} ({export_idx + 1}/{len(motion_ids)}) from env {export_env_id}")
-            print(f"Rollout steps: {rollout_steps}")
-            print("="*60)
+            logger.debug("\n" + "="*60)
+            logger.info(f"Exporting motion {motion_id} ({export_idx + 1}/{len(motion_ids)}) from env {export_env_id}")
+            logger.debug(f"Rollout steps: {rollout_steps}")
+            logger.debug("="*60)
 
             self._reset_motion_export_data()
             obs_dict = self._prepare_export_motion(motion_id, export_env_id)
-            batch_size = self.get_batch_size(obs_dict['obs'], 1)
+            self.get_batch_size(obs_dict['obs'], 1)
+            metrics = ExportMotionMetrics(self.task, motion_id, export_env_id, rollout_steps)
 
             if self.is_rnn:
                 self.init_rnn()
 
-            print("Initializing visualization...")
+            logger.debug("Initializing visualization...")
             self.task.render_vis(init=True)
 
             for n in range(rollout_steps):
-                print(f"\nExport step {n}/{rollout_steps} for motion {motion_id}")
+                logger.debug(f"\nExport step {n}/{rollout_steps} for motion {motion_id}")
                 t = n % self.task.context_length
                 if n > 0 and t == 0:
-                    print("Resetting context...")
+                    logger.debug("Resetting context...")
                     self.task._init_context(self.task._reset_ref_motion_ids, self.task._cur_ref_motion_times)
 
                 obs_dict['t'] = t
@@ -359,7 +375,8 @@ class ImitatorPlayer(common_player.CommonPlayer):
                 else:
                     action = self.get_action(obs_dict, is_determenistic)
 
-                obs_dict, _, done, info = self.env_step(self.env, action)
+                obs_dict, reward, done, info = self.env_step(self.env, action)
+                metrics.append(reward, done, info)
                 self.task.render_vis()
                 self._post_step(info)
                 self._collect_motion_data(env_id=export_env_id)
@@ -368,16 +385,21 @@ class ImitatorPlayer(common_player.CommonPlayer):
                     self.env.render(sync_frame_time=True)
 
                 if bool(done[export_env_id].item()):
-                    print(f"Motion {motion_id} terminated at export step {n}")
+                    logger.debug(f"Motion {motion_id} terminated at export step {n}")
                     break
 
                 reset_obs_dict = self._reset_done_background_envs(done, export_env_id)
                 if reset_obs_dict is not None:
                     obs_dict = reset_obs_dict
 
-            self._save_motion_data(motion_id=motion_id, env_id=export_env_id)
+            export_file = self._save_motion_data(motion_id=motion_id, env_id=export_env_id)
+            row = metrics.summary(export_file)
+            report.append(row)
+            logger.info("Saved %s: %d frames, reward %.3f (mean %.3f), %s",
+                        row['export_file'], row['frames_exported'], row['total_reward'],
+                        row['mean_reward'], row['stop_reason'])
 
-        print("\nExport complete.")
+        logger.debug("\nExport complete.")
         return
 
     def run(self):
@@ -395,7 +417,7 @@ class ImitatorPlayer(common_player.CommonPlayer):
                 self.evaluation_report.close(status)
 
     def _run_with_report(self):
-        print("\nStarting ImitatorPlayer.run()...")
+        logger.debug("\nStarting ImitatorPlayer.run()...")
         if self._export_dataset and self.motion_export_data is not None:
             return self._run_export_dataset()
 
@@ -411,10 +433,10 @@ class ImitatorPlayer(common_player.CommonPlayer):
         has_masks = False
         has_masks_func = getattr(self.env, "has_action_mask", None) is not None
 
-        print(f"Initial parameters:")
-        print(f"n_games: {n_games}")
-        print(f"n_game_life: {n_game_life}")
-        print(f"max_steps: {self.max_steps}")
+        logger.debug(f"Initial parameters:")
+        logger.debug(f"n_games: {n_games}")
+        logger.debug(f"n_game_life: {n_game_life}")
+        logger.debug(f"max_steps: {self.max_steps}")
 
         op_agent = getattr(self.env, "create_agent", None)
         if op_agent:
@@ -425,9 +447,9 @@ class ImitatorPlayer(common_player.CommonPlayer):
 
         need_init_rnn = self.is_rnn
         for game_idx in range(n_games):
-            print(f"\nStarting new game iteration ({game_idx + 1}/{n_games})...")
+            logger.debug(f"\nStarting new game iteration ({game_idx + 1}/{n_games})...")
             if games_played >= n_games:
-                print("Games played reached limit, but continuing for debug...")
+                logger.debug("Games played reached limit, but continuing for debug...")
                 break  # Disabled for debug
 
             # Resample motion for new game
@@ -435,15 +457,15 @@ class ImitatorPlayer(common_player.CommonPlayer):
                 weights_from_length = self.task.cfg['env'].get('motion_weights_from_length', False)
                 new_motion_ids = self.task._motion_lib.sample_motions(1, weights_from_lenth=weights_from_length)
                 self.task._reset_ref_motion_ids[:] = new_motion_ids
-                print(f"Resampled motion_ids: {self.task._reset_ref_motion_ids}")
+                logger.debug(f"Resampled motion_ids: {self.task._reset_ref_motion_ids}")
 
             obs_dict = self.env_reset()
             batch_size = 1
             batch_size = self.get_batch_size(obs_dict['obs'], batch_size)
-            print(f"Batch size: {batch_size}")
+            logger.debug(f"Batch size: {batch_size}")
 
             if need_init_rnn:
-                print("Initializing RNN...")
+                logger.debug("Initializing RNN...")
                 self.init_rnn()
                 need_init_rnn = False
 
@@ -454,16 +476,16 @@ class ImitatorPlayer(common_player.CommonPlayer):
 
             done_indices = []
 
-            print("Initializing visualization...")
+            logger.debug("Initializing visualization...")
             self.task.render_vis(init=True)
 
             prev_dones = torch.zeros(batch_size, dtype=torch.float32, device=self.device)
 
             for n in range(self.max_steps):
-                print(f"\nStep {n}/{self.max_steps}")
+                logger.debug(f"\nStep {n}/{self.max_steps}")
                 t = n % self.task.context_length
                 if n > 0 and t == 0:
-                    print("Resetting context...")
+                    logger.debug("Resetting context...")
                     self.task._init_context(self.task._reset_ref_motion_ids, self.task._cur_ref_motion_times)
                 
                 obs_dict['t'] = t
@@ -474,23 +496,23 @@ class ImitatorPlayer(common_player.CommonPlayer):
                 else:
                     action = self.get_action(obs_dict, is_determenistic)
 
-                print("Stepping environment...")
+                logger.debug("Stepping environment...")
                 obs_dict, r, done, info = self.env_step(self.env, action)
                 if self.evaluation_report is not None:
                     self.evaluation_report.append(game_idx, n + 1, r, done, info)
-                print(f"Reward: {r}, Done: {done}")
+                logger.debug(f"Reward: {r}, Done: {done}")
 
                 cr += r
                 steps += 1
 
-                print("Rendering visualization...")
+                logger.debug("Rendering visualization...")
                 self.task.render_vis()
   
                 self._post_step(info)
 
                 # Only collect motion data if export is enabled
                 if self._export_dataset and self.motion_export_data is not None:
-                    print(f"DEBUG: Collecting motion data frame {len(self.motion_export_data['pose_aa'])}")
+                    logger.debug(f"DEBUG: Collecting motion data frame {len(self.motion_export_data['pose_aa'])}")
                     self._collect_motion_data()
 
                 if render:
@@ -503,7 +525,7 @@ class ImitatorPlayer(common_player.CommonPlayer):
                 games_played += done_count
 
                 if done_count > 0:
-                    print(f"Done count: {done_count}")
+                    logger.debug(f"Done count: {done_count}")
                     if self.is_rnn:
                         for s in self.states:
                             s[:,all_done_indices,:] = s[:,all_done_indices,:] * 0.0
@@ -526,36 +548,36 @@ class ImitatorPlayer(common_player.CommonPlayer):
                             game_res = info.get('scores', 0.5)
                     if self.print_stats:
                         if print_game_res:
-                            print('reward:', cur_rewards/done_count, 'steps:', cur_steps/done_count, 'w:', game_res)
+                            logger.info('%s %s %s %s %s %s', 'reward:', cur_rewards/done_count, 'steps:', cur_steps/done_count, 'w:', game_res)
                         else:
-                            print('reward:', cur_rewards/done_count, 'steps:', cur_steps/done_count)
+                            logger.info('%s %s %s %s', 'reward:', cur_rewards/done_count, 'steps:', cur_steps/done_count)
 
                     sum_game_res += game_res
                     if batch_size//self.num_agents == 1 or games_played >= n_games:
-                        print("Breaking due to batch size or games played, but continuing for debug...")
-                        print(f"debug: 383: n_games: {n_games} games_played: {games_played}")
+                        logger.debug("Breaking due to batch size or games played, but continuing for debug...")
+                        logger.debug(f"debug: 383: n_games: {n_games} games_played: {games_played}")
                         break  # Disabled for debug
                 
                 done_indices = done_indices[:, 0]
 
                 prev_dones = done.clone()
                 if done[0]:
-                    print("Environment signaled done, but continuing for debug...")
+                    logger.debug("Environment signaled done, but continuing for debug...")
                     break  # Disabled for debug
 
-        print("\nFinal statistics:")
-        print(f"Total rewards: {sum_rewards}")
+        logger.debug("\nFinal statistics:")
+        logger.info(f"Total rewards: {sum_rewards}")
         if print_game_res:
-            print('av reward:', sum_rewards / games_played * n_game_life, 'av steps:', sum_steps / games_played * n_game_life, 'winrate:', sum_game_res / games_played * n_game_life)
+            logger.info('%s %s %s %s %s %s', 'av reward:', sum_rewards / games_played * n_game_life, 'av steps:', sum_steps / games_played * n_game_life, 'winrate:', sum_game_res / games_played * n_game_life)
         else:
-            print('av reward:', sum_rewards / games_played * n_game_life, 'av steps:', sum_steps / games_played * n_game_life)
+            logger.info('%s %s %s %s', 'av reward:', sum_rewards / games_played * n_game_life, 'av steps:', sum_steps / games_played * n_game_life)
 
         # Only save motion data if export is enabled
         if self._export_dataset and self.motion_export_data is not None:
-            print(f"DEBUG: About to save motion data with {len(self.motion_export_data['pose_aa'])} frames")
+            logger.debug(f"DEBUG: About to save motion data with {len(self.motion_export_data['pose_aa'])} frames")
             self._save_motion_data()
         else:
-            print(f"DEBUG: Not saving motion data - export_dataset={self._export_dataset}, motion_export_data is None={self.motion_export_data is None}")
+            logger.debug(f"DEBUG: Not saving motion data - export_dataset={self._export_dataset}, motion_export_data is None={self.motion_export_data is None}")
 
         return
 
@@ -617,9 +639,9 @@ class ImitatorPlayer(common_player.CommonPlayer):
         self.motion_export_data['trans_orig'].append(root_pos)
 
     def _save_motion_data(self, motion_id=None, env_id=0):
-        print("\n" + "="*60)
-        print("SAVING EXPORTED MOTION DATA")
-        print("="*60)
+        logger.debug("\n" + "="*60)
+        logger.debug("SAVING EXPORTED MOTION DATA")
+        logger.debug("="*60)
         
         if motion_id is None:
             motion_id = self.env.task._reset_ref_motion_ids[env_id].item()
@@ -691,13 +713,7 @@ class ImitatorPlayer(common_player.CommonPlayer):
         
         joblib.dump({f"demo_export_{motion_id}": output_data}, full_path)
         
-        print(f"✓ Motion data successfully exported!")
-        print(f"📁 File location: {os.path.abspath(full_path)}")
-        print(f"📊 Data summary:")
-        print(f"   - Frames exported: {len(self.motion_export_data['pose_aa'])}")
-        print(f"   - Motion ID: {motion_id}")
-        print(f"   - Env ID: {env_id}")
-        print(f"   - Gender: {gender}")
-        print(f"   - FPS: {fps}")
-        print(f"   - File size: {os.path.getsize(full_path) / 1024:.1f} KB")
-        print("="*60)
+        logger.debug("Motion data exported: %s (%d frames, motion %d, env %d, %s, %.2f FPS)",
+                     os.path.abspath(full_path), len(self.motion_export_data['pose_aa']),
+                     motion_id, env_id, gender, fps)
+        return full_path
