@@ -20,7 +20,8 @@ env:
   terminationBodyHeight: -0.5
   terminationHeadHeight: 0.6
   enableEarlyTermination: True
-  motion_file: embodied_pose/cfg/tennis_motion_lib_2.yaml
+  motion_file: embodied_pose/cfg/tennis_motion_lib_2_training.yaml
+  # motion_file: embodied_pose/cfg/tennis_motion_lib_2_export.yaml # only for exporting. the data was not trained on this. 
   residual_force_scale: 31.85
   context_length: 32
   context_padding: 8

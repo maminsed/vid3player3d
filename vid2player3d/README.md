@@ -116,6 +116,12 @@ python vid2player/motion_vae/train.py  --exp federer_physics &> mvae_logs.txt
 PYTHONPATH=. python -u vid2player/motion_vae/train.py  --exp federer_physics --test_only --run_test --record_cv  &> mvae_test_logs.txt
 ```
 
+Motion exports are saved as `exports/<params.config.name>/<source_sequence_basename>.pk`.
+The basename comes from the original sequence name stored in the motion library,
+not the library shard filename. For `tennis_im_training_2`, the directory is
+`exports/tennis_motion_2/`. Files retain the existing joblib payload format.
+
+
 ### High-level policy
 We also provide code for training the high-level policy in [vid2player](vid2player). As described in the paper, we design a curriculum trained in three stages. You can run the following script to execute the curriculum training (assuming the checkpoints for the low-leve policy and motion embedding are available).
 ```bash

@@ -21,7 +21,7 @@ env:
   terminationBodyHeight: -0.5
   terminationHeadHeight: 0.7
   enableEarlyTermination: True
-  motion_file: data/motion_lib_ik/Adrian_Mannarino_vs._Jiri_Lehecka_reencoded-scene000-000/mlib_part_00000.pth
+  motion_file: data/motion_lib_ik/Aryna_Sabalenka_vs._Jessica_Pegula_reencoded-scene004-000/mlib_part_00000.pth
   residual_force_scale: 31.85
   context_length: 32
   context_padding: 8

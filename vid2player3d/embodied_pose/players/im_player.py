@@ -663,8 +663,19 @@ class ImitatorPlayer(common_player.CommonPlayer):
             except:
                 pass
 
-        # Create exports directory if it doesn't exist
-        export_dir = "exports"
+        # Sequence names preserve the original inputs across merged library shards.
+        source_names = getattr(motion_lib, '_motion_seq_names', None)
+        if source_names is None or len(source_names) != motion_lib.num_motions():
+            source_names = getattr(motion_lib, '_motion_files', None)
+        if source_names is None or len(source_names) != motion_lib.num_motions():
+            raise ValueError('Motion library is missing source names for export filenames')
+        source_name = os.path.basename(os.fsdecode(source_names[motion_id]))
+        stem, ext = os.path.splitext(source_name)
+        # Sequence names can be extensionless while containing dots (e.g. "vs.").
+        if ext.lower() in {'.pk', '.pkl', '.npy', '.npz', '.pt', '.pth'}:
+            source_name = stem
+
+        export_dir = os.path.join("exports", self.config['name'])
         os.makedirs(export_dir, exist_ok=True)
 
         output_data = {
@@ -675,7 +686,7 @@ class ImitatorPlayer(common_player.CommonPlayer):
             'fps': fps
         }
 
-        filename = f"motion_export_motion{motion_id}.pkl"
+        filename = f"{source_name}.pk"
         full_path = os.path.join(export_dir, filename)
         
         joblib.dump({f"demo_export_{motion_id}": output_data}, full_path)

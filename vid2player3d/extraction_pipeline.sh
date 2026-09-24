@@ -6,7 +6,7 @@ mkdir -p logs/
 
 echo "STARTED OPERATION $(date)" &> logs/mylogs.txt
 echo "" &> logs/pythonlogs.txt
-echo "" &> logs/processed.txt
+# echo "" &> logs/processed.txt
 count=0
 
 for DIR in "$GVHMR_ROOT_DIR"/*; do
@@ -39,7 +39,7 @@ for DIR in "$GVHMR_ROOT_DIR"/*; do
         echo $FILE_NAME &>> logs/processed.txt
     fi
     
-    if [ "$count" -gt 30 ]; then
+    if [ "$count" -gt 110 ]; then
         break;
     fi
 
