@@ -118,6 +118,17 @@ motion_vae_opt_dict = {
     'mixed_phase_schedule'                  : None,
 },
 
+'usopen': {
+    'model_ver'                             : 'usopen_2',
+    'base_opt_ver'                          : 'federer',
+    'dataset_dir'                           : 'exports/vae_input/tennis_motion_dataset_2',
+    'predict_phase'                         : False,
+    'mixed_phase_schedule'                  : None,
+    'continue_train'                        : False,
+    'save_freq_epoch'                       : 50,
+    'nseqs'                                 : 30_000
+},
+
 'djokovic': {
     'model_ver'                             : 'djokovic',
     'base_opt_ver'                          : 'federer',
