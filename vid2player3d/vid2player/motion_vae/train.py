@@ -11,6 +11,8 @@ parser.add_argument('-e', '--exp', action='store', dest='exp_list',
                     help="Examples: -e v8.3.1.0")
 parser.add_argument('-p', '--pre-run', action='store_true')
 parser.add_argument('--no_log', action='store_true')
+parser.add_argument('--continue_train', action='store_true',
+                    help='Resume the latest checkpoint, including optimizer and completed epochs.')
 parser.add_argument('-t', '--run_test', action='store_true')
 
 parser.add_argument('-to', '--test_only', action='store_true')
@@ -31,6 +33,8 @@ if __name__ == '__main__':
         # load option 
         opt = MotionVAEOption()
         opt.load(version)
+        if args.continue_train:
+            opt.continue_train = True
         if args.pre_run:
             opt.quick_load = True
             opt.n_epochs = 5

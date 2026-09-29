@@ -50,6 +50,8 @@ class MotionVAEModel(object):
             self.model.eval()
 
         self.checkpoint_dir = os.path.join(opt.checkpoint_dir, opt.model_ver)
+        self.start_epoch = 0  # Number of fully completed epochs.
+        self.total_iters = 0  # Number of sampled training windows.
         if not opt.test_only and not opt.continue_train:
             if os.path.exists(self.checkpoint_dir):
                 logging.warning("Checkpoint already exists!")
@@ -64,12 +66,21 @@ class MotionVAEModel(object):
         if not opt.no_log:
             self.writer = SummaryWriter(os.path.join(self.checkpoint_dir, 'logs'))
 
+        self.optimizer = torch.optim.Adam(self.model.parameters(), lr=opt.lr)
+        self.old_lr = opt.lr
+        self.scaler = torch.cuda.amp.GradScaler() if opt.use_amp else None
+
+        normalization = None
         if opt.continue_train:
-            self.load_checkpoint()
-            logging.info("Continue training with latest model")
+            normalization = self.load_checkpoint(resume=True)
+            logging.info("Continue training after epoch %d (%d sampled windows)",
+                         self.start_epoch, self.total_iters)
         
         self.dataset = Video3DPoseDataset(opt)
-        self.dataset.get_normalization_stats()
+        if normalization is None:
+            self.dataset.get_normalization_stats()
+        else:
+            self.dataset.set_normalization_stats(*normalization)
   
         self.trainset = DataLoader(
             self.dataset,
@@ -91,14 +102,6 @@ class MotionVAEModel(object):
                 drop_last=True,
                 num_workers=int(opt.num_threads))
 
-        self.optimizer = torch.optim.Adam(self.model.parameters(), lr=opt.lr)
-        self.old_lr = opt.lr
-
-        if opt.use_amp:
-            self.scaler = torch.cuda.amp.GradScaler()
-        else:
-            self.scaler = None
-        
         if opt.softmax_future:
             self.future_weights = torch.softmax(
                 torch.linspace(1, 0, opt.num_future_predictions), dim=0
@@ -114,12 +117,12 @@ class MotionVAEModel(object):
 
     def train(self):
         opt = self.opt
-        total_iters = 0
+        total_iters = self.total_iters
         train_start_time = time.time()
         train_loss_dict = defaultdict(float)
         num_batch_phase = 0
 
-        for epoch in range(0, opt.n_epochs + opt.n_epochs_decay):
+        for epoch in range(self.start_epoch, opt.n_epochs + opt.n_epochs_decay):
             epoch_start_time = time.time()
             if opt.mixed_phase_schedule:
                 trainset_no_phase_sampler = iter(self.trainset_no_phase)
@@ -155,6 +158,13 @@ class MotionVAEModel(object):
                     train_loss_dict = defaultdict(float)
                     num_batch_phase = 0
 
+            # Store the learning rate and progress for the next epoch, so a
+            # resumed run follows the same LR and curriculum schedules.
+            if epoch > opt.n_epochs:
+                self.update_learning_rate()
+            self.start_epoch = epoch + 1
+            self.total_iters = total_iters
+
             # save latest model
             if not opt.no_log:
                 self.save_checkpoint(label='latest')
@@ -166,8 +176,6 @@ class MotionVAEModel(object):
             logging.info('End of epoch %d / %d \t Time Taken: %d sec\n' % (
                 epoch + 1, opt.n_epochs + opt.n_epochs_decay, time.time() - train_start_time))
 
-            if epoch > opt.n_epochs:
-                self.update_learning_rate()
         if not opt.no_log:
             self.writer.close()
         logging.info('End of training Time Taken: %d sec\n' % (time.time() - train_start_time))
@@ -267,21 +275,61 @@ class MotionVAEModel(object):
 
 
     def save_checkpoint(self, label=None):
-        state_dict = self.model.state_dict()
-        torch.save(state_dict, os.path.join(self.checkpoint_dir, '{}.tar'.format(label)))
-        if self.opt.use_amp:
-            torch.save(self.scaler.state_dict(), os.path.join(self.checkpoint_dir, '{}_scaler.tar'.format(label)))
+        checkpoint = {
+            'format_version': 1,
+            'model_state_dict': self.model.state_dict(),
+            'optimizer_state_dict': self.optimizer.state_dict(),
+            'next_epoch': self.start_epoch,
+            'total_iters': self.total_iters,
+            'old_lr': self.old_lr,
+            'scaler_state_dict': self.scaler.state_dict() if self.scaler is not None else None,
+            'avg': torch.as_tensor(self.dataset.avg),
+            'std': torch.as_tensor(self.dataset.std),
+        }
+        checkpoint_path = os.path.join(self.checkpoint_dir, '{}.tar'.format(label))
+        # An interrupted write must not destroy the previous complete checkpoint.
+        temporary_path = checkpoint_path + '.tmp'
+        try:
+            torch.save(checkpoint, temporary_path)
+            os.replace(temporary_path, checkpoint_path)
+        finally:
+            if os.path.exists(temporary_path):
+                os.remove(temporary_path)
+        # Retain standalone statistics for existing tooling. New checkpoints
+        # also embed them, keeping weights and normalization paired per epoch.
         np.save(os.path.join(self.checkpoint_dir, 'avg.npy'), self.dataset.avg)
         np.save(os.path.join(self.checkpoint_dir, 'std.npy'), self.dataset.std)
 
 
-    def load_checkpoint(self, label='latest'):
+    def load_checkpoint(self, label='latest', resume=False):
         model_state_dict_path = os.path.join(self.checkpoint_dir, '{}.tar'.format(label))
-        self.model.load_state_dict(torch.load(model_state_dict_path))
+        checkpoint = torch.load(model_state_dict_path, map_location='cpu')
+        if 'model_state_dict' in checkpoint:
+            self.model.load_state_dict(checkpoint['model_state_dict'])
+            avg = checkpoint['avg'].cpu().numpy()
+            std = checkpoint['std'].cpu().numpy()
+            if resume:
+                self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+                self.start_epoch = checkpoint['next_epoch']
+                self.total_iters = checkpoint['total_iters']
+                self.old_lr = checkpoint['old_lr']
+                if self.scaler is not None and checkpoint['scaler_state_dict']:
+                    self.scaler.load_state_dict(checkpoint['scaler_state_dict'])
+        else:
+            # Legacy checkpoints contain model weights only.
+            self.model.load_state_dict(checkpoint)
+            avg = np.load(os.path.join(self.checkpoint_dir, 'avg.npy'))
+            std = np.load(os.path.join(self.checkpoint_dir, 'std.npy'))
+            if resume:
+                logging.warning(
+                    "Legacy weights-only MVAE checkpoint: optimizer and epoch state "
+                    "are unavailable. Warm-starting with a fresh optimizer and "
+                    "epoch/sample counters at zero; schedules restart.")
         logging.info("MotionAE checkpoint loaded from {}!".format(model_state_dict_path))
 
-        self.avg = torch.from_numpy(np.load(os.path.join(self.checkpoint_dir, 'avg.npy'))).float().to(self.device)
-        self.std = torch.from_numpy(np.load(os.path.join(self.checkpoint_dir, 'std.npy'))).float().to(self.device)
+        self.avg = torch.from_numpy(avg).float().to(self.device)
+        self.std = torch.from_numpy(std).float().to(self.device)
+        return avg, std
 
 
     def update_learning_rate(self):

@@ -116,6 +116,26 @@ python vid2player/motion_vae/train.py  --exp federer_physics &> mvae_logs.txt
 PYTHONPATH=. python -u vid2player/motion_vae/train.py  --exp federer_physics --test_only --run_test --record_cv  &> mvae_test_logs.txt
 ```
 
+Resume MVAE training from the latest completed epoch with:
+```bash
+PYTHONPATH=. python vid2player/motion_vae/train.py --exp federer_physics --continue_train
+```
+Setting `'continue_train': True` in the experiment's Python options has the same
+behavior. New `.tar` checkpoints bundle model weights, Adam state, the next epoch,
+sampled-window count, learning rate, AMP scaler state (when enabled), and feature
+normalization statistics. Resumption uses the saved normalization and continues
+through the configured total `n_epochs + n_epochs_decay`; it does not add that
+many new epochs. Keep the dataset, architecture, and schedule options unchanged
+when continuing a run. Checkpoints are saved at epoch boundaries, so work after
+the last saved epoch is repeated. Random-number and data-loader states are not
+restored, so resumed sampling need not exactly match an uninterrupted run.
+
+Older weights-only checkpoints remain usable for inference. Continuing training
+from one logs a warning and starts a fresh optimizer and epoch schedule, because
+those checkpoints never saved the missing state. `--no_log` also disables
+checkpoint saving. Standalone `avg.npy` and `std.npy` files are still written;
+new checkpoints additionally contain their own matching statistics.
+
 Motion exports are saved as `exports/<params.config.name>/<source_sequence_basename>.pk`.
 The basename comes from the original sequence name stored in the motion library,
 not the library shard filename. For `tennis_im_training_2`, the directory is
