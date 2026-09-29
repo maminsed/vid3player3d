@@ -1,66 +1,196 @@
 # Paths are relative to this YAML file. Each entry must identify a motion-library .pth.
 motions:
-  - file: "../../data/motion_lib_ik/Adrian_Mannarino_vs._Jiri_Lehecka_reencoded-scene000-000/mlib_part_00000.pth"
+  - file : "../../data/motion_lib_ik/Adrian_Mannarino_vs._Jiri_Lehecka_reencoded-scene000-000/mlib_part_00000.pth"
     weight: 1.0
-  - file: "../../data/motion_lib_ik/Adrian_Mannarino_vs._Jiri_Lehecka_reencoded-scene000-001/mlib_part_00000.pth"
+  - file : "../../data/motion_lib_ik/Adrian_Mannarino_vs._Jiri_Lehecka_reencoded-scene000-001/mlib_part_00000.pth"
     weight: 1.0
-  - file: "../../data/motion_lib_ik/Adrian_Mannarino_vs._Jiri_Lehecka_reencoded-scene000-002/mlib_part_00000.pth"
+  - file : "../../data/motion_lib_ik/Adrian_Mannarino_vs._Jiri_Lehecka_reencoded-scene000-002/mlib_part_00000.pth"
     weight: 1.0
-  - file: "../../data/motion_lib_ik/Adrian_Mannarino_vs._Jiri_Lehecka_reencoded-scene005-000/mlib_part_00000.pth"
+  - file : "../../data/motion_lib_ik/Adrian_Mannarino_vs._Jiri_Lehecka_reencoded-scene005-000/mlib_part_00000.pth"
     weight: 1.0
-  - file: "../../data/motion_lib_ik/Adrian_Mannarino_vs._Jiri_Lehecka_reencoded-scene009-000/mlib_part_00000.pth"
+  - file : "../../data/motion_lib_ik/Adrian_Mannarino_vs._Jiri_Lehecka_reencoded-scene009-000/mlib_part_00000.pth"
     weight: 1.0
-  - file: "../../data/motion_lib_ik/Adrian_Mannarino_vs._Jiri_Lehecka_reencoded-scene009-001/mlib_part_00000.pth"
+  - file : "../../data/motion_lib_ik/Adrian_Mannarino_vs._Jiri_Lehecka_reencoded-scene009-001/mlib_part_00000.pth"
     weight: 1.0
-  - file: "../../data/motion_lib_ik/Adrian_Mannarino_vs._Jiri_Lehecka_reencoded-scene012-000/mlib_part_00000.pth"
+  - file : "../../data/motion_lib_ik/Adrian_Mannarino_vs._Jiri_Lehecka_reencoded-scene012-000/mlib_part_00000.pth"
     weight: 1.0
-  - file: "../../data/motion_lib_ik/Adrian_Mannarino_vs._Jiri_Lehecka_reencoded-scene019-000/mlib_part_00000.pth"
+  - file : "../../data/motion_lib_ik/Adrian_Mannarino_vs._Jiri_Lehecka_reencoded-scene019-000/mlib_part_00000.pth"
     weight: 1.0
-  - file: "../../data/motion_lib_ik/Adrian_Mannarino_vs._Jiri_Lehecka_reencoded-scene021-000/mlib_part_00000.pth"
+  - file : "../../data/motion_lib_ik/Adrian_Mannarino_vs._Jiri_Lehecka_reencoded-scene021-000/mlib_part_00000.pth"
     weight: 1.0
-  - file: "../../data/motion_lib_ik/Adrian_Mannarino_vs._Jiri_Lehecka_reencoded-scene026-000/mlib_part_00000.pth"
+  - file : "../../data/motion_lib_ik/Adrian_Mannarino_vs._Jiri_Lehecka_reencoded-scene026-000/mlib_part_00000.pth"
     weight: 1.0
-  - file: "../../data/motion_lib_ik/Alexander_Bublik_vs._Tommy_Paul_reencoded-scene000-000/mlib_part_00000.pth"
+  - file : "../../data/motion_lib_ik/Alexander_Bublik_vs._Tommy_Paul_reencoded-scene000-000/mlib_part_00000.pth"
     weight: 1.0
-  - file: "../../data/motion_lib_ik/Alexander_Bublik_vs._Tommy_Paul_reencoded-scene001-000/mlib_part_00000.pth"
+  - file : "../../data/motion_lib_ik/Alexander_Bublik_vs._Tommy_Paul_reencoded-scene001-000/mlib_part_00000.pth"
     weight: 1.0
-  # Not generated yet; uncomment this entry after conversion.
-  # - file: "../../data/motion_lib_ik/Alexander_Bublik_vs._Tommy_Paul_reencoded-scene002-000/mlib_part_00000.pth"
+  - file : "../../data/motion_lib_ik/Alexander_Bublik_vs._Tommy_Paul_reencoded-scene002-000/mlib_part_00000.pth"
+    weight: 1.0
+  - file : "../../data/motion_lib_ik/Alexander_Bublik_vs._Tommy_Paul_reencoded-scene005-000/mlib_part_00000.pth"
+    weight: 1.0
+  - file : "../../data/motion_lib_ik/Alexander_Bublik_vs._Tommy_Paul_reencoded-scene005-001/mlib_part_00000.pth"
+    weight: 1.0
+  - file : "../../data/motion_lib_ik/Alexander_Bublik_vs._Tommy_Paul_reencoded-scene007-000/mlib_part_00000.pth"
+    weight: 1.0
+  - file : "../../data/motion_lib_ik/Alexander_Bublik_vs._Tommy_Paul_reencoded-scene011-000/mlib_part_00000.pth"
+    weight: 1.0
+  - file : "../../data/motion_lib_ik/Alexander_Bublik_vs._Tommy_Paul_reencoded-scene017-000/mlib_part_00000.pth"
+    weight: 1.0
+  - file : "../../data/motion_lib_ik/Alexander_Bublik_vs._Tommy_Paul_reencoded-scene021-000/mlib_part_00000.pth"
+    weight: 1.0
+  - file : "../../data/motion_lib_ik/Alexander_Bublik_vs._Tommy_Paul_reencoded-scene021-001/mlib_part_00000.pth"
+    weight: 1.0
+  - file : "../../data/motion_lib_ik/Alexander_Bublik_vs._Tommy_Paul_reencoded-scene022-000/mlib_part_00000.pth"
+    weight: 1.0
+  # - file : "../../data/motion_lib_ik/Alexander_Zverev_vs._Felix_Auger-Aliassime_reencoded-scene001-000/mlib_part_00000.pth"
   #   weight: 1.0
-  - file: "../../data/motion_lib_ik/Alexander_Bublik_vs._Tommy_Paul_reencoded-scene005-000/mlib_part_00000.pth"
+  - file : "../../data/motion_lib_ik/Alexander_Zverev_vs._Felix_Auger-Aliassime_reencoded-scene004-000/mlib_part_00000.pth"
     weight: 1.0
-  - file: "../../data/motion_lib_ik/Alexander_Bublik_vs._Tommy_Paul_reencoded-scene005-001/mlib_part_00000.pth"
+  - file : "../../data/motion_lib_ik/Alexander_Zverev_vs._Felix_Auger-Aliassime_reencoded-scene010-000/mlib_part_00000.pth"
     weight: 1.0
-  - file: "../../data/motion_lib_ik/Alexander_Bublik_vs._Tommy_Paul_reencoded-scene007-000/mlib_part_00000.pth"
+  - file : "../../data/motion_lib_ik/Alexander_Zverev_vs._Felix_Auger-Aliassime_reencoded-scene014-000/mlib_part_00000.pth"
     weight: 1.0
-  - file: "../../data/motion_lib_ik/Alexander_Bublik_vs._Tommy_Paul_reencoded-scene011-000/mlib_part_00000.pth"
+  - file : "../../data/motion_lib_ik/Alexander_Zverev_vs._Felix_Auger-Aliassime_reencoded-scene014-001/mlib_part_00000.pth"
     weight: 1.0
-  # Not generated yet; uncomment this entry after conversion.
-  # - file: "../../data/motion_lib_ik/Alexander_Bublik_vs._Tommy_Paul_reencoded-scene011-001/mlib_part_00000.pth"
-  #   weight: 1.0
-  - file: "../../data/motion_lib_ik/Alexander_Bublik_vs._Tommy_Paul_reencoded-scene017-000/mlib_part_00000.pth"
+  - file : "../../data/motion_lib_ik/Alexander_Zverev_vs._Felix_Auger-Aliassime_reencoded-scene018-000/mlib_part_00000.pth"
     weight: 1.0
-  - file: "../../data/motion_lib_ik/Alexander_Bublik_vs._Tommy_Paul_reencoded-scene021-000/mlib_part_00000.pth"
+  - file : "../../data/motion_lib_ik/Alexander_Zverev_vs._Felix_Auger-Aliassime_reencoded-scene018-001/mlib_part_00000.pth"
     weight: 1.0
-  - file: "../../data/motion_lib_ik/Alexander_Bublik_vs._Tommy_Paul_reencoded-scene021-001/mlib_part_00000.pth"
+  - file : "../../data/motion_lib_ik/Alexander_Zverev_vs._Felix_Auger-Aliassime_reencoded-scene021-000/mlib_part_00000.pth"
     weight: 1.0
-  - file: "../../data/motion_lib_ik/Alexander_Bublik_vs._Tommy_Paul_reencoded-scene022-000/mlib_part_00000.pth"
+  - file : "../../data/motion_lib_ik/Alexander_Zverev_vs._Felix_Auger-Aliassime_reencoded-scene022-000/mlib_part_00000.pth"
     weight: 1.0
-  - file: "../../data/motion_lib_ik/Alexander_Zverev_vs._Felix_Auger-Aliassime_reencoded-scene001-000/mlib_part_00000.pth"
+  - file : "../../data/motion_lib_ik/Alexander_Bublik_vs._Tommy_Paul_reencoded-scene002-000/mlib_part_00000.pth"
     weight: 1.0
-  - file: "../../data/motion_lib_ik/Alexander_Zverev_vs._Felix_Auger-Aliassime_reencoded-scene004-000/mlib_part_00000.pth"
+  - file : "../../data/motion_lib_ik/Alexander_Zverev_vs._Felix_Auger-Aliassime_reencoded-scene024-000/mlib_part_00000.pth"
     weight: 1.0
-  - file: "../../data/motion_lib_ik/Alexander_Zverev_vs._Felix_Auger-Aliassime_reencoded-scene010-000/mlib_part_00000.pth"
+  - file : "../../data/motion_lib_ik/Alexander_Zverev_vs._Felix_Auger-Aliassime_reencoded-scene026-000/mlib_part_00000.pth"
     weight: 1.0
-  - file: "../../data/motion_lib_ik/Alexander_Zverev_vs._Felix_Auger-Aliassime_reencoded-scene014-000/mlib_part_00000.pth"
+  - file : "../../data/motion_lib_ik/Amanda_Anisimova_vs._Beatriz_Haddad_Maia_reencoded-scene000-000/mlib_part_00000.pth"
     weight: 1.0
-  - file: "../../data/motion_lib_ik/Alexander_Zverev_vs._Felix_Auger-Aliassime_reencoded-scene014-001/mlib_part_00000.pth"
+  - file : "../../data/motion_lib_ik/Amanda_Anisimova_vs._Beatriz_Haddad_Maia_reencoded-scene000-001/mlib_part_00000.pth"
     weight: 1.0
-  - file: "../../data/motion_lib_ik/Alexander_Zverev_vs._Felix_Auger-Aliassime_reencoded-scene018-000/mlib_part_00000.pth"
+  - file : "../../data/motion_lib_ik/Amanda_Anisimova_vs._Beatriz_Haddad_Maia_reencoded-scene001-000/mlib_part_00000.pth"
     weight: 1.0
-  - file: "../../data/motion_lib_ik/Alexander_Zverev_vs._Felix_Auger-Aliassime_reencoded-scene018-001/mlib_part_00000.pth"
+  - file : "../../data/motion_lib_ik/Amanda_Anisimova_vs._Beatriz_Haddad_Maia_reencoded-scene001-001/mlib_part_00000.pth"
     weight: 1.0
-  - file: "../../data/motion_lib_ik/Alexander_Zverev_vs._Felix_Auger-Aliassime_reencoded-scene021-000/mlib_part_00000.pth"
+  - file : "../../data/motion_lib_ik/Amanda_Anisimova_vs._Beatriz_Haddad_Maia_reencoded-scene003-000/mlib_part_00000.pth"
     weight: 1.0
-  - file: "../../data/motion_lib_ik/Alexander_Zverev_vs._Felix_Auger-Aliassime_reencoded-scene022-000/mlib_part_00000.pth"
+  - file : "../../data/motion_lib_ik/Amanda_Anisimova_vs._Beatriz_Haddad_Maia_reencoded-scene012-000/mlib_part_00000.pth"
+    weight: 1.0
+  - file : "../../data/motion_lib_ik/Amanda_Anisimova_vs._Beatriz_Haddad_Maia_reencoded-scene015-000/mlib_part_00000.pth"
+    weight: 1.0
+  - file : "../../data/motion_lib_ik/Amanda_Anisimova_vs._Beatriz_Haddad_Maia_reencoded-scene015-001/mlib_part_00000.pth"
+    weight: 1.0
+  - file : "../../data/motion_lib_ik/Amanda_Anisimova_vs._Beatriz_Haddad_Maia_reencoded-scene016-000/mlib_part_00000.pth"
+    weight: 1.0
+  - file : "../../data/motion_lib_ik/Amanda_Anisimova_vs._Beatriz_Haddad_Maia_reencoded-scene018-001/mlib_part_00000.pth"
+    weight: 1.0
+  - file : "../../data/motion_lib_ik/Amanda_Anisimova_vs._Iga_Swiatek_reencoded-scene000-000/mlib_part_00000.pth"
+    weight: 1.0
+  - file : "../../data/motion_lib_ik/Amanda_Anisimova_vs._Iga_Swiatek_reencoded-scene009-000/mlib_part_00000.pth"
+    weight: 1.0
+  - file : "../../data/motion_lib_ik/Amanda_Anisimova_vs._Iga_Swiatek_reencoded-scene012-000/mlib_part_00000.pth"
+    weight: 1.0
+  - file : "../../data/motion_lib_ik/Amanda_Anisimova_vs._Iga_Swiatek_reencoded-scene012-001/mlib_part_00000.pth"
+    weight: 1.0
+  - file : "../../data/motion_lib_ik/Amanda_Anisimova_vs._Iga_Swiatek_reencoded-scene017-000/mlib_part_00000.pth"
+    weight: 1.0
+  - file : "../../data/motion_lib_ik/Amanda_Anisimova_vs._Iga_Swiatek_reencoded-scene027-000/mlib_part_00000.pth"
+    weight: 1.0
+  - file : "../../data/motion_lib_ik/Amanda_Anisimova_vs._Iga_Swiatek_reencoded-scene027-001/mlib_part_00000.pth"
+    weight: 1.0
+  - file : "../../data/motion_lib_ik/Amanda_Anisimova_vs._Iga_Swiatek_reencoded-scene033-000/mlib_part_00000.pth"
+    weight: 1.0
+  - file : "../../data/motion_lib_ik/Amanda_Anisimova_vs._Iga_Swiatek_reencoded-scene037-000/mlib_part_00000.pth"
+    weight: 1.0
+  - file : "../../data/motion_lib_ik/Anna_Kalinskaya_vs._Iga_Swiatek_reencoded-scene001-000/mlib_part_00000.pth"
+    weight: 1.0
+  - file : "../../data/motion_lib_ik/Anna_Kalinskaya_vs._Iga_Swiatek_reencoded-scene003-000/mlib_part_00000.pth"
+    weight: 1.0
+  - file : "../../data/motion_lib_ik/Anna_Kalinskaya_vs._Iga_Swiatek_reencoded-scene003-001/mlib_part_00000.pth"
+    weight: 1.0
+  - file : "../../data/motion_lib_ik/Anna_Kalinskaya_vs._Iga_Swiatek_reencoded-scene004-000/mlib_part_00000.pth"
+    weight: 1.0
+  - file : "../../data/motion_lib_ik/Anna_Kalinskaya_vs._Iga_Swiatek_reencoded-scene006-000/mlib_part_00000.pth"
+    weight: 1.0
+  - file : "../../data/motion_lib_ik/Anna_Kalinskaya_vs._Iga_Swiatek_reencoded-scene012-000/mlib_part_00000.pth"
+    weight: 1.0
+  - file : "../../data/motion_lib_ik/Anna_Kalinskaya_vs._Iga_Swiatek_reencoded-scene014-000/mlib_part_00000.pth"
+    weight: 1.0
+  - file : "../../data/motion_lib_ik/Anna_Kalinskaya_vs._Iga_Swiatek_reencoded-scene014-001/mlib_part_00000.pth"
+    weight: 1.0
+  - file : "../../data/motion_lib_ik/Anna_Kalinskaya_vs._Iga_Swiatek_reencoded-scene016-000/mlib_part_00000.pth"
+    weight: 1.0
+  - file : "../../data/motion_lib_ik/Anna_Kalinskaya_vs._Iga_Swiatek_reencoded-scene019-000/mlib_part_00000.pth"
+    weight: 1.0
+  - file : "../../data/motion_lib_ik/Arthur_Rinderknech_vs._Carlos_Alcaraz_reencoded-scene001-000/mlib_part_00000.pth"
+    weight: 1.0
+  - file : "../../data/motion_lib_ik/Arthur_Rinderknech_vs._Carlos_Alcaraz_reencoded-scene007-000/mlib_part_00000.pth"
+    weight: 1.0
+  - file : "../../data/motion_lib_ik/Arthur_Rinderknech_vs._Carlos_Alcaraz_reencoded-scene016-000/mlib_part_00000.pth"
+    weight: 1.0
+  - file : "../../data/motion_lib_ik/Arthur_Rinderknech_vs._Carlos_Alcaraz_reencoded-scene027-000/mlib_part_00000.pth"
+    weight: 1.0
+  - file : "../../data/motion_lib_ik/Arthur_Rinderknech_vs._Carlos_Alcaraz_reencoded-scene032-000/mlib_part_00000.pth"
+    weight: 1.0
+  - file : "../../data/motion_lib_ik/Arthur_Rinderknech_vs._Carlos_Alcaraz_reencoded-scene041-000/mlib_part_00000.pth"
+    weight: 1.0
+  - file : "../../data/motion_lib_ik/Arthur_Rinderknech_vs._Carlos_Alcaraz_reencoded-scene047-000/mlib_part_00000.pth"
+    weight: 1.0
+  - file : "../../data/motion_lib_ik/Arthur_Rinderknech_vs._Carlos_Alcaraz_reencoded-scene055-000/mlib_part_00000.pth"
+    weight: 1.0
+  - file : "../../data/motion_lib_ik/Aryna_Sabalenka_vs._Amanda_Anisimova_reencoded-scene000-000/mlib_part_00000.pth"
+    weight: 1.0
+  - file : "../../data/motion_lib_ik/Aryna_Sabalenka_vs._Amanda_Anisimova_reencoded-scene000-001/mlib_part_00000.pth"
+    weight: 1.0
+  - file : "../../data/motion_lib_ik/Aryna_Sabalenka_vs._Amanda_Anisimova_reencoded-scene002-000/mlib_part_00000.pth"
+    weight: 1.0
+  - file : "../../data/motion_lib_ik/Aryna_Sabalenka_vs._Amanda_Anisimova_reencoded-scene006-000/mlib_part_00000.pth"
+    weight: 1.0
+  - file : "../../data/motion_lib_ik/Aryna_Sabalenka_vs._Amanda_Anisimova_reencoded-scene006-001/mlib_part_00000.pth"
+    weight: 1.0
+  - file : "../../data/motion_lib_ik/Aryna_Sabalenka_vs._Amanda_Anisimova_reencoded-scene008-000/mlib_part_00000.pth"
+    weight: 1.0
+  - file : "../../data/motion_lib_ik/Aryna_Sabalenka_vs._Amanda_Anisimova_reencoded-scene010-000/mlib_part_00000.pth"
+    weight: 1.0
+  - file : "../../data/motion_lib_ik/Aryna_Sabalenka_vs._Amanda_Anisimova_reencoded-scene011-000/mlib_part_00000.pth"
+    weight: 1.0
+  - file : "../../data/motion_lib_ik/Aryna_Sabalenka_vs._Amanda_Anisimova_reencoded-scene011-001/mlib_part_00000.pth"
+    weight: 1.0
+  - file : "../../data/motion_lib_ik/Aryna_Sabalenka_vs._Amanda_Anisimova_reencoded-scene011-002/mlib_part_00000.pth"
+    weight: 1.0
+  - file : "../../data/motion_lib_ik/Aryna_Sabalenka_vs._Amanda_Anisimova_reencoded-scene015-000/mlib_part_00000.pth"
+    weight: 1.0
+  - file : "../../data/motion_lib_ik/Aryna_Sabalenka_vs._Amanda_Anisimova_reencoded-scene017-000/mlib_part_00000.pth"
+    weight: 1.0
+  - file : "../../data/motion_lib_ik/Aryna_Sabalenka_vs._Cristina_Bucsa_reencoded-scene001-000/mlib_part_00000.pth"
+    weight: 1.0
+  - file : "../../data/motion_lib_ik/Aryna_Sabalenka_vs._Cristina_Bucsa_reencoded-scene003-000/mlib_part_00000.pth"
+    weight: 1.0
+  - file : "../../data/motion_lib_ik/Aryna_Sabalenka_vs._Cristina_Bucsa_reencoded-scene007-000/mlib_part_00000.pth"
+    weight: 1.0
+  - file : "../../data/motion_lib_ik/Aryna_Sabalenka_vs._Cristina_Bucsa_reencoded-scene007-001/mlib_part_00000.pth"
+    weight: 1.0
+  - file : "../../data/motion_lib_ik/Aryna_Sabalenka_vs._Cristina_Bucsa_reencoded-scene013-000/mlib_part_00000.pth"
+    weight: 1.0
+  - file : "../../data/motion_lib_ik/Aryna_Sabalenka_vs._Cristina_Bucsa_reencoded-scene021-000/mlib_part_00000.pth"
+    weight: 1.0
+  - file : "../../data/motion_lib_ik/Aryna_Sabalenka_vs._Cristina_Bucsa_reencoded-scene025-000/mlib_part_00000.pth"
+    weight: 1.0
+  - file : "../../data/motion_lib_ik/Aryna_Sabalenka_vs._Cristina_Bucsa_reencoded-scene028-000/mlib_part_00000.pth"
+    weight: 1.0
+  - file : "../../data/motion_lib_ik/Aryna_Sabalenka_vs._Cristina_Bucsa_reencoded-scene031-000/mlib_part_00000.pth"
+    weight: 1.0
+  - file : "../../data/motion_lib_ik/Aryna_Sabalenka_vs._Cristina_Bucsa_reencoded-scene034-000/mlib_part_00000.pth"
+    weight: 1.0
+  - file : "../../data/motion_lib_ik/Aryna_Sabalenka_vs._Jessica_Pegula_reencoded-scene001-000/mlib_part_00000.pth"
+    weight: 1.0
+  - file : "../../data/motion_lib_ik/Aryna_Sabalenka_vs._Jessica_Pegula_reencoded-scene001-001/mlib_part_00000.pth"
+    weight: 1.0
+  - file : "../../data/motion_lib_ik/Aryna_Sabalenka_vs._Jessica_Pegula_reencoded-scene004-000/mlib_part_00000.pth"
+    weight: 1.0
+  - file : "../../data/motion_lib_ik/Aryna_Sabalenka_vs._Jessica_Pegula_reencoded-scene017-000/mlib_part_00000.pth"
+    weight: 1.0
+  - file : "../../data/motion_lib_ik/Aryna_Sabalenka_vs._Jessica_Pegula_reencoded-scene019-000/mlib_part_00000.pth"
     weight: 1.0

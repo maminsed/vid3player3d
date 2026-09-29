@@ -42,8 +42,8 @@ motions:
     weight: 1.0
   - file : "../../data/motion_lib_ik/Alexander_Bublik_vs._Tommy_Paul_reencoded-scene022-000/mlib_part_00000.pth"
     weight: 1.0
-  - file : "../../data/motion_lib_ik/Alexander_Zverev_vs._Felix_Auger-Aliassime_reencoded-scene001-000/mlib_part_00000.pth"
-    weight: 1.0
+  # - file : "../../data/motion_lib_ik/Alexander_Zverev_vs._Felix_Auger-Aliassime_reencoded-scene001-000/mlib_part_00000.pth"
+  #   weight: 1.0
   - file : "../../data/motion_lib_ik/Alexander_Zverev_vs._Felix_Auger-Aliassime_reencoded-scene004-000/mlib_part_00000.pth"
     weight: 1.0
   - file : "../../data/motion_lib_ik/Alexander_Zverev_vs._Felix_Auger-Aliassime_reencoded-scene010-000/mlib_part_00000.pth"
