@@ -202,8 +202,13 @@ class Video3DPoseDataset(Dataset):
             start = self.rollouts[idx]
         else:
             start = random.choices(self.rollouts, k=1)[0]
-        end = start + self.nframes_seq + 1
-        L = self.nframes_seq
+        return self.get_window(start, self.nframes_seq)
+
+    def get_window(self, start, nframes):
+        """Read frames start+1..start+nframes, using start for velocities."""
+        opt = self.opt
+        end = start + nframes + 1
+        L = nframes
 
         feature = None
         # the actual frame starts at start + 1

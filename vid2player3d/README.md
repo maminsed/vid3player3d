@@ -112,9 +112,51 @@ python vid2player/motion_vae/convert_export_dataset.py --input-yaml exports/moti
 
 python vid2player/motion_vae/train.py  --exp federer_physics &> mvae_logs.txt
 
-#to run test
-PYTHONPATH=. python -u vid2player/motion_vae/train.py  --exp federer_physics --test_only --run_test --record_cv  &> mvae_test_logs.txt
+# Record a named sequence against its MVAE reconstruction (no display required).
+PYTHONPATH=..:. python -u vid2player/motion_vae/train.py --exp usopen --test_only \
+  --name demo_Adrian_Mannarino_vs._Jiri_Lehecka_reencoded-scene000-000 --resample 20
 ```
+
+`--test_only` (also `--test-only`) now loads `latest.tar` and records a named
+sequence from the experiment's `dataset_dir`. `--name` accepts a manifest video
+name, source key, or unique export filename/stem. For ambiguous names, use
+`VIDEO:fg:INDEX` or `VIDEO:bg:INDEX` (zero-based sequence index). The experiment's
+normal dataset filters still apply.
+
+The test always writes `reconstruction.mp4`, `metrics.png`, `history.csv`, and
+`summary.json` into a timestamped directory under
+`out/motionVAE/<model_ver><suffix>/`. The MP4 overlays the orange ground truth at 35% opacity and the opaque blue
+reconstruction on one tennis court, with a fixed perspective camera centered behind
+the near baseline, root trails, and weighted reconstruction/KL losses in the upper
+left. It uses the same PIL/ImageIO approach as EmbodiedPose's headless debug video;
+no viewer, OpenGL, browser, or X server is needed. The PNG shows both loss curves
+and root trajectories on the court; dotted vertical lines indicate resets.
+
+Without `--resample`, only the initial conditioning state comes from ground truth.
+`--resample N` resets the entire conditioning history and accumulated root to ground
+truth after each N predictions, before predicting the next frame. `--resample 1`
+is teacher forcing. Targets still enter the encoder on **every** step; the decoder
+uses the posterior mean latent for repeatable reconstruction, not random prior
+samples. This evaluates reconstruction with autoregressive conditioning, not a
+blind forecast. Losses use the training normalization and weights; CSV includes
+both raw and weighted values. The KL value describes the encoder posterior even
+though decoding uses its mean.
+
+The saved root position seeds playback; predicted root displacements are then
+integrated as in motion generation. Displayed joints are the decoder's direct
+root-relative joint-position outputs, not SMPL forward kinematics from its separate
+rotation outputs. All pose features contribute to reconstruction loss, measured
+before replacing the conditioning root with the integrated root. No court
+recentering, ground snapping, or boundary teleporting hides drift.
+
+By default the full sequence is recorded. Its first frame is reserved for velocity
+calculation, and the following `num_condition_frames` frames seed the model and
+have no evaluation loss. `--nframes N` caps recorded frames. Sequences with invalid
+frames are rejected. This recorder supports the existing one-step prediction
+configs with full XYZ root features and joint-position features. Phase labels are
+not required for pose/KL evaluation, and phase loss is not evaluated. `--run_test`
+retains the old random-motion preview after training; its viewer/HTML flags do not
+apply to `--test_only`.
 
 Resume MVAE training from the latest completed epoch with:
 ```bash

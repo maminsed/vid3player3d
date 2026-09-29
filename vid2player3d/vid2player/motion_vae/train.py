@@ -15,9 +15,13 @@ parser.add_argument('--continue_train', action='store_true',
                     help='Resume the latest checkpoint, including optimizer and completed epochs.')
 parser.add_argument('-t', '--run_test', action='store_true')
 
-parser.add_argument('-to', '--test_only', action='store_true')
+parser.add_argument('-to', '--test_only', '--test-only', action='store_true',
+                    help='Record a named ground-truth versus MVAE reconstruction MP4.')
+parser.add_argument('--name', help='Manifest video/sequence name, source key, or unique export filename stem.')
+parser.add_argument('--resample', type=int, help='Reset conditioning pose and root from ground truth every N predictions.')
 parser.add_argument('-i', '--interactive', action='store_true')
-parser.add_argument('-n', '--nframes', action='store', type=int, default=1000)
+parser.add_argument('-n', '--nframes', action='store', type=int, default=None,
+                    help='Maximum recorded frames (test_only defaults to the full sequence).')
 parser.add_argument('-a', '--nactors', action='store', type=int, default=5)
 parser.add_argument('--ntests', action='store', type=int, default=1)
 parser.add_argument('--suffix', action='store', type=str, default='')
@@ -25,6 +29,16 @@ parser.add_argument('--record_html', action='store_true')
 parser.add_argument('--record_cv', action='store_true')
 
 args = parser.parse_args()
+if args.test_only and not args.name:
+    parser.error('--test_only requires --name')
+if args.resample is not None and args.resample <= 0:
+    parser.error('--resample must be a positive integer')
+if (args.name is not None or args.resample is not None) and not args.test_only:
+    parser.error('--name and --resample require --test_only')
+if args.nframes is not None and args.nframes < 2:
+    parser.error('--nframes must be at least 2')
+if args.test_only and (args.interactive or args.record_html):
+    parser.error('--test_only records MP4 and PNG directly; omit --interactive/--record_html')
 
 
 if __name__ == '__main__':
@@ -48,8 +62,13 @@ if __name__ == '__main__':
             opt.print()
             motion_vae.train()
 
-        # run test
-        if args.run_test or args.test_only:
+        if args.test_only:
+            from vid2player.motion_vae.reconstruction import record_reconstruction
+            record_reconstruction(opt, args.name, resample=args.resample,
+                                  nframes=args.nframes, suffix=args.suffix)
+
+        # Preserve the random-generation preview after training.
+        elif args.run_test:
             from vid2player.motion_vae.test import test_motion_vae_randomwalk
 
             print("Running test ... ")
@@ -60,7 +79,7 @@ if __name__ == '__main__':
                 num_test=args.ntests, 
                 num_runner=args.nactors, 
                 result_dir_suffix=args.suffix,
-                nframes=args.nframes, 
+                nframes=args.nframes or 1000,
                 interactive=args.interactive,
                 record_html=args.record_html,
                 record_cv=args.record_cv,
