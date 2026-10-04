@@ -34,7 +34,11 @@ class Video3DPoseDataset(Dataset):
     def __init__(
         self,
         opt,
+        split='all',
+        validation_videos=(),
     ):
+        if split not in ('all', 'train', 'validation'):
+            raise ValueError('Unknown dataset split: ' + split)
         self.opt = copy.deepcopy(opt)
         self.manifest = load_json(
             os.path.join(opt.dataset_dir, 'manifest.json'))
@@ -72,6 +76,8 @@ class Video3DPoseDataset(Dataset):
         betas = []
         # Fliter sequences
         for video in self.manifest:
+            if split == 'train' and video['name'] in validation_videos: continue
+            if split == 'validation' and video['name'] not in validation_videos: continue
             if video['background'] not in opt.background: continue
             if video['gender'] not in opt.gender: continue
             if opt.sport == 'tennis':
@@ -95,6 +101,7 @@ class Video3DPoseDataset(Dataset):
                         # These videos have player identity annotated
                         if opt.player_name is not None and seq['player'] not in opt.player_name: continue
                 seq = seq.copy()
+                seq['_video_name'] = video['name']
                 
                 if opt.predict_phase:
                     if not video.get('is_orig'): continue
@@ -119,6 +126,17 @@ class Video3DPoseDataset(Dataset):
 
         self.std, self.avg = None, None
 
+        if not self.sequences:
+            raise ValueError('No motion sequences pass the {} dataset filters.'.format(split))
+        if opt.database_ratio != 1.0:
+            count = int(len(self.sequences) * opt.database_ratio)
+            if count < 1 or count > len(self.sequences):
+                raise ValueError('database_ratio must retain at least one sequence and be <= 1.')
+            self.sequences = self.sequences[:count]
+            self.selected_arr[:] = 0
+            for seq in self.sequences:
+                self.selected_arr[seq['base']:seq['base'] + seq['length']] = 1
+
         self.seq_weights = np.array(
             [seq['length'] for seq in self.sequences], dtype=float)
         self.seq_weights /= np.sum(self.seq_weights)
@@ -129,11 +147,8 @@ class Video3DPoseDataset(Dataset):
     def init_rollouts(self, nframes_seq):
         self.nframes_seq = nframes_seq # nframes_seq might be different from opt.nframes_seq
         self.rollouts = []
-        if self.opt.database_ratio != 1.0:
-            total_seqs = int(len(self.sequences) * self.opt.database_ratio)
-            self.sequences = self.sequences[:total_seqs]
         for seq in self.sequences:
-            for x in range(seq['base'], seq['base'] + seq['length'] - nframes_seq - 1):
+            for x in range(seq['base'], seq['base'] + seq['length'] - nframes_seq):
                 if self.valid_arr[x : x + nframes_seq + 1].sum() == nframes_seq + 1:
                     self.rollouts += [x]
         
@@ -168,7 +183,16 @@ class Video3DPoseDataset(Dataset):
                 self.joint_rotmat_arr.reshape(-1, 24, 3, 3).copy())).numpy().reshape(-1, 24*6)
             feature_all = concat(feature_all, joint_rotmat, axis=1)
 
-        feature_all = feature_all[np.logical_and(self.valid_arr, self.selected_arr)]
+        # A transition needs two valid frames from the SAME selected sequence.
+        # In particular, np.roll above must never normalize cross-clip jumps.
+        transitions = np.zeros(len(self.valid_arr), dtype=bool)
+        for seq in self.sequences:
+            begin, end = seq['base'], seq['base'] + seq['length']
+            transitions[begin + 1:end] |= (self.valid_arr[begin + 1:end].astype(bool)
+                                          & self.valid_arr[begin:end - 1].astype(bool))
+        feature_all = feature_all[transitions & self.selected_arr.astype(bool)]
+        if len(feature_all) == 0 or not np.isfinite(feature_all).all():
+            raise ValueError('Normalization needs finite, valid within-sequence transitions.')
 
         std = np.std(feature_all, axis=0)
         std[std == 0] = 1.0

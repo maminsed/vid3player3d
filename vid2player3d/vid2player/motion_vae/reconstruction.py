@@ -11,6 +11,7 @@ import torch
 
 from vid2player.motion_vae.base import MotionVAEModel
 from vid2player.motion_vae.dataset import Video3DPoseDataset
+from vid2player.motion_vae.metrics import add_motion_metrics, summarize_rows
 
 
 # The dataset concatenates features in this order, regardless of pose_feature order.
@@ -67,7 +68,7 @@ def select_sequence(dataset, name):
 
 
 @torch.no_grad()
-def reconstruct(model, raw_features, roots, source_frames, fps, resample=None):
+def reconstruct(model, raw_features, roots, source_frames, fps, resample=None, latent_diagnostics=True):
     """Posterior-mean reconstruction with autoregressive conditioning and root integration.
 
     Targets enter the encoder every step. Only condition/root resets are periodic.
@@ -95,7 +96,10 @@ def reconstruct(model, raw_features, roots, source_frames, fps, resample=None):
         reset = i >= T and resample is not None and (i - T) > 0 and (i - T) % resample == 0
         row = dict(frame=int(source_frames[i]), time_s=float(source_frames[i] / fps),
                    conditioned_from_gt=int(i < T or reset), recon=None, kl=None,
-                   recon_weighted=None, kl_weighted=None)
+                   recon_weighted=None, kl_weighted=None,
+                   recon_zero_latent=None, latent_joint_effect_m=None)
+        for field in fields:
+            row['recon_' + field] = None
         if i >= T:
             if reset:
                 condition = truth[i - T:i].clone()
@@ -103,10 +107,20 @@ def reconstruct(model, raw_features, roots, source_frames, fps, resample=None):
             mu, logvar = model.model.encode(truth[i:i + 1], condition.reshape(1, -1))
             output = model.model.sample(mu, condition.reshape(1, -1)).reshape(-1)[:opt.frame_size]
             recon = (output - truth[i]).square().mean()
+            for field, indices in fields.items():
+                row['recon_' + field] = float((output[indices] - truth[i, indices]).square().mean())
             kl = (-0.5 * (1 + logvar - mu.square() - logvar.exp()).mean()).clamp_min(0)
             if not torch.isfinite(output).all() or not torch.isfinite(recon + kl):
                 raise ValueError('Non-finite prediction/loss at source frame {}.'.format(source_frames[i]))
             raw_output = model.unnormalize(output)
+            if latent_diagnostics:
+                zero_output = model.model.sample(torch.zeros_like(mu), condition.reshape(1, -1)).reshape(-1)[:opt.frame_size]
+                if not torch.isfinite(zero_output).all():
+                    raise ValueError('Non-finite zero-latent prediction.')
+                row['recon_zero_latent'] = float((zero_output - truth[i]).square().mean())
+                zero_raw = model.unnormalize(zero_output)
+                row['latent_joint_effect_m'] = float((raw_output[fields['joint_pos']] -
+                    zero_raw[fields['joint_pos']]).reshape(23, 3).norm(dim=-1).mean())
             root = root + raw_output[fields['root_velo']]
             predicted_roots[i] = root.cpu().numpy()
             predicted[i] = raw_output.cpu().numpy()
@@ -128,8 +142,13 @@ def reconstruct(model, raw_features, roots, source_frames, fps, resample=None):
         joints[actor, :, 1:] = features[:, fields['joint_pos']].reshape(-1, 23, 3)
     joints[0] += roots[:, None, :]
     joints[1] += predicted_roots[:, None, :]
-    return dict(rows=rows, joints=joints, roots=np.stack((roots, predicted_roots)),
-                predicted_features=predicted)
+    result = dict(rows=rows, joints=joints, roots=np.stack((roots, predicted_roots)),
+                  predicted_features=predicted)
+    add_motion_metrics(result, raw_features, fields, fps, opt)
+    for row in rows:
+        if any(value is not None and not np.isfinite(value) for value in row.values()):
+            raise ValueError('Non-finite motion metric at source frame {}.'.format(row['frame']))
+    return result
 
 
 def court_lines():
@@ -225,7 +244,11 @@ def render_frame(result, index, camera, title, resample):
     draw.text((16, 66), 'Frame {} | {:.2f}s | reset {}'.format(
         row['frame'], row['time_s'], 'every {} steps'.format(resample) if resample else 'at start only'),
         fill=(214, 222, 229, 255), font=font)
-    if row['conditioned_from_gt']:
+    if row.get('local_mpjpe_m') is not None:
+        draw.text((16, 94), 'Root error: {:.2f} cm | Local joint error: {:.2f} cm{}'.format(
+            row['root_error_m'] * 100, row['local_mpjpe_m'] * 100,
+            ' | GT reset' if row['conditioned_from_gt'] else ''), fill=(248, 222, 137, 255), font=font)
+    elif row['conditioned_from_gt']:
         draw.text((16, 94), 'Condition initialized from ground truth', fill=(248, 222, 137, 255), font=font)
     draw.rectangle((0, camera.height - 32, camera.width, camera.height), fill=(18, 27, 36, 255))
     draw.text((16, camera.height - 27), title[:145], fill='white', font=font)
@@ -239,14 +262,15 @@ def save_report(directory, result, metadata):
         writer.writeheader()
         writer.writerows(rows)
     evaluated = [row for row in rows if row['recon'] is not None]
-    metadata.update({name + '_mean': float(np.mean([row[name] for row in evaluated]))
-                     for name in ('recon', 'kl', 'recon_weighted', 'kl_weighted', 'root_error_m')})
+    metadata.update(summarize_rows(rows))
+    metadata['root_endpoint_error_m'] = evaluated[-1]['root_error_m']
+    metadata['metric_thresholds'] = result.get('metric_thresholds', {})
     (directory / 'summary.json').write_text(json.dumps(metadata, indent=2))
     from matplotlib.figure import Figure
     from matplotlib.backends.backend_agg import FigureCanvasAgg
-    figure = Figure(figsize=(13, 7), constrained_layout=True)
+    figure = Figure(figsize=(13, 17), constrained_layout=True)
     FigureCanvasAgg(figure)
-    grid = figure.add_gridspec(2, 2)
+    grid = figure.add_gridspec(5, 2)
     axes = [figure.add_subplot(grid[0, 0]), figure.add_subplot(grid[1, 0])]
     times = [row['time_s'] for row in evaluated]
     for ax, key, label in zip(axes, ('recon_weighted', 'kl_weighted'), ('Reconstruction loss', 'KL loss')):
@@ -256,7 +280,7 @@ def save_report(directory, result, metadata):
                 ax.axvline(row['time_s'], color='gray', linestyle=':', alpha=.35)
         ax.set(title=label + ' (weighted)', xlabel='Source time (s)', ylabel='Loss')
         ax.grid(alpha=.25)
-    court = figure.add_subplot(grid[:, 1])
+    court = figure.add_subplot(grid[:2, 1])
     for segment in court_lines():
         court.plot(segment[:, 0], segment[:, 1], color='gray', linewidth=1)
     court.plot([-5.9, 5.9], [0, 0], color='gray', linewidth=3, label='Net')
@@ -271,6 +295,23 @@ def save_report(directory, result, metadata):
     court.legend(fontsize=8)
     figure.suptitle('{}\nPosterior-mean reconstruction; resets: {}'.format(
         metadata['name'], metadata['resample'] or 'initial state only'), fontsize=9)
+    groups = [
+        (('root_error_m', 'root_consistency_m'), 'Root errors (m)'),
+        (('local_mpjpe_m', 'world_mpjpe_m', 'left_wrist_error_m', 'right_wrist_error_m'), 'Joint errors (m)'),
+        (('gt_root_speed_mps', 'pred_root_speed_mps'), 'Horizontal root speed (m/s)'),
+        (('gt_wrist_speed_mps', 'pred_wrist_speed_mps', 'pred_pose_wrist_speed_mps'), 'Maximum wrist speed (m/s)'),
+        (('root_velocity_bias_x_mps', 'root_velocity_bias_y_mps', 'root_velocity_bias_z_mps'), 'Signed root velocity error (m/s)'),
+        (('recon', 'recon_zero_latent'), 'Normalized MSE: posterior mean vs zero latent'),
+    ]
+    for index, (keys, title) in enumerate(groups):
+        ax = figure.add_subplot(grid[2 + index // 2, index % 2])
+        for key in keys:
+            values = [r.get(key) for r in evaluated]
+            if any(v is not None for v in values):
+                ax.plot(times, [np.nan if v is None else v for v in values], label=key)
+        ax.set(title=title, xlabel='Source time (s)')
+        ax.grid(alpha=.25)
+        ax.legend(fontsize=7)
     figure.savefig(str(directory / 'metrics.png'), dpi=140)
 
 
@@ -323,4 +364,7 @@ def record_reconstruction(opt, name, resample=None, nframes=None, suffix=''):
     print('Losses and root trajectories: {}'.format((directory / 'metrics.png').resolve()))
     print('Mean weighted recon: {:.6f}; KL: {:.6f}'.format(
         metadata['recon_weighted_mean'], metadata['kl_weighted_mean']))
+    print('Mean root error: {:.2f} cm; local joint error: {:.2f} cm; diagnostics: {}'.format(
+        metadata['root_error_m_mean'] * 100, metadata['local_mpjpe_m_mean'] * 100,
+        directory / 'metrics.png'))
     return directory

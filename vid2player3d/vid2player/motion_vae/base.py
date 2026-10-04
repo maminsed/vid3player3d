@@ -1,6 +1,7 @@
 from vid2player.motion_vae.config import *
 from vid2player.motion_vae.dataset import Video3DPoseDataset
 from vid2player.motion_vae.model import PoseMixtureVAE
+from vid2player.motion_vae.monitoring import train_tag, write_run_config
 from vid2player.utils.konia_transform import quaternion_to_angle_axis
 from vid2player.utils.torch_transform import rot6d_to_angle_axis
 
@@ -52,6 +53,8 @@ class MotionVAEModel(object):
         self.checkpoint_dir = os.path.join(opt.checkpoint_dir, opt.model_ver)
         self.start_epoch = 0  # Number of fully completed epochs.
         self.total_iters = 0  # Number of sampled training windows.
+        self.train_steps = 0  # Completed batches (each has L-T-S+1 optimizer updates).
+        self.validation_split = None
         if not opt.test_only and not opt.continue_train:
             if os.path.exists(self.checkpoint_dir):
                 logging.warning("Checkpoint already exists!")
@@ -76,12 +79,23 @@ class MotionVAEModel(object):
             logging.info("Continue training after epoch %d (%d sampled windows)",
                          self.start_epoch, self.total_iters)
         
-        self.dataset = Video3DPoseDataset(opt)
+        from vid2player.motion_vae.validation import prepare_validation_split, MotionValidation
+        self.validation_split = prepare_validation_split(opt, self.validation_split)
+        held_out = self.validation_split['validation_videos'] if self.validation_split else []
+        self.dataset = Video3DPoseDataset(opt, split='train', validation_videos=held_out)
+        if not self.dataset.rollouts:
+            raise ValueError('No training windows remain after dataset filtering/holdout.')
+        if len(self.dataset) < opt.batch_size:
+            raise ValueError('nseqs must be at least batch_size.')
         if normalization is None:
             self.dataset.get_normalization_stats()
         else:
             self.dataset.set_normalization_stats(*normalization)
   
+        self.avg = torch.as_tensor(self.dataset.avg, dtype=torch.float32, device=self.device)
+        self.std = torch.as_tensor(self.dataset.std, dtype=torch.float32, device=self.device)
+        self.validation = MotionValidation(opt, held_out) if held_out else None
+
         self.trainset = DataLoader(
             self.dataset,
             batch_size=opt.batch_size,
@@ -92,7 +106,7 @@ class MotionVAEModel(object):
         if self.opt.mixed_phase_schedule:
             opt_no_phase = copy.deepcopy(opt)
             opt_no_phase.predict_phase = False
-            self.dataset_no_phase = Video3DPoseDataset(opt_no_phase)
+            self.dataset_no_phase = Video3DPoseDataset(opt_no_phase, split='train', validation_videos=held_out)
             self.dataset_no_phase.set_normalization_stats(self.dataset.avg, self.dataset.std)
 
             self.trainset_no_phase = DataLoader(
@@ -113,6 +127,8 @@ class MotionVAEModel(object):
                 .div_(opt.num_future_predictions)
             ).to(self.device)
 
+        write_run_config(self)
+
     #-------------------------------------------------- Training ------------------------------------------------------------
 
     def train(self):
@@ -121,6 +137,10 @@ class MotionVAEModel(object):
         train_start_time = time.time()
         train_loss_dict = defaultdict(float)
         num_batch_phase = 0
+        last_validation_step = None
+        if self.validation is not None and self.start_epoch < opt.n_epochs + opt.n_epochs_decay:
+            self.validation.evaluate(self, self.train_steps, total_iters, self.start_epoch)
+            last_validation_step = self.train_steps
 
         for epoch in range(self.start_epoch, opt.n_epochs + opt.n_epochs_decay):
             epoch_start_time = time.time()
@@ -137,6 +157,11 @@ class MotionVAEModel(object):
                 total_iters += opt.batch_size
                 regressive = self.schedual_regressive_training(epoch)
                 loss_dict = self.train_batch(batch_data, regressive)
+                self.train_steps += 1
+                if self.validation is not None and self.train_steps % opt.validation_freq_steps == 0:
+                    self.validation.evaluate(self, self.train_steps, total_iters,
+                                             epoch + (total_iters - self.total_iters) / (len(self.trainset) * opt.batch_size))
+                    last_validation_step = self.train_steps
                 num_batch_phase += batch_data.get('phase') is not None
 
                 for k, v in loss_dict.items():
@@ -152,7 +177,7 @@ class MotionVAEModel(object):
                     # dump loss to log
                     if not opt.no_log:
                         for k, v in train_loss_dict.items():
-                            self.writer.add_scalar('train_loss/{}'.format(k), v, total_iters)
+                            self.writer.add_scalar(train_tag(k), v, total_iters)
                     # print loss to console
                     self.print_loss(epoch + 1, total_iters, time.time() - train_start_time, train_loss_dict)
                     train_loss_dict = defaultdict(float)
@@ -176,6 +201,8 @@ class MotionVAEModel(object):
             logging.info('End of epoch %d / %d \t Time Taken: %d sec\n' % (
                 epoch + 1, opt.n_epochs + opt.n_epochs_decay, time.time() - train_start_time))
 
+        if self.validation is not None and last_validation_step is not None and last_validation_step != self.train_steps:
+            self.validation.evaluate(self, self.train_steps, total_iters, self.start_epoch)
         if not opt.no_log:
             self.writer.close()
         logging.info('End of training Time Taken: %d sec\n' % (time.time() - train_start_time))
@@ -276,7 +303,9 @@ class MotionVAEModel(object):
 
     def save_checkpoint(self, label=None):
         checkpoint = {
-            'format_version': 1,
+            'format_version': 2,
+            'train_steps': self.train_steps,
+            'validation_split': self.validation_split,
             'model_state_dict': self.model.state_dict(),
             'optimizer_state_dict': self.optimizer.state_dict(),
             'next_epoch': self.start_epoch,
@@ -312,6 +341,8 @@ class MotionVAEModel(object):
                 self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
                 self.start_epoch = checkpoint['next_epoch']
                 self.total_iters = checkpoint['total_iters']
+                self.train_steps = checkpoint.get('train_steps', self.total_iters // self.opt.batch_size)
+                self.validation_split = checkpoint.get('validation_split')
                 self.old_lr = checkpoint['old_lr']
                 if self.scaler is not None and checkpoint['scaler_state_dict']:
                     self.scaler.load_state_dict(checkpoint['scaler_state_dict'])

@@ -129,8 +129,8 @@ The test always writes `reconstruction.mp4`, `metrics.png`, `history.csv`, and
 reconstruction on one tennis court, with a fixed perspective camera centered behind
 the near baseline, root trails, and weighted reconstruction/KL losses in the upper
 left. It uses the same PIL/ImageIO approach as EmbodiedPose's headless debug video;
-no viewer, OpenGL, browser, or X server is needed. The PNG shows both loss curves
-and root trajectories on the court; dotted vertical lines indicate resets.
+no viewer, OpenGL, browser, or X server is needed. The PNG combines loss curves, root trajectories on the court, and all physical
+motion/latent diagnostics; dotted vertical lines on the loss curves indicate resets.
 
 Without `--resample`, only the initial conditioning state comes from ground truth.
 `--resample N` resets the entire conditioning history and accumulated root to ground
@@ -323,3 +323,145 @@ minibatches collected during that training epoch, not individual batch records.
 TensorBoard uses training epoch as the horizontal step; the `frame` metric
 retains the rollout-frame counter. Files are flushed each epoch. This persistence
 was added to the custom imitation loop; older runs may have empty event files.
+
+MVAE validation and motion diagnostics
+------------------------------------
+
+The `usopen` experiment now writes a fresh baseline to `results/motionVAE/usopen_3`.
+It retains the existing model architecture, curriculum, KL weight, ten-frame
+training windows, and training feedback rule. Start the new baseline without
+`--continue_train`; resuming deliberately preserves a checkpoint's old statistics.
+
+```bash
+PYTHONPATH=..:. python -u vid2player/motion_vae/train.py --exp usopen > logs/mvae_logs.txt 2>&1
+tensorboard --logdir results/motionVAE/usopen_3/logs --port 6006
+```
+
+Configure validation in `vid2player/motion_vae/config.py`:
+
+| Option | `usopen` default | Meaning |
+| --- | --- | --- |
+| `validation_num_videos` | `2` | Hold out exactly this many individual manifest videos/clips; `0` disables validation. |
+| `validation_seed` | `1234` | Local deterministic split seed; does not seed the training run. |
+| `validation_freq_steps` | `3000` | Evaluate every N completed training **batches**, plus before training and at the end. Each current batch performs nine optimizer updates. |
+| `validation_window_frames` | `100` | Number of predicted frames in each short evaluation, excluding conditioning history. |
+| `validation_windows_per_video` | `3` | Fixed, evenly spaced valid windows per held-out video; windows can overlap. |
+| `metric_stationary_speed_mps` | `0.1` | A frame is stationary when GT horizontal root speed is below this threshold. |
+| `metric_fast_wrist_speed_mps` | `2.0` | A frame is fast when either GT world-space wrist speed meets this threshold. |
+
+The current dataset has 95 individual manifest videos/clips. Setting
+`validation_num_videos=2` holds out two and leaves 93 for training. Selection uses
+exact manifest video names; scene suffixes and source-match prefixes are not
+collapsed. Other clips from the same match remain eligible for training.
+`validation_video_regex` has been removed. Held-out names appear in the console and
+`run_config.json`. The split, count, seed,
+filters, and manifest identity are stored in checkpoints; changing the split on
+resume is rejected. Changing dataset arrays in place is not detected, so keep a
+run's dataset immutable.
+
+Normalization now uses only selected **training** sequences and valid consecutive
+frame pairs within each sequence. It excludes the first frame of each sequence,
+invalid predecessors, and jumps between unrelated clips. Validation and recording
+use the checkpoint's training statistics. Do not transplant new statistics into
+an old model: its learned weights expect the original feature scaling.
+
+TensorBoard uses a compact, aggregate dashboard (14 main cards for `usopen`):
+
+| Group | Cards |
+| --- | --- |
+| `train/` | `recon_loss`, `kl_loss` (training-weighted losses). |
+| `val_100/` | `recon_loss`, `kl_loss`, `root_error_m`, `local_joint_error_m`, `wrist_error_m`, `root_endpoint_error_m`. |
+| `val_full/` | The same six metrics over complete held-out sequences. |
+| `diagnostics/` | Secondary aggregate checks: one-step reconstruction, tail errors, velocity bias, root consistency, stationary/fast-motion errors, latent use, and failed rollouts. |
+
+The main validation cards use **autoregressive conditioning** with the posterior
+mean latent. One-step teacher-forced results are under `diagnostics/`, not mixed
+into those means. Both validation groups pool all held-out videos; wrist error
+averages the left and right wrists. If `validation_window_frames` changes, the
+short-window group changes accordingly (e.g. `val_200/`). Phase-supervised training
+also has `train/phase_loss`.
+
+For everyday monitoring, collapse `diagnostics/` or use TensorBoard's tag filter
+`^(train|val_100|val_full)/`. There are no per-video/sequence cards. Logging uses an
+explicit allowlist rather than emitting every internal metric, so adding a new
+internal diagnostic does not automatically add dashboard cards. The diagnostic
+group has at most 34 additional cards; empty subgroups are omitted.
+
+An epoch samples `nseqs=30000` windows in batches of 100, hence there are
+`30000 / 100 = 300` batch steps per epoch. `validation_freq_steps=3000` therefore
+means ten epochs. Set it to `30` for every tenth of an epoch, or `300` for every
+epoch. TensorBoard's x-axis remains **sampled training windows**, matching
+`train/*`, so 3,000 batches appear as an interval of 300,000 on that plot.
+Validation never updates weights or optimizer state and restores model mode and
+random-number streams. It runs without rendering videos.
+
+Model metrics are persisted only in TensorBoard. There are no validation JSON
+reports or CSV histories. A single `results/motionVAE/<model_ver>/run_config.json`
+stores the resolved options, split membership, training dataset sizes, validation
+coverage, expected prediction/rollout counts, stationary/fast frame counts, and
+fixed ground-truth speed statistics. These facts are computed independently of
+model predictions, so rollout failures do not change the stored reference data.
+The file is written at startup (including resume); it is metadata, not a time
+series of training measurements. `--no_log` disables TensorBoard and checkpoint
+writes, but still saves this metadata and prints short validation summaries.
+
+Fixed dataset facts used to produce flat TensorBoard lines; they now live only in
+the JSON. A genuinely flat **model** measurement remains a curve: zero failed
+rollouts is useful, and a flat or near-zero KL/latent effect can be diagnostically
+important. Raw/weighted duplicates and redundant speed/displacement curves are
+not both logged. Existing legacy event files retain their old tags; a clean run
+uses the new layout without altering old event files.
+
+"Whole sequence" means the full exported clip, with no frame cap. Invalid gaps
+divide a clip into valid segments; segments too short to seed and predict are
+omitted. JSON coverage counts include selected frames, invalid frames,
+complete sequences, and evaluated segments. There must be at least one full-length
+short window in every held-out video. Both evaluation modes encode the GT target
+at every step and decode the posterior mean: neither is unconditional generation
+or a physics rollout. Phase reconstruction is not evaluated.
+
+The following detailed metrics remain available in named `--test_only` CSV/JSON
+reports; TensorBoard uses the smaller selection and shorter names above. Summary
+metric names below end in `_mean` unless otherwise indicated:
+
+| Metric | Interpretation |
+| --- | --- |
+| `recon`, `kl`, `recon_weighted`, `kl_weighted` | Normalized feature MSE and per-latent-dimension KL; both raw and training-weighted. Validation decodes the posterior mean while training samples the posterior. |
+| `recon_root_pos`, `recon_root_velo`, `recon_joint_pos`, `recon_joint_velo`, `recon_joint_rotmat` | Normalized MSE within each feature group. Overall reconstruction averages all feature coordinates, not these group means equally. |
+| `root_error_m`, `root_xy_error_m` | Accumulated root distance to GT in 3D and on the court plane. |
+| `root_endpoint_error_m_mean` | Mean final-frame root error across evaluated rollouts. |
+| `local_mpjpe_m`, `world_mpjpe_m` | Mean error over the 23 non-root joints, relative to the root or in world coordinates. |
+| `left_wrist_error_m`, `right_wrist_error_m` | Root-relative wrist errors; both sides are measured regardless of player metadata. |
+| `root_displacement_error_m`, `root_velocity_error_mps` | Error in predicted per-frame displacement, and the same error multiplied by FPS. |
+| `root_velocity_bias_{x,y,z}_mps` | Signed velocity errors; a persistent nonzero mean indicates directional bias. |
+| `joint_velocity_error_mps` | Error in the predicted root-relative joint-displacement head, converted to m/s. |
+| `root_consistency_m` | Distance between the raw predicted absolute root and the root obtained by integrating the predicted displacement from the rollout's previous root. |
+| `gt_root_speed_mps`, `pred_root_speed_mps` | Horizontal root speeds. |
+| `gt_wrist_speed_mps`, `pred_wrist_speed_mps` | Maximum world-space speed of the two wrists, using root plus joint displacement features. These are velocity-head diagnostics, not derivatives across reset jumps. |
+| `pred_pose_wrist_speed_mps`, `pose_wrist_velocity_error_mps` | Wrist speed/error derived from changes in predicted poses, using the actual preceding conditioning pose at resets. Compare these with the velocity-head speed: the two decoder representations need not agree. |
+| `recon_zero_latent`, `latent_joint_effect_m` | Reconstruction MSE with z=0 under the same condition, and change in root-relative joints versus posterior-mean z. Used for the validation latent-benefit/effect diagnostics and available directly in named recordings. |
+
+Means pool **predicted frames**; conditioning frames are excluded. Root and joint/
+wrist errors also have `_p95` tail statistics. `stationary_*` and `fast_motion_*`
+report subgroup means with explicit frame counts. If a subgroup is empty no TensorBoard scalar is emitted for its means. A non-finite rollout
+is reported in `diagnostics/*/{mode}_failed_rollouts` and excluded from means; always inspect this count
+before comparing curves. Physical pose errors use direct joint-position outputs,
+not forward kinematics from the separately predicted rotations.
+
+Named `--test_only` recordings write one combined `metrics.png`: reconstruction
+and KL losses, court/root trajectories, root/joint errors, GT/predicted speeds,
+signed root velocity error, and posterior-vs-zero-latent reconstruction. The per-frame CSV and summary JSON contain the same physical
+metrics, and the MP4 overlay includes root and local joint error in centimeters.
+Run the same sequence/checkpoint with `--resample 1`, `--resample 20`, and no reset:
+
+- One-step joint/wrist errors already large: local reconstruction is the bottleneck.
+- Small one-step errors but large autoregressive errors: feedback accumulation/stability is the bottleneck.
+- Small local joint error but large world/root error: trajectory drift dominates.
+- On stationary frames, persistent signed velocity error explains root drift even if the video looks nearly correct with resets every frame.
+- Large errors during GT wrist-speed peaks suggest poor fast-motion reconstruction; compare both wrists and inspect timing in `metrics.png`.
+- Nearly identical posterior and zero-latent losses plus tiny latent joint effect suggest weak target-specific latent use on that sequence; they do not prove that all latent directions are useless.
+
+Keep the old run and new run separate. Their normalized losses are not directly
+comparable after correcting statistics, and the old run trained on the new
+holdout videos. Use physical metrics and the new run's fixed validation curves as
+the baseline for subsequent window-length or KL experiments.

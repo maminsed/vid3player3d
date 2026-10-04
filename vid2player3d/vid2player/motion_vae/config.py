@@ -49,6 +49,15 @@ class MotionVAEOption(object):
     use_amp = False
     no_log = False
 
+    # Validation: individual manifest-video holdout; steps count completed batches.
+    validation_num_videos = 0  # 0 disables holdout and periodic evaluation.
+    validation_seed = 1234
+    validation_freq_steps = 3000  # Batches; one epoch has nseqs // batch_size batches.
+    validation_window_frames = 100  # Predicted frames, plus conditioning history.
+    validation_windows_per_video = 3
+    metric_stationary_speed_mps = 0.1  # Ground-truth horizontal root speed.
+    metric_fast_wrist_speed_mps = 2.0  # Either ground-truth world-space wrist.
+
     # Test
     test_only = False
     result_dir = 'out/motionVAE'
@@ -119,14 +128,18 @@ motion_vae_opt_dict = {
 },
 
 'usopen': {
-    'model_ver'                             : 'usopen_2',
+    'model_ver'                             : 'usopen_3',
     'base_opt_ver'                          : 'federer',
     'dataset_dir'                           : 'exports/vae_input/tennis_motion_dataset_2',
     'predict_phase'                         : False,
     'mixed_phase_schedule'                  : None,
     'continue_train'                        : False,
     'save_freq_epoch'                       : 50,
-    'nseqs'                                 : 30_000
+    'nseqs'                                 : 30_000,
+    'validation_num_videos'                 : 2,
+    'validation_freq_steps'                 : 3000,
+    'validation_window_frames'              : 100,
+    'validation_windows_per_video'          : 3,
 },
 
 'djokovic': {

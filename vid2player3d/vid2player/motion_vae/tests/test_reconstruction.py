@@ -63,6 +63,10 @@ class ReconstructionTests(unittest.TestCase):
         self.assertEqual([i for i, r in enumerate(result['rows']) if r['conditioned_from_gt']], [0, 3, 5])
         self.assertEqual(result['rows'][2]['root_error_m'], 16.)
         self.assertEqual(float(self.model.model.conditions[2][0, 0]), 10.)
+        # A reset uses the true preceding pose when deriving wrist speed;
+        # the correction from the previously displayed prediction is not motion.
+        self.assertAlmostEqual(result['rows'][3]['pred_pose_wrist_speed_mps'],
+                               result['rows'][1]['pred_pose_wrist_speed_mps'])
 
     def test_resample_one_teacher_forces_every_condition(self):
         result = self.run_reconstruction(resample=1)
@@ -111,6 +115,8 @@ class ReconstructionTests(unittest.TestCase):
                 self.assertEqual(reader.get_data(0).shape, (360, 384, 3))
             save_report(directory, result, dict(name='test', resample=2))
             self.assertTrue((directory / 'metrics.png').stat().st_size > 1000)
+            self.assertFalse((directory / 'diagnostics.png').exists())
+            self.assertEqual([p.name for p in directory.glob('*.png')], ['metrics.png'])
             self.assertEqual(len((directory / 'history.csv').read_text().splitlines()), 7)
         np.testing.assert_array_equal(camera.eye, camera_before)
 
