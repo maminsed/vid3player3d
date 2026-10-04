@@ -210,7 +210,15 @@ PYTHONPATH=. python -u vid2player/run.py --cfg tennis_test --test --checkpoint l
 ```
 
 
+The phase-free US Open curriculum uses `--cfg usopen_train_stage_1`,
+`usopen_train_stage_2`, then `usopen_train_stage_3`. See the
+[US Open baseline notes](doc/usopen_high_level_baseline.md) for frozen checkpoint
+compatibility, initialization, output protection, metrics and the ball-physics
+audit. Run from `vid2player3d` with `PYTHONPATH=.`. These configurations select the
+`usopen` MVAE option, which loads the `usopen_3` checkpoint directory.
+
 # Citation
+
 ```
 @article{
   zhang2023vid2player3d,

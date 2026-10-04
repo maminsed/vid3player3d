@@ -50,15 +50,19 @@ class MVAEPlayer:
             self._joint_rot_ori = torch.zeros((self.num_envs, 24, 3), device=self.device, dtype=torch.float32)
         
         self._predict_phase = self.cfg.get("predict_phase", True)
+        if self._predict_phase and not opt.predict_phase:
+            raise ValueError("The selected MVAE has no phase head; set vid2player.predict_phase: False and reward_scales.phase: 0.")
         if not self._is_dual:
-            self._racket = Racket('tennis', self.device, righthand=self.cfg.get('righthand'))
+            self._racket = Racket('tennis', self.device, grip=self.cfg.get('grip', 'eastern'), righthand=self.cfg.get('righthand', True))
         else:
             server = 0 if self.cfg.get('serve_from', 'near') != 'near' else 1
             self._racket = Racket('tennis', self.device, grip=self.cfg.get('grip')[server], righthand=self.cfg.get('righthand')[server])
-        if self._predict_phase:
-            self._phase_pred = torch.zeros(self.num_envs, device=self.device, dtype=torch.float32)
-            self._swing_type = torch.zeros(self.num_envs, device=self.device, dtype=torch.int64) - 1
-            self._swing_type_cycle = self._swing_type.clone()
+        # Reset, rewards and visualization also use these buffers without a phase head.
+        self._phase_pred = torch.zeros(self.num_envs, device=self.device, dtype=torch.float32)
+        self._swing_type = torch.zeros(self.num_envs, device=self.device, dtype=torch.int64) - 1
+        self._swing_type_cycle = self._swing_type.clone()
+        if not self._predict_phase and self.cfg.get('reward_scales', {}).get('phase', 10) != 0:
+            raise ValueError("Phase-free control requires reward_scales.phase: 0.")
 
         # hard code gender as male        
         gender = 'male'
@@ -303,7 +307,15 @@ class MVAEPlayer:
             assert self.cfg.get('add_residual_dof') == 'euler'
             residual = residual.clone()
 
-            if player == 'djokovic':
+            if not self._predict_phase:
+                # Preserve the decoded pose and add bounded corrections without
+                # phase-dependent grip presets or test-time swing gating.
+                joint_rot = rotation_matrix_to_angle_axis(self._joint_rotmat[env_ids][:, residual_joint_inds])
+                offsets = torch.clamp(residual[env_ids] * 0.25, -0.25, 0.25) * math.pi
+                joint_rot[:, 0, 0] += offsets[:, 0]
+                joint_rot[:, 1, 1] += offsets[:, 1]
+                joint_rot[:, 1, 2] += offsets[:, 2]
+            elif player == 'djokovic':
                 residual[:, 0] = torch.clamp(residual[:, 0] * 0.25, -0.25, 0.25)
                 residual[:, 1] = torch.clamp(residual[:, 1] * 0.25, -0.25, 0.25)
                 residual[:, 2] = torch.clamp(residual[:, 2] * 0.25, -0.25, 0.25)
@@ -409,7 +421,8 @@ class MVAEPlayer:
 
             if self._is_dual:
                 joint_rotmat = self._joint_rotmat[env_ids].clone()
-                joint_rotmat[:, residual_joint_inds] = angle_axis_to_rotation_matrix(joint_rot[env_ids])
+                selected_joint_rot = joint_rot if not self._predict_phase else joint_rot[env_ids]
+                joint_rotmat[:, residual_joint_inds] = angle_axis_to_rotation_matrix(selected_joint_rot)
                 self._joint_rotmat[env_ids] = joint_rotmat
                 joint_rot6d = self._joint_rot6d[env_ids].clone()
                 joint_rot6d[:, residual_joint_inds] = rotmat_to_rot6d(joint_rotmat[:, residual_joint_inds])

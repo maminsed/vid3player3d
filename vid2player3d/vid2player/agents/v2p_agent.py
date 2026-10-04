@@ -3,6 +3,7 @@ from rl_games.common import a2c_common
 
 import vid2player.learning.common_agent as common_agent 
 from vid2player.utils.common import AverageMeter, get_eta_str
+from vid2player.utils.training_io import write_epoch_metrics, write_run_config
 
 import torch 
 import time
@@ -102,7 +103,8 @@ class V2PAgent(common_agent.CommonAgent):
         self.best_mean_rewards = -100500
         start_time = time.time()
         total_time = 0
-        self.frame = 0
+        if not self.config.get('load_checkpoint', False):
+            self.frame = 0
         self.obs = self.env_reset()
         self.curr_frames = self.batch_size_envs
 
@@ -117,6 +119,9 @@ class V2PAgent(common_agent.CommonAgent):
             self.hvd.setup_algo(self)
 
         self._init_train()
+        if not (args.tmp or args.no_log):
+            write_run_config(os.path.join(self.network_path, '../logs/run_config.json'),
+                             args, self.task.cfg)
 
         while True:
             if hasattr(self.task, 'pre_epoch'):
@@ -172,6 +177,7 @@ class V2PAgent(common_agent.CommonAgent):
                 self.log_dict.update({'info/kl': torch_ext.mean_list(train_info['kl']).item()})
 
                 self.log_dict.update({'step_rewards': self.step_rewards.avg.item()})
+                self.log_dict.update(train_info.get('task_metrics', {}))
                 if self.sub_rewards_names is not None:
                     for i, name in enumerate(self.sub_rewards_names.split(',')):
                         self.log_dict.update({f'sub_rewards/{name}': self.step_sub_rewards.avg[i].item()})
@@ -189,6 +195,9 @@ class V2PAgent(common_agent.CommonAgent):
                     if self.has_self_play_config:
                         self.self_play_manager.update(self)
                 
+                if not (args.tmp or args.no_log):
+                    write_epoch_metrics(self.writer, self.log_dict, self.frame)
+
                 # save models
                 latest_model_file = os.path.join(self.network_path, f"{self.config['name']}_latest")
                 best_model_file = os.path.join(self.network_path, f"{self.config['name']}_best")
@@ -228,6 +237,7 @@ class V2PAgent(common_agent.CommonAgent):
 
         self.step_rewards = AverageMeter()
         self.step_sub_rewards = AverageMeter()
+        task_totals = {}
 
         self.obs = self.env_reset(done_indices)
         for n in range(self.horizon_length):
@@ -246,6 +256,8 @@ class V2PAgent(common_agent.CommonAgent):
                 self.experience_buffer.update_data('states', n, self.obs['states'])
 
             self.obs, rewards, self.dones, infos = self.env_step(res_dict['actions'])
+            for key, value in infos.get('task_stats', {}).items():
+                task_totals[key] = task_totals.get(key, 0) + value.detach()
             shaped_rewards = self.rewards_shaper(rewards)
             self.experience_buffer.update_data('rewards', n, shaped_rewards)
             self.experience_buffer.update_data('next_obses', n, self.obs['obs'])
@@ -296,8 +308,14 @@ class V2PAgent(common_agent.CommonAgent):
         batch_dict = self.experience_buffer.get_transformed_list(a2c_common.swap_and_flatten01, self.tensor_list)
         batch_dict['returns'] = a2c_common.swap_and_flatten01(mb_returns)
         batch_dict['played_frames'] = self.batch_size
+        self._rollout_task_metrics = summarize_task_stats(task_totals)
 
         return batch_dict
+
+    def train_epoch(self):
+        result = super().train_epoch()
+        result['task_metrics'] = getattr(self, '_rollout_task_metrics', {})
+        return result
 
     def calc_gradients(self, input_dict):
         self.set_train()
@@ -415,3 +433,21 @@ class V2PAgent(common_agent.CommonAgent):
             self.train_result.update(aux_losses)
 
         return
+
+
+def summarize_task_stats(totals):
+    """Ratios of event totals, rather than averages of per-step ratios."""
+    values = {key: float(value.item()) for key, value in totals.items()}
+    result = {'task/' + key: values[key] for key in ('cycles', 'contacts', 'detected_bounces') if key in values}
+    for name, numerator, denominator in (
+        ('hit_rate', 'hits', 'cycles'),
+        ('estimated_in_rate', 'estimated_in', 'cycles'),
+        ('estimated_landing_error_m', 'landing_error_sum', 'estimated_in'),
+        ('estimated_flight_time_s', 'flight_time_sum', 'estimated_in'),
+        ('detected_in_rate', 'detected_in', 'detected_bounces'),
+        ('estimate_vs_detected_error_m', 'estimate_error_sum', 'estimated_detected_bounces'),
+        ('ball_preview_error_m', 'preview_error_sum', 'preview_count'),
+    ):
+        if values.get(denominator, 0) > 0:
+            result['task/' + name] = values.get(numerator, 0) / values[denominator]
+    return result

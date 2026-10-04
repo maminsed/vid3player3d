@@ -446,10 +446,35 @@ class PhysicsMVAEController():
         self._compute_reward(self._actions)
         self._compute_observations()
         self._compute_reset()
+        self.extras['task_stats'] = self._collect_task_stats()
         
         self.extras["terminate"] = self._terminate_buf
         self.extras["sub_rewards"] = self._sub_rewards
         self.extras["sub_rewards_names"] = self._sub_rewards_names
+
+    def _collect_task_stats(self):
+        player = self._physics_player.task
+        # Completed cycles include episode truncations; do not count a reset twice.
+        completed = self._reset_reaction_buf | self.reset_buf.bool()
+        hit = completed & player._has_racket_ball_contact
+        landed_in = completed & self._est_bounce_in
+        bounce = (self._tar_action == 0) & player._has_bounce_now
+        estimated_bounce = bounce & self._est_bounce_in
+        preview = (self._tar_action == 1) & ~player._has_racket_ball_contact & (self._tar_time < 99)
+        return {
+            'cycles': completed.sum(),
+            'hits': hit.sum(),
+            'contacts': player._has_racket_ball_contact_now.sum(),
+            'estimated_in': landed_in.sum(),
+            'landing_error_sum': (self._est_bounce_pos[landed_in, :2] - self._target_bounce_pos[landed_in, :2]).norm(dim=-1).sum(),
+            'flight_time_sum': self._est_bounce_time[landed_in].sum(),
+            'detected_bounces': bounce.sum(),
+            'detected_in': (bounce & self._bounce_in).sum(),
+            'estimated_detected_bounces': estimated_bounce.sum(),
+            'estimate_error_sum': (self._est_bounce_pos[estimated_bounce, :2] - player._bounce_pos[estimated_bounce, :2]).norm(dim=-1).sum(),
+            'preview_count': preview.sum(),
+            'preview_error_sum': (self._ball_traj[preview, 0] - self._ball_pos[preview]).norm(dim=-1).sum(),
+        }
     
     def step(self, actions):
         self.pre_physics_step(actions)

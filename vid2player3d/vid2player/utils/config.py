@@ -15,6 +15,7 @@ from isaacgym import gymutil
 import numpy as np
 import random
 import torch
+from vid2player.utils.training_io import check_training_output
 
 SIM_TIMESTEP = 1.0 / 60.0
 
@@ -113,6 +114,8 @@ def load_cfg(args):
 
     if args.resume:
         cfg_train["params"]["load_checkpoint"] = True
+    # The runner restores from params, but the custom agent checks config.
+    cfg_train['params']['config']['load_checkpoint'] = cfg_train['params']['load_checkpoint']
 
     cfg_train["params"]["load_path"] = args.checkpoint
     print(f"debug:118: args.checkpoint: {args.checkpoint}")
@@ -151,6 +154,7 @@ def load_cfg(args):
     cfg_train['params']['config']['device'] = args.rl_device
     cfg_train['params']['config']['max_test_steps'] = args.max_test_steps
 
+    check_training_output(cfg_train['params']['config'], args, network_path)
     os.makedirs(network_path, exist_ok=True)
     os.makedirs(log_path, exist_ok=True)
 

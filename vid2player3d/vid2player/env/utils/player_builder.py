@@ -133,6 +133,11 @@ class PlayerBuilder():
         args.tmp = False
         args.test = True
         args.play = True
+        args.train = False
+        # Outer --resume restores the high-level agent only. The frozen player
+        # must still load its own configured pretrained checkpoint.
+        args.resume = False
+        args.resume_id = None
         args.cfg = self.physics_config['config']
         args.cfg_dir = 'embodied_pose'
         if args.cfg == 'humanoid_amass_ft_tennis_v1':
