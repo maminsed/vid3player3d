@@ -128,6 +128,10 @@ def test_usopen_config_chain():
         assert task['mvae_ver'] == 'usopen'
         assert task['predict_phase'] is False and task['reward_scales']['phase'] == 0
         assert task['grip'] == 'semi_western'
+        assert cfg['env']['numEnvs'] == 2048
+        assert task['mvae_inference_batch_size'] == 512
+        assert train['minibatch_size'] == 4096
+        assert cfg['env']['numEnvs'] * train['horizon_length'] % train['minibatch_size'] == 0
         assert cfg['env']['physics']['config'] == 'usopen_im'
         assert 'tennis_im_training_2' in cfg['env']['physics']['pretrained_model_cp']
         assert train['protect_existing_checkpoints'] is True
@@ -135,7 +139,46 @@ def test_usopen_config_chain():
             assert train['pretrained_model_cp'] == 'results/usopen_train_stage_{}/models/usopen_no_phase_latest.pth'.format(stage - 1)
 
 
+def check_batched_mvae_decode():
+    player_ns = definitions(ROOT / 'players/mvae_player.py', {'MVAEPlayer'}, {'torch': torch})
+    decoder_ns = definitions(ROOT / 'motion_vae/model.py', {'MixedDecoder'}, {
+        'torch': torch, 'nn': torch.nn, 'F': torch.nn.functional})
+    torch.manual_seed(10)
+    decoder = decoder_ns['MixedDecoder'](8, 10, 3, 16, 1, 1, 4).eval()
+    # Strided inputs exercise dual-player batches as well as an uneven last chunk.
+    latents, conditions = torch.randn(46, 3)[::2], torch.randn(46, 8)[::2]
+    player = object.__new__(player_ns['MVAEPlayer'])
+    player.cfg = {'mvae_inference_batch_size': 7}
+    for predict_phase in (False, True):
+        calls = []
+        def forward(z, c):
+            calls.append(len(z))
+            output = decoder(z, c)
+            return (output[:, :-2], output[:, -2:]) if predict_phase else (output, None)
+        mvae = SimpleNamespace(forward=forward)
+        expected, expected_phase = forward(latents, conditions)
+        calls.clear()
+        actual, phase = player._decode_mvae(mvae, latents, conditions)
+        assert calls == [7, 7, 7, 2]
+        torch.testing.assert_close(actual, expected, rtol=1e-5, atol=1e-6)
+        assert not actual.requires_grad
+        if predict_phase:
+            torch.testing.assert_close(phase, expected_phase, rtol=1e-5, atol=1e-6)
+        else:
+            assert phase is None
+    player.cfg['mvae_inference_batch_size'] = 0
+    calls.clear()
+    player._decode_mvae(mvae, latents, conditions)
+    assert calls == [23]
+    player.cfg['mvae_inference_batch_size'] = -1
+    with unittest.TestCase().assertRaises(ValueError):
+        player._decode_mvae(mvae, latents, conditions)
+
+
 class ControllerBaselineTests(unittest.TestCase):
+    def test_batched_decoder(self):
+        check_batched_mvae_decode()
+
     def test_rewards(self):
         test_phase_free_rewards_and_latched_contact()
 

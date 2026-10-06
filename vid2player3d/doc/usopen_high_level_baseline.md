@@ -13,6 +13,41 @@ The high-level agent learns from synthetic tennis balls, using the US Open motio
 decoder as its motion representation. It does not load video clips as supervised
 PPO targets.
 
+## GPU memory settings
+
+The original stage-1 run in `logs/high_level.txt` failed during MVAE inference
+after two epochs: 10,240 environments required a 1.58 GiB mixed-weight temporary
+with only 1.07 GiB free on a 15.70 GiB GPU. The mixed decoder creates per-sample
+weight matrices; inference under `no_grad` does not eliminate those temporaries.
+PyTorch reservation/fragmentation and simulator memory also compete for VRAM.
+
+All US Open stages now use 2,048 environments, PPO minibatches of 4,096, and
+`env.vid2player.mvae_inference_batch_size: 512`. The latter splits frozen decoder
+inference into independent chunks and concatenates outputs in environment order;
+it leaves the checkpoint, conditioning and reward unchanged. The failed mixed
+weight allocation scales from about 1.58 GiB at 10,240 samples to about 81 MiB
+at 512 samples. Set this knob to a smaller positive integer to reduce decoder
+temporaries further; zero disables chunking. Actual total VRAM still depends on
+physics, PPO buffers, minibatch activations and other processes.
+
+Horizons remain 64/32/32 steps. Rollouts now contain 131,072/65,536/65,536
+transitions, all divisible by the 4,096 minibatch size. Smaller environment counts
+change PPO batch statistics and samples per epoch: stage 1 collects one fifth,
+and stages 2/3 about one seventh-and-a-half, of their previous samples per epoch.
+The epoch limits were retained; compare learning by total frames, not just epochs.
+Equal original sample budgets would require 5x/7.5x/7.5x as many epochs.
+
+Before a full run, use a separate output root for a short stage-1 memory check:
+
+```bash
+PYTHONPATH=. python vid2player/run.py --cfg usopen_train_stage_1 --rl_device cuda:0 --headless --max_iterations 10 --results_dir results/usopen_memory_check
+```
+
+Then use the normal stage commands above. Existing-checkpoint protection remains
+enabled. A CPU equivalence test covers chunked versus unchunked mixed decoding,
+phase/no-phase outputs, strided inputs and a final partial chunk. Full GPU memory
+validation has not yet been performed.
+
 ## Configuration and frozen components
 
 - `mvae_ver: usopen` selects the Python option entry whose `model_ver` is
@@ -200,7 +235,7 @@ small comparison against live ball flight. It was not done while the GPU is busy
 No GPU simulation or training was launched. CPU checks verified strict low-level
 checkpoint loading, identical training/runtime observation formulas, finite MLP
 outputs, phase-free rewards/residuals, config chaining, event aggregation, output
-protection and metric persistence. Run the six CPU tests with:
+protection, metric persistence and batched decoder equivalence. Run the seven CPU tests with:
 
 ```bash
 CUDA_VISIBLE_DEVICES='' PYTHONPATH=. python -m unittest discover -s vid2player/tests -v

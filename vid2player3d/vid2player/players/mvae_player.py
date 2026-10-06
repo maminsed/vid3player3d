@@ -185,16 +185,33 @@ class MVAEPlayer:
         else: 
             self._update_mvae_state(self._conditions[env_ids, -1], phase=None, env_ids=env_ids, init=True)
 
+    @torch.no_grad()
+    def _decode_mvae(self, mvae, latents, conditions):
+        """Bound mixed-expert weight temporaries without changing decoder state."""
+        batch_size = self.cfg.get('mvae_inference_batch_size', 0)
+        if not isinstance(batch_size, int) or isinstance(batch_size, bool) or batch_size < 0:
+            raise ValueError('mvae_inference_batch_size must be a nonnegative integer (0 disables batching).')
+        if batch_size == 0 or len(latents) <= batch_size:
+            return mvae.forward(latents, conditions)
+        features, phases = [], []
+        for begin in range(0, len(latents), batch_size):
+            feature, phase = mvae.forward(latents[begin:begin + batch_size],
+                                          conditions[begin:begin + batch_size])
+            features.append(feature)
+            if phase is not None:
+                phases.append(phase)
+        return torch.cat(features, dim=0), torch.cat(phases, dim=0) if phases else None
+
     def step(self, latents, residual=None):  
         self._latents = latents
         condition_flat = self._conditions.flatten(start_dim=1, end_dim=2)
         with torch.no_grad():
             if not self._is_dual:
-                feature, phase = self._mvae.forward(latents, condition_flat)
+                feature, phase = self._decode_mvae(self._mvae, latents, condition_flat)
                 self._update_mvae_state(feature, phase, residual)
             else:
-                feature1, phase1 = self._mvae1.forward(latents[::2], condition_flat[::2])
-                feature2, phase2 = self._mvae2.forward(latents[1::2], condition_flat[1::2])
+                feature1, phase1 = self._decode_mvae(self._mvae1, latents[::2], condition_flat[::2])
+                feature2, phase2 = self._decode_mvae(self._mvae2, latents[1::2], condition_flat[1::2])
                 self._update_mvae_state(feature1, phase1, residual, env_ids=torch.arange(0, self.num_envs, 2),
                     mvae=self._mvae1, player=self.cfg['player'][0],
                     residual_joint_inds=self._residual_joint_inds[0])

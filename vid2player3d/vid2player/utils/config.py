@@ -118,7 +118,6 @@ def load_cfg(args):
     cfg_train['params']['config']['load_checkpoint'] = cfg_train['params']['load_checkpoint']
 
     cfg_train["params"]["load_path"] = args.checkpoint
-    print(f"debug:118: args.checkpoint: {args.checkpoint}")
         
     # set maximum number of training iterations (epochs)
     if args.max_iterations > 0:
