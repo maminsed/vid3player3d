@@ -433,6 +433,11 @@ class TennisBallGeneratorOffline():
             self.sample_idx = torch.zeros((num_envs), dtype=torch.int64)
     
     def generate(self, n_traj, need_init_state=False, start_pos=None, env_ids=None):
+        # The offline pool stays on CPU to avoid reserving VRAM for every
+        # possible launch. Callers use simulator-device tensors; normalize only
+        # the small reset inputs here, then transfer selected launches downstream.
+        if start_pos is not None:
+            start_pos = start_pos.detach().to(self.traj_pool.device)
         if self.sample_random:
             indices = torch.randint(0, len(self.traj_pool), (n_traj,))
             if start_pos is not None:
@@ -442,6 +447,9 @@ class TennisBallGeneratorOffline():
                     indices[other_side] += torch.randint(-1000, 1000, (other_side.sum(),))
                     indices = torch.clamp(indices, 0, len(self.traj_pool)-1)
         else:
+            if env_ids is None:
+                raise ValueError('env_ids are required for fixed offline ball sampling.')
+            env_ids = env_ids.detach().to(device=self.sample_idx.device, dtype=torch.long)
             indices = self.sample_idx[env_ids]
             self.sample_idx[env_ids] += 1
             self.sample_idx[env_ids] %= len(self.traj_pool)

@@ -129,7 +129,15 @@ class PlayerBuilder():
 
     def build_player_cfg(self):
         args = get_args()
+        if getattr(self.config.get('args'), 'eval_controller', False):
+            # get_args reparses CLI here; retain the evaluator's forced display
+            # settings even if --headless was omitted from the user's command.
+            args.headless = True
+            args.graphics_device_id = -1
+            args.record = args.record_scenepic = False
         test_controller = args.test or args.play
+        if getattr(self.config.get('args'), 'eval_controller', False):
+            test_controller = True
         args.tmp = False
         args.test = True
         args.play = True

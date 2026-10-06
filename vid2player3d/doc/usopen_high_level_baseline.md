@@ -48,6 +48,81 @@ enabled. A CPU equivalence test covers chunked versus unchunked mixed decoding,
 phase/no-phase outputs, strided inputs and a final partial chunk. Full GPU memory
 validation has not yet been performed.
 
+## Headless checkpoint evaluation
+
+Run from `vid2player3d`, with the normal IsaacGym environment active:
+
+```bash
+PYTHONPATH=. python vid2player/run.py --cfg usopen_train_stage_1 \
+  --eval_controller \
+  --eval_checkpoint results/usopen_train_stage_1/models/usopen_no_phase_latest.pth \
+  --eval_ball center_low --eval_target center \
+  --eval_output out/controller_eval/stage1_center \
+  --eval_steps 120 --seed 123 --rl_device cuda:0 --headless
+```
+
+One environment launches one ball, with no timed relaunch. Evaluation does not
+train or update weights. It strictly loads the explicit checkpoint and observation
+normalization. Rendering uses the same centered rear camera as MVAE reconstruction:
+eye `[0,-28,9]`, target `[0,-1,0]`, vertical field of view 45 degrees, image 768x720.
+There is one view, no inset, and no saved screenshots. Rendering is CPU/PIL/ffmpeg
+with no display server; IsaacGym physics still needs the configured GPU.
+
+Incoming ball preset mapping (`--eval_ball`):
+
+| Preset | Requested X at Y=-13 m | Requested height |
+| --- | ---: | ---: |
+| `left_low` | -2 m | 0.9 m |
+| `left_high` | -2 m | 1.4 m |
+| `center_low` | 0 m | 0.9 m |
+| `center_high` | 0 m | 1.4 m |
+| `right_low` | +2 m | 0.9 m |
+| `right_high` | +2 m | 1.4 m |
+
+Left/right denote court X, not forehand/backhand. Optional `--eval_ball_x` and
+`--eval_ball_height` override these preset coordinates, for example
+`--eval_ball_x 1.0 --eval_ball_height 1.2`. The nearest available paired launch
+and observation preview is selected from a deterministic subset of the configured
+incoming dataset. This is approximate placement, not an exact physical intercept
+constraint. The requested and selected preview positions are recorded in the
+config JSON. The ball is still simulated after launch.
+
+`--eval_target left|center|right` sets the desired return location to `[-3,10,0]`,
+`[0,10,0]`, or `[3,10,0]`. This is separate from where the incoming ball is sent.
+Stage 1 rewards proximity and does not reward that return target.
+
+The output directory must be new; omitting `--eval_output` generates a timestamped
+folder under `out/controller_eval/`. Each completed run saves exactly four files:
+
+- `video.mp4`: fixed court view, simulated skeleton/racket/ball, and top-left metrics.
+- `metrics.png`: static curves of step reward, cumulative reward, weighted reward
+  components, and weighted auxiliary/bounds losses against time. A dashed line
+  marks the first detected contact. Evaluation performs no PPO update.
+- `evaluation_config.json`: checkpoint, effective configs, seed, camera, requested
+  ball coordinates, selected launch row, desired return target, and final results.
+- `rollout.npz`: actual body/ball/racket positions and policy means per frame, plus
+  the selected launch/preview row and numeric per-frame metrics (`metrics` matrix
+  with `metric_names` columns). No extra launch file is retained; the simulator's
+  temporary input is cleaned up after the run.
+
+Auxiliary and bounds penalties are calculated from each deterministic policy
+output before scaling, with the configured coefficients also reported. PPO actor
+and critic training losses are null: no rollout advantage fitting or optimization
+is performed in evaluation. Rewards are the real configured task rewards, so their
+components show where the policy receives reward during the flight.
+
+The root reset is centered near `[0,-13]`. Recovery retains its configured random
+walk, with the fixed seed reset after inner-player initialization. Recording ends
+on episode termination or the step limit (120 steps is about four seconds).
+To compare checkpoints, keep the same ball/target/seed/config and use a new output
+folder for each checkpoint. A single case is a diagnostic, not a success benchmark.
+Contact detection and estimated return validity retain the existing implementation
+and its limitations, including the absence of a physical net collider.
+
+CPU tests cover the four-file output contract, case mapping and custom overrides,
+exact MVAE-camera projection equivalence, and reward/loss recording with simulated
+inputs. Live GPU physics remains unverified in this session.
+
 ## Configuration and frozen components
 
 - `mvae_ver: usopen` selects the Python option entry whose `model_ver` is
@@ -235,7 +310,7 @@ small comparison against live ball flight. It was not done while the GPU is busy
 No GPU simulation or training was launched. CPU checks verified strict low-level
 checkpoint loading, identical training/runtime observation formulas, finite MLP
 outputs, phase-free rewards/residuals, config chaining, event aggregation, output
-protection, metric persistence and batched decoder equivalence. Run the seven CPU tests with:
+protection, metric persistence and batched decoder equivalence. Run the CPU test suite with:
 
 ```bash
 CUDA_VISIBLE_DEVICES='' PYTHONPATH=. python -m unittest discover -s vid2player/tests -v

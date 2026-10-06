@@ -168,7 +168,13 @@ def main():
 
     set_np_formatting()
     args = get_args()
+    if args.eval_controller:
+        from vid2player.utils.controller_evaluation import configure_eval_args
+        configure_eval_args(args)
     cfg, cfg_train = load_cfg(args)
+    if args.eval_controller:
+        from vid2player.utils.controller_evaluation import prepare_evaluation, evaluate_controller
+        evaluation = prepare_evaluation(args, cfg, cfg_train)
 
     vargs = vars(args)
 
@@ -177,6 +183,10 @@ def main():
     runner = build_alg_runner(algo_observer)
     runner.load(cfg_train)
     runner.reset()
+    if args.eval_controller:
+        player = runner.create_player()
+        evaluate_controller(player, args, evaluation)
+        return
     runner.run(vargs)
 
     return

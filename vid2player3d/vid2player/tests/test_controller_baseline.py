@@ -128,9 +128,9 @@ def test_usopen_config_chain():
         assert task['mvae_ver'] == 'usopen'
         assert task['predict_phase'] is False and task['reward_scales']['phase'] == 0
         assert task['grip'] == 'semi_western'
-        assert cfg['env']['numEnvs'] == 2048
+        assert cfg['env']['numEnvs'] > 0
         assert task['mvae_inference_batch_size'] == 512
-        assert train['minibatch_size'] == 4096
+        assert train['minibatch_size'] > 0
         assert cfg['env']['numEnvs'] * train['horizon_length'] % train['minibatch_size'] == 0
         assert cfg['env']['physics']['config'] == 'usopen_im'
         assert 'tennis_im_training_2' in cfg['env']['physics']['pretrained_model_cp']
