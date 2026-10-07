@@ -11,6 +11,7 @@ import torch
 import torch.nn.functional as F
 from tqdm import tqdm
 import os
+from vid2player.utils.tennis_materials import configure_ball_asset
 
 m   = 0.057 # kg, weight of ball
 R   = 0.032 # m, radius of ball
@@ -241,6 +242,7 @@ class TennisBallGeneratorIsaac():
         asset_file = "tennis_ball.urdf"
         asset_options = gymapi.AssetOptions()
         asset = gym.load_asset(sim, asset_root, asset_file, asset_options)
+        configure_ball_asset(gym, asset)
 
         self.num_env = 10000 if is_train else 1000
         num_per_row = int(np.sqrt(self.num_env))

@@ -307,7 +307,87 @@ small comparison against live ball flight. It was not done while the GPU is busy
 
 ## Verification performed
 
-No GPU simulation or training was launched. CPU checks verified strict low-level
+### CUDA ball-material fix (2026-10-06)
+
+The two `stage*_latest_initial_failure` rollouts expose a collision-response
+failure, not merely a rendering problem. Before the first impact, recorded ball
+positions agree with the paired stored previews within 0.00005 m. After impact,
+stage 1 rebounds only to 0.169 m and stage 2 settles at approximately the ball
+radius (0.032 m), although both previews predict a rebound near 1 m.
+
+A controlled drop from 1.5 m reproduced a GPU-specific material initialization
+bug. With ball restitution 0.9 and floor restitution 0.5, initializing only the
+actor's material produces rebound apices 0.121/0.124 m for two/six substeps.
+Initializing the asset material before creating the actor produces 0.748/0.751 m.
+CPU PhysX gives the latter result for both initialization methods, so CPU-only
+tests do not expose this bug. NVIDIA has also documented an underlying GPU
+friction/restitution update issue in its
+[restitution discussion](https://forums.developer.nvidia.com/t/contact-restitution-with-physx-in-isaacgym/219637/11).
+
+The live environment and offline generator now initialize ball materials on the
+asset before creating actors. Racket-head materials are initialized on the asset
+too; the body-to-shape mapping selects the head without changing the handle or
+humanoid materials. Optional `ball_restitution` and `racket_restitution` settings
+fall back to the existing shared `restitution` value. This corrects how existing
+parameters reach GPU PhysX; no stage YAML or checkpoint was changed by this fix.
+
+The same checkpoints, incoming launches, seed 42 and original targets were
+evaluated on CUDA, with separate outputs:
+
+| Case | Original first rebound | Patched first rebound | Patched detected racket contact |
+| --- | ---: | ---: | --- |
+| `out/controller_eval/stage1_material_fix` | 0.169 m | 1.100 m | None |
+| `out/controller_eval/stage2_material_fix` | effectively none | 1.008 m | None |
+
+Both complete 120 steps. Stage 2's maximum preview discrepancy through frame 43
+is 0.0065 m; stage 1's is 0.1484 m. Stage 1 later changes direction near the
+player without detected racket contact, so its later trajectory discrepancy must
+not be attributed entirely to incoming-ball physics. Restoring a bounce does not
+repair policies learned under the faulty physics: neither checkpoint hits the
+ball in these cases, and stage-1 reach reward decreases. No training was run.
+
+The standalone diagnostic uses the real tennis-ball asset and material helper,
+without the humanoid or policy. Run in the IsaacGym environment:
+
+```bash
+PYTHONPATH=. python -m vid2player.utils.check_ball_bounce --gpu --compare-actor-only \
+  --evaluation out/controller_eval/stage1_latest_initial_failure \
+  --evaluation out/controller_eval/stage2_latest_initial_failure \
+  --output /tmp/usopen_ball_physics_gpu_audit.json
+```
+
+Use a new output filename on each run. The diagnostic exits unsuccessfully if the
+patched material path fails to rebound above 0.3 m; the old actor-only path is
+reported as a comparison. Omit `--gpu` for CPU PhysX. This is a restitution
+isolation check, not validation of full incoming/outgoing trajectories.
+
+Remaining work before a corrected training experiment:
+
+- Resolve the floor mismatch deliberately: low-level training uses floor
+  restitution 0.0, while the controller and ball generator use 0.5. A single
+  global plane affects feet as well as the ball. Changing it blindly also changes
+  the incoming bounce. `plane_restitution: 0.0` now works as an explicit override;
+  the previous truthiness check silently ignored zero. Zero-valued contact/rest
+  offsets, bounce threshold and velocity-iteration overrides also work.
+- Compare the low-level controller at its trained two-substep setting with
+  stages 2/3's six-substep setting, using matching incoming trajectories. The
+  material fix itself retains the configured substep counts.
+- Resolve stage 1's remaining preview mismatch and regenerate/validate incoming
+  data on the chosen physics backend. Verify outgoing tables against live flight
+  too; their provenance is still unknown. Do not overwrite the original tables.
+- Address signed/axis-aware lift and the early height-threshold bounce/contact
+  detectors described above as separate, measured changes. They were not changed
+  by the material fix.
+- Start a separate training run after those checks, retaining the original
+  checkpoints for comparison. Continuing an old policy is an experiment, not
+  evidence that the old training used correct physics.
+
+The new material/override tests and existing controller-baseline checks pass
+(10 tests). The full CPU suite also exposed a camera-equivalence failure in the
+pre-existing camera/reconstruction edits; that is outside this physics patch.
+
+Before the material-fix investigation above, no GPU simulation or training had
+been launched for baseline verification. Those CPU checks verified strict low-level
 checkpoint loading, identical training/runtime observation formulas, finite MLP
 outputs, phase-free rewards/residuals, config chaining, event aggregation, output
 protection, metric persistence and batched decoder equivalence. Run the CPU test suite with:

@@ -16,6 +16,7 @@ from vid2player.utils.hybrik import batch_rigid_transform
 from vid2player.utils.pose import SMPLPose
 from vid2player.utils.racket import Racket
 from vid2player.utils.tennis_ball import *
+from vid2player.utils.tennis_materials import configure_ball_asset, configure_racket_asset
 
 import torch
 import torch.nn.functional as F
@@ -278,6 +279,16 @@ class HumanoidSMPLIMMVAE(HumanoidSMPL):
             self.humanoid_assets[0] = humanoid_asset
             self.humanoid_files[0] = os.path.join(asset_root, asset_file)
 
+        # Set materials on assets before the first actor is created. Actor-only
+        # updates can leave GPU PhysX using cached default materials.
+        for asset in self.humanoid_assets.values():
+            body_names = self.gym.get_asset_rigid_body_names(asset)
+            if 'Racket' in body_names:
+                configure_racket_asset(
+                    self.gym, asset, body_names.index('Racket'),
+                    self.cfg_v2p.get('racket_restitution', self.cfg_v2p.get('restitution', 1.0)),
+                    self.cfg_v2p.get('racket_friction', 0.8))
+
         self.humanoid_asset = humanoid_asset
         self._setup_character_props(self.cfg["env"]["keyBodies"])
 
@@ -295,6 +306,10 @@ class HumanoidSMPLIMMVAE(HumanoidSMPL):
         ball_asset_options = gymapi.AssetOptions()
         asset_file = self.cfg["env"]["asset"].get("assetFileNameBall", 'tennis_ball.urdf')
         self.ball_asset = self.gym.load_asset(self.sim, asset_root, asset_file, ball_asset_options)
+        configure_ball_asset(
+            self.gym, self.ball_asset,
+            self.cfg_v2p.get('ball_restitution', self.cfg_v2p.get('restitution', 1.0)),
+            self.cfg_v2p.get('ball_friction', 0.8))
 
         self.envs = []
         self.humanoid_handles = []
@@ -411,7 +426,7 @@ class HumanoidSMPLIMMVAE(HumanoidSMPL):
             if not isinstance(racket_body_id, int):
                 racket_body_id = racket_body_id[env_id % 2]
 
-            props[racket_body_id+1].restitution = self.cfg_v2p.get('restitution', 1.0)
+            props[racket_body_id+1].restitution = self.cfg_v2p.get('racket_restitution', self.cfg_v2p.get('restitution', 1.0))
             props[racket_body_id+1].compliance = 0.5
             props[racket_body_id+1].friction = self.cfg_v2p.get('racket_friction', 0.8)
         self.gym.set_actor_rigid_shape_properties(env_ptr, humanoid_handle, props)
@@ -433,7 +448,7 @@ class HumanoidSMPLIMMVAE(HumanoidSMPL):
         self.gym.set_rigid_body_color(env_ptr, ball_handle, 0, gymapi.MESH_VISUAL, gymapi.Vec3(0.8, 1.0, 0.0))
     
         props = self.gym.get_actor_rigid_shape_properties(env_ptr, ball_handle)
-        props[0].restitution = self.cfg_v2p.get('restitution', 1.0)
+        props[0].restitution = self.cfg_v2p.get('ball_restitution', self.cfg_v2p.get('restitution', 1.0))
         props[0].compliance = 0.5
         props[0].friction = self.cfg_v2p.get('ball_friction', 0.8)
         self.gym.set_actor_rigid_shape_properties(env_ptr, ball_handle, props)

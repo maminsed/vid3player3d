@@ -180,7 +180,7 @@ class PlayerBuilder():
             cfg['env']['controlFrequencyInv'] = self.physics_config['controlFrequencyInv']
         if self.physics_config.get('residual_force_scale'):
             cfg['env']['residual_force_scale'] = self.physics_config['residual_force_scale']
-        if self.physics_config.get('plane_restitution'):
+        if self.physics_config.get('plane_restitution') is not None:
             cfg['env']['plane']['restitution'] = self.physics_config['plane_restitution']
 
         if self.physics_config.get('dt'):
@@ -189,8 +189,14 @@ class PlayerBuilder():
             cfg['sim']['substeps'] = self.physics_config['substeps']
         if self.physics_config.get('num_position_iterations'):
             cfg['sim']['physx']['num_position_iterations'] = self.physics_config['num_position_iterations']
-        if self.physics_config.get('contact_offset'):
+        if self.physics_config.get('num_velocity_iterations') is not None:
+            cfg['sim']['physx']['num_velocity_iterations'] = self.physics_config['num_velocity_iterations']
+        if self.physics_config.get('contact_offset') is not None:
             cfg['sim']['physx']['contact_offset'] = self.physics_config['contact_offset']
+        if self.physics_config.get('rest_offset') is not None:
+            cfg['sim']['physx']['rest_offset'] = self.physics_config['rest_offset']
+        if self.physics_config.get('bounce_threshold_velocity') is not None:
+            cfg['sim']['physx']['bounce_threshold_velocity'] = self.physics_config['bounce_threshold_velocity']
 
         return args, cfg, cfg_train
 

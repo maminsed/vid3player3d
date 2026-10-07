@@ -1,5 +1,6 @@
 """CPU checks for reconstruction alignment, resets, metrics, and headless recording."""
 import copy
+import json
 import tempfile
 from pathlib import Path
 from types import SimpleNamespace
@@ -80,6 +81,35 @@ class ReconstructionTests(unittest.TestCase):
         expected = (self.features[2:4] / 2).reshape(1, -1)
         np.testing.assert_allclose(self.model.model.conditions[2].numpy(), expected)
 
+    def test_zero_rollout_uses_own_history_without_encoder(self):
+        class LatentVAE:
+            def encode(self, truth, condition):
+                return torch.ones(1, 32), torch.zeros(1, 32)
+
+            def sample(self, latent, condition):
+                output = condition[:, -288:].clone()
+                output[:, 3:6] = 0
+                output[:, 3] = condition[:, 0] + 1 + latent[:, 0]
+                return output
+
+        self.model.model = LatentVAE()
+        posterior = self.run_reconstruction()
+        self.model.model.encode = lambda *args: self.fail('Zero rollout must bypass encoder')
+        zero = reconstruct(self.model, self.features, self.roots, self.frames, 30,
+                           latent_mode='zero')
+        # Independent integrated root feeds into each subsequent prediction.
+        np.testing.assert_allclose(zero['roots'][1, :, 0], [0, 2, 6, 14, 30, 62])
+        np.testing.assert_allclose(posterior['roots'][1, :, 0], [0, 4, 12, 28, 60, 124])
+        self.assertTrue(all(r['kl'] is None and r['kl_weighted'] is None for r in zero['rows']))
+
+    def test_zero_rollout_honors_reset_schedule_and_multiple_conditions(self):
+        self.model.opt.num_condition_frames = 2
+        self.model.model.encode = lambda *args: self.fail('Zero rollout must bypass encoder')
+        result = reconstruct(self.model, self.features, self.roots, self.frames, 30,
+                             resample=2, latent_mode='zero')
+        np.testing.assert_allclose(result['roots'][1, :, 0], [0, 10, 12, 14, 32, 34])
+        self.assertEqual([i for i, r in enumerate(result['rows']) if r['conditioned_from_gt']], [0, 1, 4])
+
     def test_selection_rejects_ambiguity_and_filters(self):
         seq = dict(base=0, source_export='/data/clip.pk', source_key='key')
         dataset = SimpleNamespace(opt=SimpleNamespace(side='fg'), sequences=[seq],
@@ -113,7 +143,13 @@ class ReconstructionTests(unittest.TestCase):
             with imageio.get_reader(str(directory / 'test.mp4')) as reader:
                 self.assertEqual(reader.count_frames(), 6)
                 self.assertEqual(reader.get_data(0).shape, (360, 384, 3))
-            save_report(directory, result, dict(name='test', resample=2))
+            zero = reconstruct(self.model, self.features, self.roots, self.frames, 30,
+                               resample=2, latent_mode='zero')
+            save_report(directory, result, dict(name='test', resample=2), zero_result=zero)
+            summary = json.loads((directory / 'summary.json').read_text())
+            self.assertIn('zero_latent_rollout', summary)
+            self.assertNotIn('kl_mean', summary['zero_latent_rollout'])
+            self.assertEqual(len((directory / 'zero_latent_history.csv').read_text().splitlines()), 7)
             self.assertTrue((directory / 'metrics.png').stat().st_size > 1000)
             self.assertFalse((directory / 'diagnostics.png').exists())
             self.assertEqual([p.name for p in directory.glob('*.png')], ['metrics.png'])
