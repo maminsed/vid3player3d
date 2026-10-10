@@ -68,13 +68,17 @@ def select_sequence(dataset, name):
 
 
 @torch.no_grad()
-def reconstruct(model, raw_features, roots, source_frames, fps, resample=None, latent_diagnostics=True):
+def reconstruct(model, raw_features, roots, source_frames, fps, resample=None, latent_diagnostics=True, latent_mode='posterior'):
     """Posterior-mean reconstruction with autoregressive conditioning and root integration.
 
-    Targets enter the encoder every step. Only condition/root resets are periodic.
+    In posterior mode targets enter the encoder every step. Zero mode bypasses
+    the encoder and feeds back its own predictions with z=0 at every step.
+    Both modes use the same optional condition/root reset schedule.
     Losses measure the raw decoder output before replacing its root_pos feature
     with the integrated root, as is done during runtime motion generation.
     """
+    if latent_mode not in ('posterior', 'zero'):
+        raise ValueError('Unknown latent_mode: ' + latent_mode)
     opt = model.opt
     fields = feature_slices(opt)
     if resample is not None and resample <= 0:
@@ -104,16 +108,22 @@ def reconstruct(model, raw_features, roots, source_frames, fps, resample=None, l
             if reset:
                 condition = truth[i - T:i].clone()
                 root = torch.as_tensor(roots[i - 1], dtype=torch.float32, device=model.device).clone()
-            mu, logvar = model.model.encode(truth[i:i + 1], condition.reshape(1, -1))
-            output = model.model.sample(mu, condition.reshape(1, -1)).reshape(-1)[:opt.frame_size]
+            kl = None
+            if latent_mode == 'posterior':
+                mu, logvar = model.model.encode(truth[i:i + 1], condition.reshape(1, -1))
+                latent = mu
+                kl = (-0.5 * (1 + logvar - mu.square() - logvar.exp()).mean()).clamp_min(0)
+            else:
+                latent = truth.new_zeros((1, opt.latent_size))
+            output = model.model.sample(latent, condition.reshape(1, -1)).reshape(-1)[:opt.frame_size]
             recon = (output - truth[i]).square().mean()
             for field, indices in fields.items():
                 row['recon_' + field] = float((output[indices] - truth[i, indices]).square().mean())
-            kl = (-0.5 * (1 + logvar - mu.square() - logvar.exp()).mean()).clamp_min(0)
-            if not torch.isfinite(output).all() or not torch.isfinite(recon + kl):
+            if (not torch.isfinite(output).all() or not torch.isfinite(recon)
+                    or (kl is not None and not torch.isfinite(kl))):
                 raise ValueError('Non-finite prediction/loss at source frame {}.'.format(source_frames[i]))
             raw_output = model.unnormalize(output)
-            if latent_diagnostics:
+            if latent_diagnostics and latent_mode == 'posterior':
                 zero_output = model.model.sample(torch.zeros_like(mu), condition.reshape(1, -1)).reshape(-1)[:opt.frame_size]
                 if not torch.isfinite(zero_output).all():
                     raise ValueError('Non-finite zero-latent prediction.')
@@ -129,9 +139,9 @@ def reconstruct(model, raw_features, roots, source_frames, fps, resample=None, l
             if 'root_pos' in fields:
                 feedback[fields['root_pos']] = root
             condition = torch.cat((condition[1:], model.normalize(feedback).unsqueeze(0)))
-            row.update(recon=float(recon), kl=float(kl),
+            row.update(recon=float(recon), kl=float(kl) if kl is not None else None,
                        recon_weighted=float(recon) * opt.weights['recon'],
-                       kl_weighted=float(kl) * opt.weights['kl'])
+                       kl_weighted=float(kl) * opt.weights['kl'] if kl is not None else None)
         for label, pos in [('gt', roots[i]), ('pred', predicted_roots[i])]:
             row.update({label + '_root_' + axis: float(value) for axis, value in zip('xyz', pos)})
         row['root_error_m'] = float(np.linalg.norm(predicted_roots[i] - roots[i]))
@@ -255,7 +265,7 @@ def render_frame(result, index, camera, title, resample):
     return np.asarray(frame)
 
 
-def save_report(directory, result, metadata):
+def save_report(directory, result, metadata, zero_result=None):
     rows = result['rows']
     with (directory / 'history.csv').open('w', newline='') as stream:
         writer = csv.DictWriter(stream, fieldnames=list(rows[0]))
@@ -265,12 +275,22 @@ def save_report(directory, result, metadata):
     metadata.update(summarize_rows(rows))
     metadata['root_endpoint_error_m'] = evaluated[-1]['root_error_m']
     metadata['metric_thresholds'] = result.get('metric_thresholds', {})
+    if zero_result is not None:
+        zero_rows = zero_result['rows']
+        metadata['zero_latent_rollout'] = dict(
+            summarize_rows(zero_rows),
+            root_endpoint_error_m=zero_rows[-1]['root_error_m'],
+            note='z=0 every step; independent predicted history; same GT reset schedule; no encoder or KL.')
+        with (directory / 'zero_latent_history.csv').open('w', newline='') as stream:
+            writer = csv.DictWriter(stream, fieldnames=list(zero_rows[0]))
+            writer.writeheader()
+            writer.writerows(zero_rows)
     (directory / 'summary.json').write_text(json.dumps(metadata, indent=2))
     from matplotlib.figure import Figure
     from matplotlib.backends.backend_agg import FigureCanvasAgg
-    figure = Figure(figsize=(13, 17), constrained_layout=True)
+    figure = Figure(figsize=(13, 20 if zero_result is not None else 17), constrained_layout=True)
     FigureCanvasAgg(figure)
-    grid = figure.add_gridspec(5, 2)
+    grid = figure.add_gridspec(6 if zero_result is not None else 5, 2)
     axes = [figure.add_subplot(grid[0, 0]), figure.add_subplot(grid[1, 0])]
     times = [row['time_s'] for row in evaluated]
     for ax, key, label in zip(axes, ('recon_weighted', 'kl_weighted'), ('Reconstruction loss', 'KL loss')):
@@ -289,6 +309,10 @@ def save_report(directory, result, metadata):
         court.plot(roots[:, 0], roots[:, 1], color=color, label=label)
         court.scatter(*roots[0, :2], color=color, marker='o')
         court.scatter(*roots[-1, :2], color=color, marker='x')
+    if zero_result is not None:
+        zero_roots = zero_result['roots'][1]
+        court.plot(zero_roots[:, 0], zero_roots[:, 1], color='purple', linestyle='--', label='Always z=0 (own history)')
+        court.scatter(*zero_roots[-1, :2], color='purple', marker='x')
     court.set(title='Root trajectory (circle: start; cross: end)', xlabel='Court X (m)', ylabel='Court Y (m)')
     court.set_aspect('equal', adjustable='datalim')
     court.grid(alpha=.2)
@@ -301,7 +325,7 @@ def save_report(directory, result, metadata):
         (('gt_root_speed_mps', 'pred_root_speed_mps'), 'Horizontal root speed (m/s)'),
         (('gt_wrist_speed_mps', 'pred_wrist_speed_mps', 'pred_pose_wrist_speed_mps'), 'Maximum wrist speed (m/s)'),
         (('root_velocity_bias_x_mps', 'root_velocity_bias_y_mps', 'root_velocity_bias_z_mps'), 'Signed root velocity error (m/s)'),
-        (('recon', 'recon_zero_latent'), 'Normalized MSE: posterior mean vs zero latent'),
+        (('recon', 'recon_zero_latent'), 'One-step latent substitution: same conditioning history'),
     ]
     for index, (keys, title) in enumerate(groups):
         ax = figure.add_subplot(grid[2 + index // 2, index % 2])
@@ -312,6 +336,21 @@ def save_report(directory, result, metadata):
         ax.set(title=title, xlabel='Source time (s)')
         ax.grid(alpha=.25)
         ax.legend(fontsize=7)
+    if zero_result is not None:
+        zero_evaluated = [r for r in zero_result['rows'] if r['recon'] is not None]
+        for column, keys, title in [
+                (0, ('recon',), 'Independent rollouts: normalized reconstruction MSE'),
+                (1, ('root_error_m', 'local_mpjpe_m'), 'Independent rollouts: root / local joint error (m)')]:
+            ax = figure.add_subplot(grid[5, column])
+            for key, color in zip(keys, ('tab:blue', 'tab:orange')):
+                ax.plot(times, [r[key] for r in evaluated], color=color, label='Posterior: ' + key)
+                ax.plot(times, [r[key] for r in zero_evaluated], color=color, linestyle='--', label='Always z=0: ' + key)
+            for row in evaluated:
+                if row['conditioned_from_gt']:
+                    ax.axvline(row['time_s'], color='gray', linestyle=':', alpha=.35)
+            ax.set(title=title, xlabel='Source time (s)')
+            ax.grid(alpha=.25)
+            ax.legend(fontsize=7)
     figure.savefig(str(directory / 'metrics.png'), dpi=140)
 
 
@@ -339,6 +378,8 @@ def record_reconstruction(opt, name, resample=None, nframes=None, suffix=''):
     fps = float(seq.get('fps', 30))
     model = MotionVAEModel(opt)
     result = reconstruct(model, features, roots, source_frames, fps, resample)
+    zero_result = reconstruct(model, features, roots, source_frames, fps, resample,
+                              latent_diagnostics=False, latent_mode='zero')
     safe_name = re.sub(r'[^A-Za-z0-9_.-]+', '_', canonical)[:160]
     stamp = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
     directory = Path(opt.result_dir) / (opt.model_ver + suffix) / (safe_name + '_' + stamp)
@@ -353,7 +394,7 @@ def record_reconstruction(opt, name, resample=None, nframes=None, suffix=''):
                          'Recon is normalized feature MSE; KL is averaged over latent dimensions. '
                          'Loss is measured before root integration. Initial conditioning frames have no loss. '
                          'The first source frame is reserved for velocity computation.')
-    save_report(directory, result, metadata)
+    save_report(directory, result, metadata, zero_result=zero_result)
     camera = CourtCamera()
     video_path = directory / 'reconstruction.mp4'
     with imageio.get_writer(str(video_path), fps=fps, codec='libx264', quality=7,

@@ -473,3 +473,14 @@ Keep the old run and new run separate. Their normalized losses are not directly
 comparable after correcting statistics, and the old run trained on the new
 holdout videos. Use physical metrics and the new run's fixed validation curves as
 the baseline for subsequent window-length or KL experiments.
+
+Named MVAE `--test_only` recordings also compare an independent **always-zero-latent
+rollout** in `metrics.png`: `z=0` at every step, conditioning on its own previous
+predictions and integrating its own root displacement. Both rollouts use the same
+`--resample` schedule; omit `--resample` for uninterrupted trajectories. Dashed
+curves compare rollout reconstruction/root/local-joint errors, and a purple court
+trajectory shows the zero-latent root. This differs from the existing one-step
+zero-latent substitution, which shares the posterior rollout's conditioning.
+The independent baseline bypasses the encoder (so KL is undefined), writes
+`zero_latent_history.csv`, and adds `zero_latent_rollout` to `summary.json`.
+It runs only for manual recordings and adds no periodic TensorBoard panels.
