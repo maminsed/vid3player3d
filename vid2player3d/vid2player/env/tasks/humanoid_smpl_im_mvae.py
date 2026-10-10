@@ -17,6 +17,7 @@ from vid2player.utils.pose import SMPLPose
 from vid2player.utils.racket import Racket
 from vid2player.utils.tennis_ball import *
 from vid2player.utils.tennis_materials import configure_ball_asset, configure_racket_asset
+from vid2player.utils.ground_alignment import reset_height_offset
 
 import torch
 import torch.nn.functional as F
@@ -96,6 +97,7 @@ class HumanoidSMPLIMMVAE(HumanoidSMPL):
 
         self._root_pos = torch.zeros((self.num_envs, 3), device=self.device, dtype=torch.float32)
         self._root_vel = torch.zeros((self.num_envs, 3), device=self.device, dtype=torch.float32)
+        self._reset_height_offset = torch.zeros(self.num_envs, device=self.device, dtype=torch.float32)
         self._racket_pos = torch.zeros((self.num_envs, 3), device=self.device, dtype=torch.float32)
         self._racket_vel = torch.zeros((self.num_envs, 3), device=self.device, dtype=torch.float32)
         self._racket_normal = torch.zeros((self.num_envs, 3), device=self.device, dtype=torch.float32)
@@ -476,8 +478,18 @@ class HumanoidSMPLIMMVAE(HumanoidSMPL):
         return traj
 
     def _reset_actors(self, env_ids):
+        reset_root_pos = self._mvae_player._root_pos[env_ids].clone()
+        reset_rotations = self._mvae_player._joint_rotmat[env_ids]
+        self._reset_height_offset[env_ids] = 0
+        if self.cfg['env'].get('align_reset_to_ground', False):
+            self._reset_height_offset[env_ids] = reset_height_offset(
+                self._smpl, reset_root_pos, reset_rotations,
+                self._reset_ref_motion_bodies[env_ids, 1:11],
+                clearance=self.cfg['env'].get('reset_ground_clearance', 0.002),
+                batch_size=self.cfg['env'].get('reset_ground_batch_size', 64))
+        reset_root_pos[:, 2] += self._reset_height_offset[env_ids]
         root_pos, root_rot, dof_pos, root_vel, root_ang_vel, dof_vel, rb_pos, rb_rot \
-            = self._smpl_to_sim(self._mvae_player._root_pos[env_ids].clone(), self._mvae_player._joint_rotmat[env_ids], adjust_height=True)
+            = self._smpl_to_sim(reset_root_pos, reset_rotations)
         
         self._set_env_state(env_ids=env_ids,
                             root_pos=root_pos,
@@ -614,6 +626,9 @@ class HumanoidSMPLIMMVAE(HumanoidSMPL):
 
     def _set_target_motion_state(self, env_ids=None):
         target_root_pos = self._mvae_player._root_pos.clone()
+        # Keep the reset and every reference in the same physical coordinate
+        # frame. Do not modify the decoder's learned autoregressive condition.
+        target_root_pos[:, 2] += self._reset_height_offset
         if self.cfg_v2p.get('add_residual_root'):
             target_root_pos += self._controller._res_root_actions
 
@@ -866,6 +881,7 @@ class HumanoidSMPLIMMVAE(HumanoidSMPL):
         if self.cfg_v2p.get('update_mvae_from_sim', False):
             # update mvae root state/condition with sim state 
             self._mvae_player._root_pos[:] = self._rigid_body_pos[:, 0]
+            self._mvae_player._root_pos[:, 2] -= self._reset_height_offset
             self._mvae_player._root_vel[:] = self._humanoid_root_states[:, 7:10] * self.dt
 
             assert self._mvae_player._conditions.shape[1] == 1

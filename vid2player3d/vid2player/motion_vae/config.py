@@ -142,6 +142,12 @@ motion_vae_opt_dict = {
     'validation_windows_per_video'          : 3,
 },
 
+'usopen_4': {
+    'model_ver'                             : 'usopen_4',
+    'base_opt_ver'                          : 'usopen',
+    'weights'                               : {'recon': 1, 'kl': 0.05, 'recon_phase': 10},
+},
+
 'djokovic': {
     'model_ver'                             : 'djokovic',
     'base_opt_ver'                          : 'federer',

@@ -307,6 +307,170 @@ small comparison against live ball flight. It was not done while the GPU is busy
 
 ## Verification performed
 
+### CUDA reset-height investigation
+
+The initial character launch is caused by a penetrating reset pose, not by the
+floor-restitution mismatch. Controlled CUDA runs used the stage-1 epoch-100
+checkpoint, seed 42, the same `center_low` launch and center return target:
+
+| Reset | Floor restitution | Initial pelvis Z | First-step vertical speed | Maximum pelvis Z |
+| --- | ---: | ---: | ---: | ---: |
+| Original | 0.5 | 0.865 m | +6.436 m/s | 2.935 m |
+| Original | 0.0 | 0.865 m | +6.436 m/s | 2.935 m |
+| Aligned | 0.5 | 1.042 m | -0.074 m/s | 1.036 m |
+| Aligned | 0.0 | 1.042 m | -0.130 m/s | 1.035 m |
+
+The original reset's lowest foot/toe joint is at Z=-0.161 m; the posed proxy
+skin extends to approximately Z=-0.175 m. These are already below the floor
+before the first physics step. PhysX resolves the overlap by generating a large
+upward velocity. This occurs in the first 1/30 second, long before the incoming
+ball's ground impact. Holding the decoded reference fixed and zeroing all
+low-level residual actions still produces +6.530 m/s initial vertical speed and
+a 3.282 m pelvis peak. PD posture control remains active in that control. This
+rules out a learned jump command as the necessary cause of the initial launch.
+
+The adapter passed `adjust_height=True` at reset, but `_smpl_to_sim` did not
+implement that adjustment. Unlike low-level training's ground-adjusted motion
+library, the high-level environment placed the raw decoded pose directly into
+the simulator. A plausible upright root height in the dataset is insufficient
+to establish ground clearance for the taller fixed proxy and its posed mesh.
+
+`usopen_im.yaml` now enables `align_reset_to_ground`. At each humanoid reset,
+`ground_alignment.reset_height_offset` evaluates the posed proxy SMPL mesh and
+computes the upward translation needed to leave 2 mm clearance. For the current
+seed this is 0.1771 m. The same per-environment translation is applied to both
+the physical reset and every subsequent target root/body position. The decoder's
+features and autoregressive condition are left in their learned coordinate frame.
+The offset stays fixed until the next humanoid reset; this is not a per-frame
+floor clamp and does not remove legitimate jumping motion. An already-clear
+reset is not lowered to the floor. Skinning uses chunks of 64 to bound temporary
+memory. Ball materials, ball previews, rewards and global floor restitution are
+unchanged by this reset fix. Other imitation configurations retain their existing
+behavior unless they explicitly enable alignment.
+
+The latest checkpoint with seed 123 and `left_low` also stays below 1.036 m pelvis
+height for its 120-step evaluation. These tests validate the configured Djokovic
+proxy; the skinned-mesh clearance is not an exact collider contact measurement
+or a guarantee against later penetration from arbitrary decoded motion.
+
+The jump fix does **not** establish an explanation for the full historical reward
+decline. In matched fresh-policy CUDA rollouts (96 environments, seed 42, 64
+steps, identical initial ball positions), results were:
+
+| Metric | Original reset | Aligned reset |
+| --- | ---: | ---: |
+| Mean first-step vertical speed | +6.501 m/s | -0.124 m/s |
+| Maximum pelvis height | 3.017 m | 1.036 m |
+| Fraction of samples with pelvis above 1.5 m | 49.6% | 0% |
+| Mean step reward | 0.001609 | 0.000970 |
+
+Each rollout was part of a separate one-iteration training smoke run; these are
+not learning curves or episode-level `game_rewards`. The correction removes the
+launch, but does not immediately improve proximity reward. The epoch-100 and
+latest policies still miss their evaluation balls. In the epoch-100 center case,
+total reward decreases from 2.2639 to 0.3179 after alignment. This is evidence
+against claiming that fixing the jump alone solves the low-reward problem.
+Stage-1 reward is `exp(-5*d^2)` during reaction: it is about 0.0067 at 1 m
+racket-ball separation and 2e-9 at 2 m. Valid dynamics are necessary, but a policy
+that remains far from the ball still receives almost no useful reward. Establishing
+the reason for the historical decline requires matched learning experiments;
+changing the ball bounce changes the task experienced by the policy as well.
+
+Evidence is saved under `out/controller_eval/`:
+
+- `reset_alignment_audit.json`: ablation summaries, root-height curves, paired
+  training-rollout statistics and the epoch-100 checkpoint SHA-256.
+- `reset_alignment_audit.png`: root-height comparisons for epoch 100 and the
+  matched 96-environment rollouts.
+- `jump_epoch100_floor05`, `jump_epoch100_floor0`: original reset controls.
+- `jump_epoch100_aligned_floor05`, `jump_epoch100_aligned_floor0`: corrected
+  120-step evaluations, with the usual video/config/metrics/rollout files.
+- `jump_latest_aligned_left_low`: corrected latest-checkpoint evaluation.
+
+To reproduce a corrected evaluation with state diagnostics, run from
+`vid2player3d` with the IsaacGym environment active:
+
+```bash
+PYTHONPATH=. python vid2player/check_controller_reset.py \
+  --diagnostics-output out/controller_eval/reset_repro_diagnostics.json \
+  --diagnostic-floor 0.5 \
+  --cfg usopen_train_stage_1 --eval_controller \
+  --eval_checkpoint results/usopen_train_stage_1/models/usopen_no_phase_epoch00100.pth \
+  --eval_ball center_low --eval_target center \
+  --eval_output out/controller_eval/reset_repro \
+  --eval_steps 120 --seed 42 --rl_device cuda:0 --headless
+```
+
+Use new output paths for every run. Add `--diagnostic-disable-alignment` to
+reproduce the old reset; change `--diagnostic-floor 0` to test the low-level
+training floor. Add both `--diagnostic-freeze-reference` and
+`--diagnostic-zero-low-action` for the fixed-reference/zero-residual control.
+The diagnostic refuses training invocations and records effective low-level
+settings separately from the normal four-file evaluation directory.
+
+Four ground-alignment tests cover mesh clearance, airborne preservation,
+bounded chunks and distinct shapes, nonfinite geometry, retained reference
+offsets, partial environment updates and conversion of optional simulator
+feedback back to the decoder's coordinate frame. Together with the existing
+baseline and material checks, 14 CPU tests pass. CUDA smoke runs also validate the real
+SMPL skinning with a full 64-environment chunk and a final 32-environment chunk.
+Their checkpoints live only under the separate
+`results/usopen_reset_alignment_smoke`,
+`results/usopen_reset_alignment_paired_fixed` and
+`results/usopen_reset_alignment_paired_control` output roots. Existing training
+checkpoints were not modified.
+
+### Stage-1 position-reward curriculum (2026-10-07)
+
+Stage 1 now schedules the coefficient `k` in the reaction reward
+`exp(-k * racket_ball_distance_squared)` from 1 to 5. Smaller coefficients
+provide useful proximity feedback farther from the ball; the final coefficient
+requires more precise racket positioning. The reward weight and phase-free
+behavior are unchanged. This curriculum is a training hypothesis, not evidence
+of improved contact or returns.
+
+`env.vid2player.pos_reward_schedule` configures a linear ramp using the total
+number of collected environment transitions:
+
+| Collected transitions | Position coefficient |
+| --- | --- |
+| 0–26,214,400 | 1 |
+| 26,214,400–104,857,600 | Linear increase from 1 to 5 |
+| 104,857,600 onward | 5 |
+
+At 2,048 environments and a 64-step horizon, these boundaries correspond to
+200 and 800 completed iterations. The current 1,000-iteration budget leaves
+200 iterations at the final coefficient. Changing environment count or horizon
+does not change the transition boundaries; shortening the run can stop before
+the ramp completes. Update the explicit frame boundaries when intentionally
+changing the curriculum's experience budget.
+
+The agent updates the coefficient before rollout collection and holds it fixed
+through that rollout and its PPO updates. A full `--resume --checkpoint ...`
+uses the checkpoint's restored `frame` count, so the schedule continues rather
+than restarting. Loading only pretrained network weights starts a new training
+run and a new schedule. Evaluation keeps the fixed `reward_scales.pos: 5`,
+including for intermediate checkpoints. Removing `pos_reward_schedule` retains
+the previous fixed-scale behavior. Stages 2 and 3 have no schedule configured.
+
+TensorBoard records the actual coefficient as `curriculum/pos_reward_scale`.
+Training rewards across the ramp are not directly comparable because the
+criterion tightens. The stage-1 goal remains racket contact leading to a rough
+return; assess fixed-condition evaluations with `task/hit_rate` and outgoing
+ball behavior. Proximity reward alone does not enforce outgoing direction,
+speed, or placement; stage 2 supplies the return-quality objective. Do not
+interpret a higher proximity reward as proof of a proper racket return.
+
+Validation covers schedule boundaries, interpolation, opt-out, evaluation, and
+restored-frame behavior in `test_reward_schedule.py`, alongside the existing
+controller, ground-alignment, and material tests (19 tests pass). A CUDA smoke
+run with 96 environments and an 8-step horizon exercised coefficients 1, 3,
+and 5 across three real PPO iterations using shortened test-only frame
+boundaries. Resuming that run continued at frame 2,304 with coefficient 5.
+The smoke outputs are isolated under `results/usopen_reward_schedule_smoke`;
+existing stage-training checkpoints were not modified. These short runs check
+integration and resume behavior, not learning quality.
+
 ### CUDA ball-material fix (2026-10-06)
 
 The two `stage*_latest_initial_failure` rollouts expose a collision-response

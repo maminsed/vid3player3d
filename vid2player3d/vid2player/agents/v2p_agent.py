@@ -124,6 +124,8 @@ class V2PAgent(common_agent.CommonAgent):
                              args, self.task.cfg)
 
         while True:
+            if hasattr(self.task, 'set_reward_schedule_progress'):
+                self.task.set_reward_schedule_progress(self.frame)
             if hasattr(self.task, 'pre_epoch'):
                 self.task.pre_epoch(self.epoch_num)
 
@@ -162,6 +164,8 @@ class V2PAgent(common_agent.CommonAgent):
                 self.log_dict.update({'performance/step_fps': curr_frames / scaled_play_time})
                 self.log_dict.update({'performance/update_time': train_info['update_time']})
                 self.log_dict.update({'performance/play_time': train_info['play_time']})
+                if getattr(self.task, '_pos_reward_schedule', None) is not None:
+                    self.log_dict['curriculum/pos_reward_scale'] = self.task._reward_scales['pos']
                 self.log_dict.update({'losses/a_loss': torch_ext.mean_list(train_info['actor_loss']).item()})
                 self.log_dict.update({'losses/c_loss': torch_ext.mean_list(train_info['critic_loss']).item()})
                 self.log_dict.update({'losses/bounds_loss': torch_ext.mean_list(train_info['b_loss']).item()})

@@ -122,7 +122,7 @@ class CourtRenderer:
         self.font = _font()
         # Same eye, target, 45-degree vertical FOV and image size as the
         # MVAE reconstruction CourtCamera. Centered behind the near baseline.
-        self.camera = np.array([0., -28., 9.])
+        self.camera = np.array([10., -28., 9.])
         forward = np.array([0., -1., 0.]) - self.camera
         self.forward = forward / np.linalg.norm(forward)
         right = np.cross(self.forward, [0., 0., 1.])

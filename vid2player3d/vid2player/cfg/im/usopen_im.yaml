@@ -25,6 +25,11 @@ env:
   enableEarlyTermination: True
   residual_force_scale: 31.85
   no_scale_action: True
+  # The raw decoder seed penetrates the proxy mesh floor. Align it once at reset
+  # and retain the same vertical translation for subsequent motion targets.
+  align_reset_to_ground: True
+  reset_ground_clearance: 0.002
+  reset_ground_batch_size: 64
 
   asset:
     assetRoot: vid2player/data/assets

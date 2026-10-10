@@ -2,6 +2,7 @@ from vid2player.players.mvae_player import MVAEPlayer
 from vid2player.env.utils.player_builder import PlayerBuilder
 from vid2player.utils.tennis_ball_out_estimator import TennisBallOutEstimator
 from vid2player.utils.common import AverageMeter
+from vid2player.utils.reward_schedule import LinearRewardSchedule
 from vid2player.utils.torch_transform import quat_to_rot6d
 from utils import torch_utils
 
@@ -55,6 +56,10 @@ class PhysicsMVAEController():
         self._racket_pos = torch.zeros((self.num_envs, 3), device=self.device, dtype=torch.float32)
         self._racket_normal = torch.zeros((self.num_envs, 3), device=self.device, dtype=torch.float32)
         self._reward_scales = self.cfg_v2p.get('reward_scales', {}).copy()
+        schedule = self.cfg_v2p.get('pos_reward_schedule')
+        self._pos_reward_schedule = LinearRewardSchedule(schedule) if schedule else None
+        # Evaluation keeps the configured fixed scale, independent of checkpoint age.
+        self.set_reward_schedule_progress(0)
         # racket body has already been fliped to be the last body
         self._num_humanoid_bodies = 24
         self._racket_body_id = 24
@@ -109,6 +114,11 @@ class PhysicsMVAEController():
         torch._C._jit_set_profiling_mode(False)
         torch._C._jit_set_profiling_executor(False)
     
+    def set_reward_schedule_progress(self, frame):
+        """Called before collecting a rollout; frame is restored on full resume."""
+        if self._is_train and self._pos_reward_schedule is not None:
+            self._reward_scales['pos'] = self._pos_reward_schedule.value(frame)
+
     def get_action_size(self):
         return self._num_actions
     
