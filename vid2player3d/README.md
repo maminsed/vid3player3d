@@ -129,8 +129,9 @@ The test always writes `reconstruction.mp4`, `metrics.png`, `history.csv`, and
 reconstruction on one tennis court, with a fixed perspective camera centered behind
 the near baseline, root trails, and weighted reconstruction/KL losses in the upper
 left. It uses the same PIL/ImageIO approach as EmbodiedPose's headless debug video;
-no viewer, OpenGL, browser, or X server is needed. The PNG combines loss curves, root trajectories on the court, and all physical
-motion/latent diagnostics; dotted vertical lines on the loss curves indicate resets.
+no viewer, OpenGL, browser, or X server is needed. Compact `metrics.png` files show
+the diagnostics relevant to each rollout; root-level `experiments.png` compares
+the rollouts and explicitly labels their reset schedules.
 
 Without `--resample`, only the initial conditioning state comes from ground truth.
 `--resample N` resets the entire conditioning history and accumulated root to ground
@@ -139,7 +140,7 @@ is teacher forcing. Targets still enter the encoder on **every** step; the decod
 uses the posterior mean latent for repeatable reconstruction, not random prior
 samples. This evaluates reconstruction with autoregressive conditioning, not a
 blind forecast. Losses use the training normalization and weights; CSV includes
-both raw and weighted values. The KL value describes the encoder posterior even
+raw MSE and raw/weighted KL. The KL value describes the encoder posterior even
 though decoding uses its mean.
 
 The saved root position seeds playback; predicted root displacements are then
@@ -456,10 +457,11 @@ is reported in `diagnostics/*/{mode}_failed_rollouts` and excluded from means; a
 before comparing curves. Physical pose errors use direct joint-position outputs,
 not forward kinematics from the separately predicted rotations.
 
-Named `--test_only` recordings write one combined `metrics.png`: reconstruction
-and KL losses, court/root trajectories, root/joint errors, GT/predicted speeds,
-signed root velocity error, and posterior-vs-zero-latent reconstruction. The per-frame CSV and summary JSON contain the same physical
-metrics, and the MP4 overlay includes root and local joint error in centimeters.
+Named `--test_only` recordings write compact `metrics.png` reports and a central
+`experiments.png` comparing root trajectories, reference feature MSE, root/local
+joint errors, root/wrist speeds, and differences from the independent zero baseline.
+The per-frame CSV retains only relevant report metrics, and the MP4 overlay includes
+root and local joint error in centimeters.
 Run the same sequence/checkpoint with `--resample 1`, `--resample 20`, and no reset:
 
 - One-step joint/wrist errors already large: local reconstruction is the bottleneck.
@@ -474,13 +476,41 @@ comparable after correcting statistics, and the old run trained on the new
 holdout videos. Use physical metrics and the new run's fixed validation curves as
 the baseline for subsequent window-length or KL experiments.
 
-Named MVAE `--test_only` recordings also compare an independent **always-zero-latent
-rollout** in `metrics.png`: `z=0` at every step, conditioning on its own previous
-predictions and integrating its own root displacement. Both rollouts use the same
-`--resample` schedule; omit `--resample` for uninterrupted trajectories. Dashed
-curves compare rollout reconstruction/root/local-joint errors, and a purple court
-trajectory shows the zero-latent root. This differs from the existing one-step
-zero-latent substitution, which shares the posterior rollout's conditioning.
-The independent baseline bypasses the encoder (so KL is undefined), writes
-`zero_latent_history.csv`, and adds `zero_latent_rollout` to `summary.json`.
-It runs only for manual recordings and adds no periodic TensorBoard panels.
+Named MVAE `--test_only` recordings save an independent **always-zero-latent
+rollout** exactly once under `zero/`: `z=0` at every step, with its own predicted
+history and integrated root. This baseline always uses GT initialization only,
+regardless of `--resample`. The central `experiments.png` legend explicitly labels
+the posterior reset schedule, so teacher-forced reconstruction is not mistaken
+for uninterrupted generation. The posterior's one-step zero substitution is
+computed only once per posterior frame and appears only in its own report.
+No `zero_latent_history.csv` or nested `zero_latent_rollout` summaries are written.
+
+Passing `--unit-actions` alongside `--test_only` additionally writes three
+independent rollouts under `unit_actions/`: `fixed/` (one Gaussian action held for
+the whole sequence), `held/` (a new action every 10 predictions), and `per_frame/`
+(a new action each prediction). Unit scale means **N(0,1) per latent coordinate**,
+without unit-norm normalization or clipping. These probes use their own predictions
+and integrated roots, **ignore `--resample`**, and bypass the encoder. They reuse
+the single zero baseline for comparison; no baseline data is copied into them.
+
+Each rollout directory contains `rollout.mp4`, compact `metrics.png`, `history.csv`,
+and `summary.json`; the three nonzero schedules also save exact decoder inputs in
+`actions.npy` (one row per predicted frame, starting at `actions_first_source_frame`).
+The posterior report has six panels; zero/action reports have four physical-motion
+panels and omit KL and one-step substitution. CSVs omit undefined metrics,
+per-feature losses, redundant weighted MSE, repeated GT root coordinates, and
+unused physical diagnostics. `unit_actions/summary.json` summarizes action effects.
+The central `experiments.png` overlays all enabled rollouts with consistent colors.
+Errors against source motion are reference differences, not evidence that random
+actions should reproduce that motion. These recording changes do not affect
+training or validation metrics.
+
+Use `--latent_seed 0` (default) to reproduce the draws and
+`--latent_hold_frames 10` (default) to change the held-action interval.
+The three schedules share their first action for comparison. Repeat with other
+seeds and initial sequences to assess whether control effects are consistent.
+
+Unit-action probes are off by default. Named `--test-only` recordings automatically
+use CPU when CUDA is unavailable or hidden. To run while someone else uses the GPU,
+prefix the command with `CUDA_VISIBLE_DEVICES=""`; add `--unit-actions` only when
+you want the extra action-rollout outputs.

@@ -142,6 +142,16 @@ class CheckpointTests(unittest.TestCase):
         self.assertFalse(resumed.optimizer.state)
         self.assert_weights_equal(original, resumed)
 
+    def test_inference_falls_back_to_cpu_when_config_requests_hidden_gpu(self):
+        original = self.model()
+        original.save_checkpoint('latest')
+        with patch('torch.cuda.is_available', return_value=False):
+            inference = self.model(test_only=True, gpu_ids=[0])
+        self.assertEqual(inference.device, torch.device('cpu'))
+        self.assertEqual(next(inference.model.parameters()).device.type, 'cpu')
+        self.assertEqual(inference.avg.device.type, 'cpu')
+        self.assert_weights_equal(original, inference)
+
     def test_amp_scaler_state_is_restored_after_creation(self):
         # Check scaler serialization on CPU without requiring a CUDA device.
         scaler = Mock()

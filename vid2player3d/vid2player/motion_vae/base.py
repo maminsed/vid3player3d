@@ -28,10 +28,12 @@ class MotionVAEModel(object):
         if device is not None:
             self.device = device
         else:
-            if opt.gpu_ids:
+            if opt.gpu_ids and (not opt.test_only or torch.cuda.is_available()):
                 self.device = torch.device('cuda')
             else:
                 self.device = torch.device('cpu')
+                if opt.gpu_ids and opt.test_only:
+                    logging.info('CUDA unavailable or hidden; running MVAE test-only on CPU.')
 
         frame_size_condition = frame_size_truth = frame_size_pred = opt.frame_size
         if opt.predict_phase:

@@ -68,16 +68,18 @@ def select_sequence(dataset, name):
 
 
 @torch.no_grad()
-def reconstruct(model, raw_features, roots, source_frames, fps, resample=None, latent_diagnostics=True, latent_mode='posterior'):
+def reconstruct(model, raw_features, roots, source_frames, fps, resample=None, latent_diagnostics=True,
+                latent_mode='posterior', actions=None, detailed_metrics=True):
     """Posterior-mean reconstruction with autoregressive conditioning and root integration.
 
     In posterior mode targets enter the encoder every step. Zero mode bypasses
     the encoder and feeds back its own predictions with z=0 at every step.
-    Both modes use the same optional condition/root reset schedule.
+    Explicit-action mode also bypasses the encoder. Each call owns its history
+    and root; callers choose the optional condition/root reset schedule.
     Losses measure the raw decoder output before replacing its root_pos feature
     with the integrated root, as is done during runtime motion generation.
     """
-    if latent_mode not in ('posterior', 'zero'):
+    if latent_mode not in ('posterior', 'zero', 'actions'):
         raise ValueError('Unknown latent_mode: ' + latent_mode)
     opt = model.opt
     fields = feature_slices(opt)
@@ -86,6 +88,14 @@ def reconstruct(model, raw_features, roots, source_frames, fps, resample=None, l
     T = opt.num_condition_frames
     if T < 1 or len(raw_features) <= T:
         raise ValueError('The sequence needs more frames than num_condition_frames.')
+    if latent_mode == 'actions':
+        if actions is None:
+            raise ValueError('Explicit-action mode requires actions.')
+        actions = torch.as_tensor(actions, dtype=torch.float32, device=model.device)
+        if actions.shape != (len(raw_features) - T, opt.latent_size) or not torch.isfinite(actions).all():
+            raise ValueError('Actions must be finite with shape (predicted_frames, latent_size).')
+    elif actions is not None:
+        raise ValueError('Explicit actions require latent_mode=actions.')
     if not np.isfinite(raw_features).all() or not np.isfinite(roots).all():
         raise ValueError('Cannot reconstruct non-finite motion features or root positions.')
     if not np.isfinite(fps) or fps <= 0:
@@ -102,8 +112,9 @@ def reconstruct(model, raw_features, roots, source_frames, fps, resample=None, l
                    conditioned_from_gt=int(i < T or reset), recon=None, kl=None,
                    recon_weighted=None, kl_weighted=None,
                    recon_zero_latent=None, latent_joint_effect_m=None)
-        for field in fields:
-            row['recon_' + field] = None
+        if detailed_metrics:
+            for field in fields:
+                row['recon_' + field] = None
         if i >= T:
             if reset:
                 condition = truth[i - T:i].clone()
@@ -113,12 +124,15 @@ def reconstruct(model, raw_features, roots, source_frames, fps, resample=None, l
                 mu, logvar = model.model.encode(truth[i:i + 1], condition.reshape(1, -1))
                 latent = mu
                 kl = (-0.5 * (1 + logvar - mu.square() - logvar.exp()).mean()).clamp_min(0)
+            elif latent_mode == 'actions':
+                latent = actions[i - T:i - T + 1]
             else:
                 latent = truth.new_zeros((1, opt.latent_size))
             output = model.model.sample(latent, condition.reshape(1, -1)).reshape(-1)[:opt.frame_size]
             recon = (output - truth[i]).square().mean()
-            for field, indices in fields.items():
-                row['recon_' + field] = float((output[indices] - truth[i, indices]).square().mean())
+            if detailed_metrics:
+                for field, indices in fields.items():
+                    row['recon_' + field] = float((output[indices] - truth[i, indices]).square().mean())
             if (not torch.isfinite(output).all() or not torch.isfinite(recon)
                     or (kl is not None and not torch.isfinite(kl))):
                 raise ValueError('Non-finite prediction/loss at source frame {}.'.format(source_frames[i]))
@@ -247,9 +261,13 @@ def render_frame(result, index, camera, title, resample):
     # Cover anything projected above the scene with a legible fixed overlay.
     draw.rectangle((0, 0, camera.width, 132), fill=(18, 27, 36, 255))
     draw.text((16, 10), 'Ground truth (35% ghost)', fill=GT_COLOR + (255,), font=font)
-    draw.text((390, 10), 'Reconstruction', fill=pred_color, font=font)
-    loss = ('Conditioning frame (no loss)' if row['recon_weighted'] is None else
-            'Recon: {:.6f}    KL: {:.6f}  (weighted)'.format(row['recon_weighted'], row['kl_weighted']))
+    draw.text((390, 10), 'Reconstruction' if row['kl'] is not None else 'Action rollout', fill=pred_color, font=font)
+    if row['recon_weighted'] is None:
+        loss = 'Conditioning frame (no loss)'
+    elif row['kl_weighted'] is None:
+        loss = 'Reference MSE: {:.6f} | No encoder / KL'.format(row['recon_weighted'])
+    else:
+        loss = 'Recon: {:.6f}    KL: {:.6f}  (weighted)'.format(row['recon_weighted'], row['kl_weighted'])
     draw.text((16, 38), loss, fill='white', font=font)
     draw.text((16, 66), 'Frame {} | {:.2f}s | reset {}'.format(
         row['frame'], row['time_s'], 'every {} steps'.format(resample) if resample else 'at start only'),
@@ -265,97 +283,226 @@ def render_frame(result, index, camera, title, resample):
     return np.asarray(frame)
 
 
-def save_report(directory, result, metadata, zero_result=None):
+# Recording-only columns. Shared training/validation diagnostics remain unchanged.
+REPORT_COLUMNS = (
+    'frame', 'time_s', 'conditioned_from_gt', 'recon',
+    'root_error_m', 'local_mpjpe_m', 'left_wrist_error_m', 'right_wrist_error_m',
+    'gt_root_speed_mps', 'pred_root_speed_mps',
+    'gt_wrist_speed_mps', 'pred_wrist_speed_mps', 'pred_pose_wrist_speed_mps',
+    'root_difference_from_zero_m', 'local_joint_difference_from_zero_m',
+)
+POSTERIOR_COLUMNS = (
+    'kl', 'kl_weighted', 'recon_zero_latent', 'latent_joint_effect_m',
+)
+
+
+def report_rows(result):
+    """Drop irrelevant/empty columns and repeated GT coordinates from CSVs."""
     rows = result['rows']
+    posterior = any(row.get('kl') is not None for row in rows)
+    keys = REPORT_COLUMNS + (POSTERIOR_COLUMNS if posterior else ())
+    keys += tuple('pred_root_' + axis for axis in 'xyz')
+    keys = [key for key in keys if any(row.get(key) is not None for row in rows)]
+    return [{key: row.get(key) for key in keys} for row in rows]
+
+
+def new_figure(rows, columns, size):
+    from matplotlib.figure import Figure
+    from matplotlib.backends.backend_agg import FigureCanvasAgg
+    figure = Figure(figsize=size, constrained_layout=True)
+    FigureCanvasAgg(figure)
+    return figure, figure.subplots(rows, columns).ravel()
+
+
+def plot_metrics(ax, rows, keys, title, ylabel):
+    times = [row['time_s'] for row in rows]
+    for key, label in keys:
+        values = [row.get(key) for row in rows]
+        if any(value is not None for value in values):
+            ax.plot(times, [np.nan if value is None else value for value in values], label=label)
+    ax.set(title=title, xlabel='Source time (s)', ylabel=ylabel)
+    ax.grid(alpha=.25)
+    if ax.lines:
+        ax.legend(fontsize=7)
+
+
+def save_report(directory, result, metadata):
+    """One compact report per rollout; baseline data is never copied here."""
+    rows = report_rows(result)
     with (directory / 'history.csv').open('w', newline='') as stream:
         writer = csv.DictWriter(stream, fieldnames=list(rows[0]))
         writer.writeheader()
         writer.writerows(rows)
+    # Use only exported metrics and omit empty subgroup summaries.
+    summary = summarize_rows(rows)
+    metadata.update({key: value for key, value in summary.items()
+                     if value is not None and not key.startswith(('stationary_', 'fast_motion_'))})
     evaluated = [row for row in rows if row['recon'] is not None]
-    metadata.update(summarize_rows(rows))
     metadata['root_endpoint_error_m'] = evaluated[-1]['root_error_m']
-    metadata['metric_thresholds'] = result.get('metric_thresholds', {})
-    if zero_result is not None:
-        zero_rows = zero_result['rows']
-        metadata['zero_latent_rollout'] = dict(
-            summarize_rows(zero_rows),
-            root_endpoint_error_m=zero_rows[-1]['root_error_m'],
-            note='z=0 every step; independent predicted history; same GT reset schedule; no encoder or KL.')
-        with (directory / 'zero_latent_history.csv').open('w', newline='') as stream:
-            writer = csv.DictWriter(stream, fieldnames=list(zero_rows[0]))
-            writer.writeheader()
-            writer.writerows(zero_rows)
     (directory / 'summary.json').write_text(json.dumps(metadata, indent=2))
-    from matplotlib.figure import Figure
-    from matplotlib.backends.backend_agg import FigureCanvasAgg
-    figure = Figure(figsize=(13, 20 if zero_result is not None else 17), constrained_layout=True)
-    FigureCanvasAgg(figure)
-    grid = figure.add_gridspec(6 if zero_result is not None else 5, 2)
-    axes = [figure.add_subplot(grid[0, 0]), figure.add_subplot(grid[1, 0])]
-    times = [row['time_s'] for row in evaluated]
-    for ax, key, label in zip(axes, ('recon_weighted', 'kl_weighted'), ('Reconstruction loss', 'KL loss')):
-        ax.plot(times, [row[key] for row in evaluated])
-        for row in evaluated:
-            if row['conditioned_from_gt']:
-                ax.axvline(row['time_s'], color='gray', linestyle=':', alpha=.35)
-        ax.set(title=label + ' (weighted)', xlabel='Source time (s)', ylabel='Loss')
-        ax.grid(alpha=.25)
-    court = figure.add_subplot(grid[:2, 1])
-    for segment in court_lines():
-        court.plot(segment[:, 0], segment[:, 1], color='gray', linewidth=1)
-    court.plot([-5.9, 5.9], [0, 0], color='gray', linewidth=3, label='Net')
-    for roots, label, color in zip(result['roots'], ('Ground truth', 'Reconstruction'), (GT_COLOR, PRED_COLOR)):
-        color = np.array(color) / 255
-        court.plot(roots[:, 0], roots[:, 1], color=color, label=label)
-        court.scatter(*roots[0, :2], color=color, marker='o')
-        court.scatter(*roots[-1, :2], color=color, marker='x')
-    if zero_result is not None:
-        zero_roots = zero_result['roots'][1]
-        court.plot(zero_roots[:, 0], zero_roots[:, 1], color='purple', linestyle='--', label='Always z=0 (own history)')
-        court.scatter(*zero_roots[-1, :2], color='purple', marker='x')
-    court.set(title='Root trajectory (circle: start; cross: end)', xlabel='Court X (m)', ylabel='Court Y (m)')
-    court.set_aspect('equal', adjustable='datalim')
-    court.grid(alpha=.2)
-    court.legend(fontsize=8)
-    figure.suptitle('{}\nPosterior-mean reconstruction; resets: {}'.format(
-        metadata['name'], metadata['resample'] or 'initial state only'), fontsize=9)
+    posterior = any(row.get('kl') is not None for row in evaluated)
+    figure, axes = new_figure(3 if posterior else 2, 2, (10, 9 if posterior else 6))
     groups = [
-        (('root_error_m', 'root_consistency_m'), 'Root errors (m)'),
-        (('local_mpjpe_m', 'world_mpjpe_m', 'left_wrist_error_m', 'right_wrist_error_m'), 'Joint errors (m)'),
-        (('gt_root_speed_mps', 'pred_root_speed_mps'), 'Horizontal root speed (m/s)'),
-        (('gt_wrist_speed_mps', 'pred_wrist_speed_mps', 'pred_pose_wrist_speed_mps'), 'Maximum wrist speed (m/s)'),
-        (('root_velocity_bias_x_mps', 'root_velocity_bias_y_mps', 'root_velocity_bias_z_mps'), 'Signed root velocity error (m/s)'),
-        (('recon', 'recon_zero_latent'), 'One-step latent substitution: same conditioning history'),
+        ((('root_error_m', 'Root'),), 'Root error versus reference', 'm'),
+        ((('local_mpjpe_m', 'Mean joint'), ('left_wrist_error_m', 'Left wrist'),
+          ('right_wrist_error_m', 'Right wrist')), 'Local pose error versus reference', 'm'),
+        ((('gt_root_speed_mps', 'Reference'), ('pred_root_speed_mps', 'Predicted')),
+         'Horizontal root speed', 'm/s'),
+        ((('gt_wrist_speed_mps', 'Reference'), ('pred_wrist_speed_mps', 'Velocity head'),
+          ('pred_pose_wrist_speed_mps', 'Displayed pose')), 'Maximum wrist speed', 'm/s'),
     ]
-    for index, (keys, title) in enumerate(groups):
-        ax = figure.add_subplot(grid[2 + index // 2, index % 2])
-        for key in keys:
-            values = [r.get(key) for r in evaluated]
-            if any(v is not None for v in values):
-                ax.plot(times, [np.nan if v is None else v for v in values], label=key)
-        ax.set(title=title, xlabel='Source time (s)')
-        ax.grid(alpha=.25)
-        ax.legend(fontsize=7)
-    if zero_result is not None:
-        zero_evaluated = [r for r in zero_result['rows'] if r['recon'] is not None]
-        for column, keys, title in [
-                (0, ('recon',), 'Independent rollouts: normalized reconstruction MSE'),
-                (1, ('root_error_m', 'local_mpjpe_m'), 'Independent rollouts: root / local joint error (m)')]:
-            ax = figure.add_subplot(grid[5, column])
-            for key, color in zip(keys, ('tab:blue', 'tab:orange')):
-                ax.plot(times, [r[key] for r in evaluated], color=color, label='Posterior: ' + key)
-                ax.plot(times, [r[key] for r in zero_evaluated], color=color, linestyle='--', label='Always z=0: ' + key)
-            for row in evaluated:
-                if row['conditioned_from_gt']:
-                    ax.axvline(row['time_s'], color='gray', linestyle=':', alpha=.35)
-            ax.set(title=title, xlabel='Source time (s)')
+    if posterior:
+        groups = [
+            ((('recon', 'Posterior mean'), ('recon_zero_latent', 'One-step z=0')),
+             'Normalized feature MSE (same history)', 'MSE'),
+            ((('kl_weighted', 'Weighted KL'),), 'Posterior KL', 'Loss'),
+        ] + groups
+    for ax, (keys, title, ylabel) in zip(axes, groups):
+        plot_metrics(ax, evaluated, keys, title, ylabel)
+    figure.suptitle('{}\n{}; resets: {}'.format(
+        metadata['name'], metadata.get('rollout_label', 'Posterior mean'),
+        metadata['resample'] or 'initial state only'), fontsize=9)
+    figure.savefig(str(directory / 'metrics.png'), dpi=120, pil_kwargs={'compress_level': 9})
+
+
+def add_zero_comparison(result, zero, fields):
+    """Compare independent histories, without another decoder evaluation."""
+    joint_slice = fields['joint_pos']
+    root_effect = np.linalg.norm(result['roots'][1] - zero['roots'][1], axis=-1)
+    local = result['predicted_features'][:, joint_slice].reshape(-1, 23, 3)
+    zero_local = zero['predicted_features'][:, joint_slice].reshape(-1, 23, 3)
+    local_effect = np.linalg.norm(local - zero_local, axis=-1).mean(axis=-1)
+    for i, row in enumerate(result['rows']):
+        evaluated = row['recon'] is not None
+        row['root_difference_from_zero_m'] = float(root_effect[i]) if evaluated else None
+        row['local_joint_difference_from_zero_m'] = float(local_effect[i]) if evaluated else None
+    evaluated = [row for row in result['rows'] if row['recon'] is not None]
+    return dict(
+        root_difference_from_zero_m_mean=float(np.mean([r['root_difference_from_zero_m'] for r in evaluated])),
+        root_difference_from_zero_m_endpoint=float(root_effect[-1]),
+        local_joint_difference_from_zero_m_mean=float(np.mean([r['local_joint_difference_from_zero_m'] for r in evaluated])),
+    )
+
+
+def save_experiments(directory, experiments, name):
+    """Central comparisons with consistent colors and explicit reset schedules."""
+    figure, axes = new_figure(4, 2, (12, 12))
+    reference = next(iter(experiments.values()))['rows']
+    evaluated_reference = [row for row in reference if row['recon'] is not None]
+    panels = (
+        ('recon', 'Normalized feature MSE versus reference', 'MSE'),
+        ('root_error_m', 'Root error versus reference', 'm'),
+        ('local_mpjpe_m', 'Local mean joint error versus reference', 'm'),
+        ('pred_root_speed_mps', 'Horizontal root speed', 'm/s'),
+        ('pred_pose_wrist_speed_mps', 'Maximum displayed-pose wrist speed', 'm/s'),
+        ('root_difference_from_zero_m', 'Root difference from independent z=0', 'm'),
+        ('local_joint_difference_from_zero_m', 'Local pose difference from independent z=0', 'm'),
+    )
+    court = axes[0]
+    gt_roots = next(iter(experiments.values()))['roots'][0]
+    court.plot(gt_roots[:, 0], gt_roots[:, 1], color='black', linestyle=':', label='Reference')
+    colors = ('tab:blue', 'tab:gray', 'tab:orange', 'tab:green', 'tab:red')
+    all_roots = [gt_roots]
+    for (label, result), color in zip(experiments.items(), colors):
+        roots = result['roots'][1]
+        all_roots.append(roots)
+        court.plot(roots[:, 0], roots[:, 1], color=color, label=label)
+        court.scatter(*roots[-1, :2], color=color, marker='x', s=20)
+        rows = [row for row in result['rows'] if row['recon'] is not None]
+        for ax, (key, title, ylabel) in zip(axes[1:], panels):
+            values = [row.get(key) for row in rows]
+            if any(value is not None for value in values):
+                ax.plot([row['time_s'] for row in rows], values, color=color, label=label)
+            ax.set(title=title, xlabel='Source time (s)', ylabel=ylabel)
             ax.grid(alpha=.25)
-            ax.legend(fontsize=7)
-    figure.savefig(str(directory / 'metrics.png'), dpi=140)
+    for ax, key in ((axes[4], 'gt_root_speed_mps'), (axes[5], 'gt_wrist_speed_mps')):
+        if any(row.get(key) is not None for row in evaluated_reference):
+            ax.plot([r['time_s'] for r in evaluated_reference], [r.get(key) for r in evaluated_reference],
+                    color='black', linestyle=':', label='Reference')
+    for segment in court_lines():
+        court.plot(segment[:, 0], segment[:, 1], color='gray', linewidth=.6, alpha=.5)
+    xy = np.concatenate(all_roots)[:, :2]
+    margin = np.maximum(np.ptp(xy, axis=0) * .1, .25)
+    court.set(xlim=(xy[:, 0].min() - margin[0], xy[:, 0].max() + margin[0]),
+              ylim=(xy[:, 1].min() - margin[1], xy[:, 1].max() + margin[1]),
+              title='Root trajectories (zoomed; cross: end)', xlabel='Court X (m)', ylabel='Court Y (m)')
+    court.set_aspect('equal', adjustable='box')
+    court.grid(alpha=.25)
+    court.legend(fontsize=7)
+    figure.suptitle(name + '\nRandom-action errors are reference differences, not reconstruction quality. '
+                    'Reset schedules are shown in the legend.', fontsize=9)
+    figure.savefig(str(directory / 'experiments.png'), dpi=120, pil_kwargs={'compress_level': 9})
 
 
-def record_reconstruction(opt, name, resample=None, nframes=None, suffix=''):
+def write_rollout_video(path, result, fps, title, resample=None):
     import imageio
+    camera = CourtCamera()
+    with imageio.get_writer(str(path), fps=fps, codec='libx264', quality=7,
+                            ffmpeg_params=['-preset', 'fast'], macro_block_size=16) as writer:
+        for index in range(len(result['rows'])):
+            writer.append_data(render_frame(result, index, camera, title, resample))
+
+
+def unit_action_sequences(predicted_frames, latent_size, seed=0, hold_frames=10):
+    """Unit standard deviation per coordinate, not unit vector norm.
+
+    Reuse a seeded draw stream so all schedules begin with the same action.
+    This local RNG never changes training or posterior sampling RNG state.
+    """
+    if predicted_frames < 1 or latent_size < 1 or hold_frames < 1 or seed < 0:
+        raise ValueError('Frame counts, latent size, and hold frames must be positive; seed must be nonnegative.')
+    rng = np.random.default_rng(seed)
+    draws = rng.standard_normal((predicted_frames, latent_size)).astype(np.float32)
+    return {
+        'fixed': np.repeat(draws[:1], predicted_frames, axis=0),
+        'held': np.repeat(draws[::hold_frames], hold_frames, axis=0)[:predicted_frames],
+        'per_frame': draws,
+    }
+
+
+def record_unit_actions(directory, model, features, roots, source_frames, fps, metadata,
+                        zero, seed=0, hold_frames=10):
+    """Test-only probes sharing one precomputed, independently rolled-out baseline."""
+    sequences = unit_action_sequences(len(features) - model.opt.num_condition_frames,
+                                      model.opt.latent_size, seed, hold_frames)
+    directory.mkdir(parents=True, exist_ok=True)
+    note = ('Independent autoregressive action rollout; GT initialization only; no encoder or KL. '
+            'Source motion is a reference, not the intended target for random actions. '
+            'Unit scale means N(0,1) per latent coordinate; no normalization or clipping. '
+            'The parent reconstruction resample setting does not apply.')
+    base_metadata = {key: metadata[key] for key in (
+        'name', 'dataset_dir', 'checkpoint', 'frames', 'fps', 'weights',
+        'start_root', 'camera_position', 'camera_target') if key in metadata}
+    base_metadata.update(resample=None, note=note, action_seed=seed,
+                         zero_baseline='../zero/history.csv')
+    comparisons, experiments = {}, {}
+    fields = feature_slices(model.opt)
+    for schedule, actions in sequences.items():
+        result = reconstruct(model, features, roots, source_frames, fps,
+                             latent_diagnostics=False, latent_mode='actions', actions=actions,
+                             detailed_metrics=False)
+        output_dir = directory / schedule
+        output_dir.mkdir()
+        np.save(output_dir / 'actions.npy', actions)
+        comparison = add_zero_comparison(result, zero, fields)
+        hold = len(actions) if schedule == 'fixed' else hold_frames if schedule == 'held' else 1
+        label = 'Unit Gaussian: ' + schedule
+        report_metadata = dict(base_metadata, rollout_label=label, action_schedule=schedule,
+                              action_hold_frames=hold, actions_shape=list(actions.shape),
+                              actions_first_source_frame=int(source_frames[model.opt.num_condition_frames]),
+                              zero_baseline='../../zero/history.csv', **comparison)
+        save_report(output_dir, result, report_metadata)
+        write_rollout_video(output_dir / 'rollout.mp4', result, fps, label + ' | ' + metadata['name'])
+        comparisons[schedule] = comparison
+        experiments[label + ' (no resets)'] = result
+    (directory / 'summary.json').write_text(json.dumps(dict(
+        action_seed=seed, hold_frames=hold_frames, resample=None, note=note,
+        zero_baseline='../zero/history.csv', comparisons_to_zero=comparisons), indent=2))
+    return experiments
+
+
+def record_reconstruction(opt, name, resample=None, nframes=None, suffix='',
+                          latent_seed=0, latent_hold_frames=10, unit_actions=False):
     opt = copy.deepcopy(opt)
     opt.test_only = True
     feature_slices(opt)
@@ -377,9 +524,9 @@ def record_reconstruction(opt, name, resample=None, nframes=None, suffix=''):
     source_frames = np.arange(seq['start'] + 1, seq['start'] + length + 1)
     fps = float(seq.get('fps', 30))
     model = MotionVAEModel(opt)
-    result = reconstruct(model, features, roots, source_frames, fps, resample)
-    zero_result = reconstruct(model, features, roots, source_frames, fps, resample,
-                              latent_diagnostics=False, latent_mode='zero')
+    result = reconstruct(model, features, roots, source_frames, fps, resample, detailed_metrics=False)
+    zero_result = reconstruct(model, features, roots, source_frames, fps,
+                              latent_diagnostics=False, latent_mode='zero', detailed_metrics=False)
     safe_name = re.sub(r'[^A-Za-z0-9_.-]+', '_', canonical)[:160]
     stamp = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
     directory = Path(opt.result_dir) / (opt.model_ver + suffix) / (safe_name + '_' + stamp)
@@ -394,18 +541,36 @@ def record_reconstruction(opt, name, resample=None, nframes=None, suffix=''):
                          'Recon is normalized feature MSE; KL is averaged over latent dimensions. '
                          'Loss is measured before root integration. Initial conditioning frames have no loss. '
                          'The first source frame is reserved for velocity computation.')
-    save_report(directory, result, metadata, zero_result=zero_result)
-    camera = CourtCamera()
+    comparison = add_zero_comparison(result, zero_result, feature_slices(opt))
+    metadata.update(comparison, zero_baseline='zero/history.csv')
+    # Store the uninterrupted zero baseline once, regardless of action schedules.
+    zero_dir = directory / 'zero'
+    zero_dir.mkdir()
+    zero_metadata = {key: metadata[key] for key in (
+        'name', 'dataset_dir', 'checkpoint', 'frames', 'fps', 'weights',
+        'start_root', 'camera_position', 'camera_target')}
+    zero_metadata.update(resample=None, rollout_label='Always z=0',
+                         note='Independent z=0 rollout; GT initialization only; no encoder or KL.')
+    save_report(zero_dir, zero_result, zero_metadata)
+    write_rollout_video(zero_dir / 'rollout.mp4', zero_result, fps, 'Always z=0 | ' + canonical)
+    save_report(directory, result, metadata)
     video_path = directory / 'reconstruction.mp4'
-    with imageio.get_writer(str(video_path), fps=fps, codec='libx264', quality=7,
-                            ffmpeg_params=['-preset', 'fast'], macro_block_size=16) as writer:
-        for index in range(length):
-            writer.append_data(render_frame(result, index, camera, canonical, resample))
+    write_rollout_video(video_path, result, fps, canonical, resample)
     print('Reconstruction video: {}'.format(video_path.resolve()))
     print('Losses and root trajectories: {}'.format((directory / 'metrics.png').resolve()))
     print('Mean weighted recon: {:.6f}; KL: {:.6f}'.format(
-        metadata['recon_weighted_mean'], metadata['kl_weighted_mean']))
+        metadata['recon_mean'] * opt.weights['recon'], metadata['kl_weighted_mean']))
     print('Mean root error: {:.2f} cm; local joint error: {:.2f} cm; diagnostics: {}'.format(
         metadata['root_error_m_mean'] * 100, metadata['local_mpjpe_m_mean'] * 100,
         directory / 'metrics.png'))
+    posterior_label = 'Posterior (resets every {} frames)'.format(resample) if resample else 'Posterior (no resets)'
+    experiments = {posterior_label: result, 'z=0 (no resets)': zero_result}
+    if unit_actions:
+        experiments.update(record_unit_actions(
+            directory / 'unit_actions', model, features, roots, source_frames,
+            fps, metadata, zero_result, latent_seed, latent_hold_frames))
+        print('Independent unit-scale action rollouts (GT initialization only): {}'.format(
+            (directory / 'unit_actions').resolve()))
+    save_experiments(directory, experiments, canonical)
+    print('Central experiment comparison: {}'.format((directory / 'experiments.png').resolve()))
     return directory
