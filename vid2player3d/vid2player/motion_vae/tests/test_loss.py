@@ -4,7 +4,10 @@ import unittest
 import torch
 
 from vid2player.motion_vae.config import MotionVAEOption
-from vid2player.motion_vae.loss import build_recon_feature_weights, feature_squared_error
+from vid2player.motion_vae.loss import (
+    build_recon_feature_weights, feature_squared_error,
+    trajectory_loss_settings, accumulated_root_trajectory_loss,
+)
 
 
 class ReconstructionLossTests(unittest.TestCase):
@@ -74,11 +77,84 @@ class ReconstructionLossTests(unittest.TestCase):
         experiment = MotionVAEOption()
         experiment.load('usopen_5')
         self.assertEqual(baseline.recon_feature_weights, {})
-        self.assertEqual(experiment.recon_feature_weights, {'root_velo': 5.0})
+        self.assertEqual(experiment.recon_feature_weights, {'root_velo': 2.0, 'root_pos': 2.0})
         ignored = {'model_ver', 'base_opt_ver', 'recon_feature_weights'}
         for name in vars(baseline).keys() - ignored:
             if not callable(getattr(baseline, name)):
                 self.assertEqual(getattr(experiment, name), getattr(baseline, name), name)
+
+    def test_usopen_6_enables_trajectory_with_existing_usopen_5_weights(self):
+        baseline = MotionVAEOption()
+        baseline.load('usopen_5')
+        experiment = MotionVAEOption()
+        experiment.load('usopen_6')
+        self.assertFalse(baseline.accumulate_trajectory_loss)
+        self.assertTrue(experiment.accumulate_trajectory_loss)
+        self.assertEqual(experiment.weights['trajectory'], 1.0)
+        self.assertEqual(experiment.trajectory_window_frames, 9)
+        self.assertEqual(baseline.weights['trajectory'], 0)
+        self.assertEqual({k: v for k, v in experiment.weights.items() if k != 'trajectory'},
+                         {k: v for k, v in baseline.weights.items() if k != 'trajectory'})
+        ignored = {'model_ver', 'base_opt_ver', 'accumulate_trajectory_loss', 'weights'}
+        for name in vars(baseline).keys() - ignored:
+            if not callable(getattr(baseline, name)):
+                self.assertEqual(getattr(experiment, name), getattr(baseline, name), name)
+
+    def test_trajectory_loss_recovers_metres_and_trains_all_prefix_displacements(self):
+        prediction = torch.tensor([[[1., 0., 0.], [1., 0., 0.], [1., 0., 0.]]], requires_grad=True)
+        target = torch.zeros_like(prediction, requires_grad=True)
+        loss = accumulated_root_trajectory_loss(prediction, target, torch.tensor([2., 3., 4.]))
+        # Physical XYZ prefix errors: [2,0,0], [4,0,0], [6,0,0].
+        self.assertAlmostEqual(loss.item(), (4 + 16 + 36) / 9, places=6)
+        grad, target_grad = torch.autograd.grad(loss, (prediction, target), allow_unused=True)
+        self.assertIsNone(target_grad)
+        torch.testing.assert_close(grad[0, :, 0], torch.tensor([48., 40., 24.]) / 9)
+        self.assertTrue(torch.equal(grad[0, :, 1:], torch.zeros(3, 2)))
+
+    def test_trajectory_loss_penalizes_intermediate_drift_even_if_endpoint_matches(self):
+        prediction = torch.tensor([[[1., 0., 0.], [-1., 0., 0.]]])
+        target = torch.zeros_like(prediction)
+        self.assertAlmostEqual(accumulated_root_trajectory_loss(prediction, target, torch.ones(3)).item(), 1 / 6)
+        self.assertEqual(accumulated_root_trajectory_loss(target, target, torch.ones(3)).item(), 0.)
+
+    def test_trajectory_settings_validate_and_respect_disabled_and_reduced_root(self):
+        self.assertEqual(trajectory_loss_settings(self.opt), (False, None))
+        self.opt.accumulate_trajectory_loss = True
+        self.opt.update(weights={'trajectory': 1})
+        self.assertEqual(trajectory_loss_settings(self.opt), (True, slice(3, 6)))
+        self.opt.condition_root_x_only = True
+        self.assertEqual(trajectory_loss_settings(self.opt), (True, slice(1, 4)))
+        self.opt.condition_root_x_only = False
+        self.opt.no_condition_root_y = True
+        self.assertEqual(trajectory_loss_settings(self.opt), (True, slice(2, 5)))
+        self.opt.pose_feature = ['root_velo']
+        self.assertEqual(trajectory_loss_settings(self.opt), (True, slice(0, 3)))
+        self.opt.update(weights={'trajectory': 0})
+        self.assertEqual(trajectory_loss_settings(self.opt), (False, None))
+        for weight in (-1, float('nan'), float('inf'), True, '1'):
+            self.opt.update(weights={'trajectory': weight})
+            with self.subTest(weight=weight), self.assertRaises(ValueError):
+                trajectory_loss_settings(self.opt)
+        self.opt.update(weights={'trajectory': 1})
+        self.opt.pose_feature = ['joint_pos']
+        with self.assertRaises(ValueError):
+            trajectory_loss_settings(self.opt)
+
+    def test_trajectory_horizon_rejects_invalid_values(self):
+        for horizon in (0, -1, True, 2.5, None, '9'):
+            self.opt.trajectory_window_frames = horizon
+            with self.subTest(horizon=horizon), self.assertRaises(ValueError):
+                trajectory_loss_settings(self.opt)
+
+    def test_weight_overrides_merge_without_mutating_shared_defaults(self):
+        original = self.opt.weights.copy()
+        other = MotionVAEOption()
+        other.load('usopen')
+        self.opt.update(weights={'trajectory': 3})
+        self.assertEqual(self.opt.weights['trajectory'], 3)
+        for key in original.keys() - {'trajectory'}:
+            self.assertEqual(self.opt.weights[key], original[key])
+        self.assertEqual(other.weights, original)
 
 
 if __name__ == '__main__':

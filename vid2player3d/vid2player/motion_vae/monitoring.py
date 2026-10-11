@@ -21,8 +21,10 @@ SECONDARY_METRICS = {
     'root_consistency_m_mean': 'root_consistency_m',
     'stationary_pred_root_speed_mps_mean': 'stationary_root_speed_mps',
     'pose_wrist_velocity_error_mps_mean': 'wrist_velocity_error_mps',
+    'trajectory_weighted_mean': 'trajectory_loss',
 }
-TRAIN_TAGS = {'recon': 'recon_loss', 'kl': 'kl_loss', 'recon_phase': 'phase_loss'}
+TRAIN_TAGS = {'recon': 'recon_loss', 'kl': 'kl_loss', 'recon_phase': 'phase_loss',
+              'trajectory': 'trajectory_loss'}
 
 
 def train_tag(metric):
@@ -66,6 +68,7 @@ def validation_scalars(summaries):
 def write_run_config(model):
     """One JSON for resolved options, split identity, and model-independent facts."""
     opt = model.opt
+    predicted_steps = opt.nframes_seq - opt.num_condition_frames - opt.num_future_predictions + 1
     config = {key: value for key, value in vars(opt).items()
               if not key.startswith('_') and not callable(value)}
     metadata = dict(
@@ -78,6 +81,9 @@ def write_run_config(model):
             available_training_windows=len(model.dataset.rollouts),
             sampled_windows_per_epoch=opt.nseqs,
             batches_per_epoch=len(model.trainset),
+            optimizer_updates_per_batch=(
+                (predicted_steps + opt.trajectory_window_frames - 1) // opt.trajectory_window_frames
+                if model.accumulate_trajectory_loss else predicted_steps),
         ),
         validation_reference=model.validation.reference_stats if model.validation else None,
         tensorboard=dict(

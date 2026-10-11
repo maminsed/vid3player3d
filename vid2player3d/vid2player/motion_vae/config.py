@@ -33,11 +33,15 @@ class MotionVAEOption(object):
     nseqs = 50000
     curriculum_schedule = None
     mixed_phase_schedule = None
-    weights = {'recon': 1, 'kl': 1, 'recon_phase': 10}
+    weights = {'recon': 1, 'kl': 1, 'recon_phase': 10, 'trajectory': 0}
     # Multipliers on normalized squared error per coordinate; omitted groups = 1.
     # {} (or all ones) preserves the original loss, including its denominator.
     # Keys: root_pos, root_velo, joint_pos, joint_velo, joint_rotmat, joint_quat.
     recon_feature_weights = {}
+    # Mean squared cumulative root displacement error (m^2), per bounded chunk.
+    # Enabled training updates once per chunk; False preserves per-step baseline.
+    accumulate_trajectory_loss = False
+    trajectory_window_frames = 9  # Predicted steps, independent of nframes_seq.
     softmax_future = False
 
     batch_size = 64
@@ -77,7 +81,12 @@ class MotionVAEOption(object):
 
     def update(self, **kwargs):
         for key in kwargs:
-            setattr(self, key, kwargs[key])
+            if key == 'weights':
+                # Inherited configs can override one loss coefficient without
+                # repeating or dropping the other coefficients.
+                self.weights = {**self.weights, **kwargs[key]}
+            else:
+                setattr(self, key, kwargs[key])
 
 
     def print(self):
@@ -162,6 +171,12 @@ motion_vae_opt_dict = {
 'usopen_6': {
     'model_ver'                             : 'usopen_6',
     'base_opt_ver'                          : 'usopen_5',
+    'accumulate_trajectory_loss'            : True,
+    'trajectory_window_frames'              : 9,
+    'weights'                               : {'trajectory': 0.5},
+    'n_epochs'                              : 250 * 9,
+    'n_epochs_decay'                        : 250 * 9,
+    'save_freq_epoch'                       : 50 * 9,
 },
 
 'djokovic': {

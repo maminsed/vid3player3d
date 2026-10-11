@@ -51,3 +51,40 @@ def feature_squared_error(output, target, feature_weights=None):
     """Weight squared errors before the existing batch/feature/future reductions."""
     error = (output - target.detach()).pow(2)
     return error if feature_weights is None else error * feature_weights
+
+
+def trajectory_loss_settings(opt):
+    """Validate the optional loss and locate displacement in the dataset layout."""
+    enabled = getattr(opt, 'accumulate_trajectory_loss', False)
+    weight = opt.weights.get('trajectory', 0)
+    horizon = getattr(opt, 'trajectory_window_frames', 9)
+    if not isinstance(enabled, bool):
+        raise ValueError('accumulate_trajectory_loss must be a boolean.')
+    if isinstance(weight, bool) or not isinstance(weight, (int, float)) or not math.isfinite(weight) or weight < 0:
+        raise ValueError("weights['trajectory'] must be finite and nonnegative.")
+    if isinstance(horizon, bool) or not isinstance(horizon, int) or horizon < 1:
+        raise ValueError('trajectory_window_frames must be a positive integer.')
+    if not enabled or weight == 0:
+        return False, None
+    if 'root_velo' not in opt.pose_feature:
+        raise ValueError('Accumulated trajectory loss requires root_velo.')
+    root_size = 0
+    if 'root_pos' in opt.pose_feature:
+        root_size = 1 if opt.condition_root_x_only else (2 if opt.no_condition_root_y else 3)
+    if opt.frame_size < root_size + 3:
+        raise ValueError('Root displacement does not fit frame_size.')
+    return True, slice(root_size, root_size + 3)
+
+
+def accumulated_root_trajectory_loss(prediction, target, displacement_std):
+    """MSE over all XYZ trajectory prefixes, batches, and predicted steps (m^2).
+
+    Inputs are normalized displacements shaped [batch, steps, 3]. Multiplying
+    their difference by checkpoint std recovers metres; the mean cancels.
+    Both trajectories start at the same GT root. No detach on predictions:
+    later prefix errors train every earlier contributing displacement.
+    """
+    if prediction.ndim != 3 or prediction.shape != target.shape or prediction.shape[-1] != 3 or prediction.shape[1] < 1:
+        raise ValueError('Trajectory loss requires matching [batch, steps, 3] displacements.')
+    error_m = (prediction.float() - target.detach().float()) * displacement_std
+    return error_m.cumsum(dim=1).square().mean()

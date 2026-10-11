@@ -357,13 +357,80 @@ and applying the existing future-frame weights and outer `weights['recon']`.
 The denominator stays `frame_size`, rather than the sum of feature weights, so
 increasing a root multiplier leaves local-pose and KL coefficients unchanged.
 
+Optional accumulated root trajectory loss is controlled by
+`accumulate_trajectory_loss` (default `False`), `weights['trajectory']`
+(default `0`; a positive coefficient is required to enable it), and
+`trajectory_window_frames` (default `9` predicted steps). `usopen_6` inherits
+the current `usopen_5` feature/KL weights, enables the term with coefficient
+`1.0`, and uses nine-step trajectory chunks. `weights` overrides merge across
+inherited configs, so `usopen_6` only needs `{'trajectory': 1.0}`. The separate
+`trajectory_loss_weight` option has been replaced by `weights['trajectory']`.
+No training is started by changing these settings.
+
+For each trajectory chunk, let `e_t` be predicted minus target root displacement
+in metres. The added loss is
+`weights['trajectory'] * mean_{batch,t,xyz}((sum_{j<=t} e_j)^2)`.
+It penalizes **every trajectory prefix**, not just the endpoint, and recovers
+metres from normalized displacement differences using the training std (the
+mean cancels). It is independent of reconstruction feature weights and the
+outer reconstruction weight. Both trajectories begin at the same ground-truth
+root, so no absolute court-position offset enters the loss. Only the first of
+each step's future predictions is accumulated, avoiding overlapping steps when
+`num_future_predictions > 1`.
+
+With the term enabled, training splits the predicted sequence into consecutive,
+nonoverlapping chunks of at most `trajectory_window_frames` predictions and
+performs **one combined optimizer update per chunk**. That update averages
+the existing reconstruction/KL/phase losses within the chunk and adds its
+trajectory penalty. All trainable parameters receive this combined gradient;
+there is no separate root-only optimizer. The shorter final chunk is also
+trained. Conditioning carries forward across chunks, while the accumulated
+displacement error restarts at zero. Pose conditioning remains detached, as
+in baseline training; this does not add backpropagation through that history.
+
+Increasing `nframes_seq` therefore increases the rollout length without retaining
+more than one trajectory chunk's network activations for backward. The input
+batch itself still grows with `nframes_seq`. This bounds the additional activation
+memory; it does not guarantee a particular GPU memory budget. Longer trajectory
+horizons can increase drift loss and gradient magnitudes, but cumulative sums
+have unit derivative and do not themselves cause recurrent vanishing gradients.
+The tradeoff is that drift across chunk boundaries is not directly penalized.
+Use full-rollout root error to assess it. For example, 30 predicted steps with
+`trajectory_window_frames=9` produce chunks of 9, 9, 9, and 3 predictions and
+four optimizer updates. The default nine-prediction training sequence still
+produces one update.
+
+With trajectory loss disabled, or `weights['trajectory']=0`, the original
+per-step optimizer updates and losses are unchanged. Comparing `usopen_6` with
+`usopen_5` changes the optimizer update schedule as well as the loss; improvement
+would not isolate the effect of trajectory supervision alone.
+
+Training logs the weighted term at `train/trajectory_loss`. Validation logs it
+under `diagnostics/val_*/trajectory_loss`, and reports store
+`trajectory_mse_m2` and `trajectory_weighted` separately from reconstruction.
+Training, validation, and reconstruction use the same bounded trajectory horizon;
+reconstruction resample resets also restart the penalty. The **displayed root
+and root-error metrics** continue over the entire evaluation horizon independently
+of chunk boundaries. The training trajectory scalar is a frame-weighted mean
+over chunks, so the shorter final chunk does not receive equal logging weight
+to a full chunk. Resolved options and optimizer updates per batch are saved in
+`run_config.json`; reconstruction and zero/action summaries include the settings.
+
+The MVAE paper ([§3–3.4](https://arxiv.org/pdf/2103.14274)) uses next-frame
+reconstruction MSE plus KL and scheduled sampling. It does not report an
+accumulated root trajectory loss ablation establishing that the loss should be
+disabled. Keep this an optional experiment: consistent displacement bias can
+produce drift, but tracking a particular recorded trajectory can also trade off
+with generative motion diversity. Weight `1.0` is an initial setting, not a tuned
+value; evaluate held-out drift, local pose, and latent controllability together.
+
 Configure validation in `vid2player/motion_vae/config.py`:
 
 | Option | `usopen` default | Meaning |
 | --- | --- | --- |
 | `validation_num_videos` | `2` | Hold out exactly this many individual manifest videos/clips; `0` disables validation. |
 | `validation_seed` | `1234` | Local deterministic split seed; does not seed the training run. |
-| `validation_freq_steps` | `3000` | Evaluate every N completed training **batches**, plus before training and at the end. Each current batch performs nine optimizer updates. |
+| `validation_freq_steps` | `3000` | Evaluate every N completed training **batches**, plus before training and at the end. Baseline batches update per prediction; accumulated trajectory training updates per bounded chunk. |
 | `validation_window_frames` | `100` | Number of predicted frames in each short evaluation, excluding conditioning history. |
 | `validation_windows_per_video` | `3` | Fixed, evenly spaced valid windows per held-out video; windows can overlap. |
 | `metric_stationary_speed_mps` | `0.1` | A frame is stationary when GT horizontal root speed is below this threshold. |

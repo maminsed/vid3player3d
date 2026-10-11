@@ -8,6 +8,7 @@ import numpy as np
 
 METRICS = (
     'recon', 'kl', 'recon_weighted', 'kl_weighted', 'recon_zero_latent',
+    'trajectory_mse_m2', 'trajectory_weighted',
     'recon_root_pos', 'recon_root_velo', 'recon_joint_pos', 'recon_joint_velo',
     'recon_joint_rotmat', 'recon_joint_quat',
     'latent_joint_effect_m', 'root_error_m', 'root_xy_error_m',

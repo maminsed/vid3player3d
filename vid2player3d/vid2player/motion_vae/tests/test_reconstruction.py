@@ -74,6 +74,40 @@ class ReconstructionTests(unittest.TestCase):
             # FakeVAE emits displacement [1, 0, 0]; normalized target is zero.
             self.assertAlmostEqual(new['recon_weighted'], old['recon_weighted'] + 4 / 288, delta=2e-6)
 
+    def test_trajectory_report_uses_metres_and_restarts_at_resample_resets(self):
+        self.features[:, 3] = 10  # Make target displacements consistent with roots.
+        baseline = self.run_reconstruction()
+        self.model.opt.accumulate_trajectory_loss = True
+        self.model.opt.update(weights={'trajectory': 2})
+        weighted = self.run_reconstruction()
+        np.testing.assert_array_equal(weighted['roots'], baseline['roots'])
+        for i, row in enumerate(weighted['rows'][1:], start=1):
+            self.assertAlmostEqual(row['trajectory_mse_m2'], (8 * i) ** 2 / 3, places=4)
+            self.assertEqual(row['trajectory_weighted'], 2 * row['trajectory_mse_m2'])
+            self.assertEqual(row['recon_weighted'], baseline['rows'][i]['recon_weighted'])
+        reset = self.run_reconstruction(resample=1)
+        for row in reset['rows'][1:]:
+            self.assertAlmostEqual(row['trajectory_mse_m2'], 64 / 3, places=5)
+        with tempfile.TemporaryDirectory() as directory:
+            metadata = {'name': 'trajectory-test', 'resample': None}
+            save_report(Path(directory), weighted, metadata)
+            self.assertIn('trajectory_mse_m2_mean', metadata)
+            self.assertEqual(metadata['trajectory_weighted_mean'], 2 * metadata['trajectory_mse_m2_mean'])
+
+    def test_trajectory_chunk_boundaries_do_not_reset_integrated_root(self):
+        self.features[:, 3] = 10
+        baseline = self.run_reconstruction()
+        self.model.opt.update(accumulate_trajectory_loss=True, trajectory_window_frames=2,
+                              weights={'trajectory': 1})
+        result = self.run_reconstruction()
+        np.testing.assert_array_equal(result['roots'], baseline['roots'])
+        for row, prefix in zip(result['rows'][1:], (1, 2, 1, 2, 1)):
+            self.assertAlmostEqual(row['trajectory_mse_m2'], (8 * prefix) ** 2 / 3, places=4)
+        # Reset after three predictions is offset from two-frame chunk boundaries.
+        reset = self.run_reconstruction(resample=3)
+        for row, prefix in zip(reset['rows'][1:], (1, 2, 1, 1, 2)):
+            self.assertAlmostEqual(row['trajectory_mse_m2'], (8 * prefix) ** 2 / 3, places=4)
+
     def test_periodic_reset_uses_previous_ground_truth_without_erasing_errors(self):
         result = self.run_reconstruction(resample=2)
         np.testing.assert_allclose(result['roots'][1, :, 0], [0, 2, 4, 22, 24, 42])

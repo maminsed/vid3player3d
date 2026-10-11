@@ -12,7 +12,7 @@ import torch
 from vid2player.motion_vae.base import MotionVAEModel
 from vid2player.motion_vae.dataset import Video3DPoseDataset
 from vid2player.motion_vae.metrics import add_motion_metrics, summarize_rows
-from vid2player.motion_vae.loss import build_recon_feature_weights, feature_squared_error
+from vid2player.motion_vae.loss import build_recon_feature_weights, feature_squared_error, trajectory_loss_settings
 
 
 # The dataset concatenates features in this order, regardless of pose_feature order.
@@ -85,6 +85,7 @@ def reconstruct(model, raw_features, roots, source_frames, fps, resample=None, l
     opt = model.opt
     fields = feature_slices(opt)
     recon_feature_weights = build_recon_feature_weights(opt, model.device)
+    accumulate_trajectory, _ = trajectory_loss_settings(opt)
     if resample is not None and resample <= 0:
         raise ValueError('resample must be positive')
     T = opt.num_condition_frames
@@ -102,7 +103,11 @@ def reconstruct(model, raw_features, roots, source_frames, fps, resample=None, l
         raise ValueError('Cannot reconstruct non-finite motion features or root positions.')
     if not np.isfinite(fps) or fps <= 0:
         raise ValueError('Sequence fps must be positive and finite.')
-    truth = model.normalize(torch.as_tensor(raw_features, dtype=torch.float32, device=model.device))
+    raw_truth = torch.as_tensor(raw_features, dtype=torch.float32, device=model.device)
+    truth = model.normalize(raw_truth)
+    if accumulate_trajectory:
+        trajectory_error = truth.new_zeros(3)
+        trajectory_steps = 0
     condition = truth[:T].clone()
     predicted = np.array(raw_features, dtype=np.float32, copy=True)
     predicted_roots = np.array(roots, dtype=np.float32, copy=True)
@@ -150,6 +155,15 @@ def reconstruct(model, raw_features, roots, source_frames, fps, resample=None, l
                 row['latent_joint_effect_m'] = float((raw_output[fields['joint_pos']] -
                     zero_raw[fields['joint_pos']]).reshape(23, 3).norm(dim=-1).mean())
             root = root + raw_output[fields['root_velo']]
+            if accumulate_trajectory:
+                if reset or trajectory_steps == opt.trajectory_window_frames:
+                    trajectory_error.zero_()
+                    trajectory_steps = 0
+                trajectory_error = trajectory_error + raw_output[fields['root_velo']] - raw_truth[i, fields['root_velo']]
+                trajectory_steps += 1
+                trajectory = trajectory_error.square().mean()
+                row.update(trajectory_mse_m2=float(trajectory),
+                           trajectory_weighted=float(trajectory) * opt.weights['trajectory'])
             predicted_roots[i] = root.cpu().numpy()
             predicted[i] = raw_output.cpu().numpy()
             # Runtime uses integrated displacement, not the separately predicted root_pos.
@@ -290,6 +304,7 @@ def render_frame(result, index, camera, title, resample):
 # Recording-only columns. Shared training/validation diagnostics remain unchanged.
 REPORT_COLUMNS = (
     'frame', 'time_s', 'conditioned_from_gt', 'recon',
+    'trajectory_mse_m2', 'trajectory_weighted',
     'root_error_m', 'local_mpjpe_m', 'left_wrist_error_m', 'right_wrist_error_m',
     'gt_root_speed_mps', 'pred_root_speed_mps',
     'gt_wrist_speed_mps', 'pred_wrist_speed_mps', 'pred_pose_wrist_speed_mps',
@@ -476,6 +491,7 @@ def record_unit_actions(directory, model, features, roots, source_frames, fps, m
             'The parent reconstruction resample setting does not apply.')
     base_metadata = {key: metadata[key] for key in (
         'name', 'dataset_dir', 'checkpoint', 'frames', 'fps', 'weights', 'recon_feature_weights',
+        'accumulate_trajectory_loss', 'trajectory_window_frames',
         'start_root', 'camera_position', 'camera_target') if key in metadata}
     base_metadata.update(resample=None, note=note, action_seed=seed,
                          zero_baseline='../zero/history.csv')
@@ -539,12 +555,17 @@ def record_reconstruction(opt, name, resample=None, nframes=None, suffix='',
                     checkpoint=str(Path(model.checkpoint_dir) / 'latest.tar'),
                     frames=length, fps=fps, resample=resample, weights=opt.weights,
                     recon_feature_weights=opt.recon_feature_weights,
+                    accumulate_trajectory_loss=opt.accumulate_trajectory_loss,
+                    trajectory_window_frames=opt.trajectory_window_frames,
                     start_root=roots[0].tolist(), camera_position=[0, -28, 9], camera_target=[0, -1, 0],
                     note='Posterior mean latent; target enters encoder at every step. Resample resets '
                          'conditioning history and integrated root before the next prediction. '
                          'Joint positions are direct root-relative decoder outputs, not SMPL FK. '
                          'Recon is unweighted normalized feature MSE; recon_weighted includes feature '
                          'multipliers and the outer recon weight. KL is averaged over latent dimensions. '
+                         'Optional trajectory loss is reported separately in m^2 over bounded '
+                         'trajectory chunks (also restarted at resample resets). Root error uses '
+                         'the full integrated rollout, independent of trajectory chunk boundaries. '
                          'Loss is measured before root integration. Initial conditioning frames have no loss. '
                          'The first source frame is reserved for velocity computation.')
     comparison = add_zero_comparison(result, zero_result, feature_slices(opt))
@@ -554,6 +575,7 @@ def record_reconstruction(opt, name, resample=None, nframes=None, suffix='',
     zero_dir.mkdir()
     zero_metadata = {key: metadata[key] for key in (
         'name', 'dataset_dir', 'checkpoint', 'frames', 'fps', 'weights', 'recon_feature_weights',
+        'accumulate_trajectory_loss', 'trajectory_window_frames',
         'start_root', 'camera_position', 'camera_target')}
     zero_metadata.update(resample=None, rollout_label='Always z=0',
                          note='Independent z=0 rollout; GT initialization only; no encoder or KL.')

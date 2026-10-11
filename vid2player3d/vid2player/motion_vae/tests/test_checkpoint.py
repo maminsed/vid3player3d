@@ -100,6 +100,61 @@ class CheckpointTests(unittest.TestCase):
         expected = old_losses['recon'] + 4 * errors[..., 3:6].sum() / errors.numel() * baseline.opt.weights['recon']
         torch.testing.assert_close(losses['recon'], expected)
 
+    def test_zero_trajectory_weight_preserves_losses_updates_and_optimizer_steps(self):
+        baseline = self.model()
+        disabled = self.model(accumulate_trajectory_loss=True, weights={'trajectory': 0})
+        disabled.model.load_state_dict(baseline.model.state_dict())
+        torch.manual_seed(123)
+        old_losses = baseline.train_batch(self.batch, regressive=True)
+        with patch.object(disabled.optimizer, 'step', wraps=disabled.optimizer.step) as step:
+            torch.manual_seed(123)
+            losses = disabled.train_batch(self.batch, regressive=True)
+        self.assertEqual(step.call_count, 2)
+        self.assertEqual(losses, old_losses)
+        self.assert_weights_equal(disabled, baseline)
+
+    def test_trajectory_training_updates_per_chunk_and_weights_short_tail_by_frames(self):
+        for regressive in (False, True):
+            for futures in (1, 2):
+                for horizon in (1, 2, 9):
+                    with self.subTest(regressive=regressive, futures=futures, horizon=horizon):
+                        model = self.model(accumulate_trajectory_loss=True, weights={'trajectory': 2},
+                                           trajectory_window_frames=horizon, num_future_predictions=futures)
+                        batch = {'feature': torch.randn(2, 6, 288)}
+                        predictions, targets, step_losses, updates = [], [], [], []
+                        original_feed, original_optimize = model.feed_vae, model._optimize_loss
+
+                        def record_feed(truth, *args):
+                            output, losses = original_feed(truth, *args)
+                            predictions.append(output[0][:, 0, 3:6].detach().clone())
+                            targets.append(truth[:, 0, 3:6].detach().clone())
+                            step_losses.append({key: value.item() for key, value in losses.items()})
+                            return output, losses
+
+                        def record_update(total):
+                            updates.append((len(predictions), total.item()))
+                            original_optimize(total)
+
+                        with patch.object(model, 'feed_vae', side_effect=record_feed), patch.object(
+                                model, '_optimize_loss', side_effect=record_update):
+                            losses = model.train_batch(batch, regressive=regressive)
+                        count = len(predictions)
+                        self.assertEqual(len(updates), (count + horizon - 1) // horizon)
+                        for key in step_losses[0]:
+                            self.assertAlmostEqual(losses[key], np.mean([item[key] for item in step_losses]))
+                        error_m = (torch.stack(predictions, dim=1) - torch.stack(targets, dim=1)) * model.std[3:6]
+                        expected_sum = 0.
+                        for update, start in zip(updates, range(0, count, horizon)):
+                            stop = min(start + horizon, count)
+                            self.assertEqual(update[0], stop)
+                            trajectory = error_m[:, start:stop].cumsum(dim=1).square().mean().item() * 2
+                            expected_sum += trajectory * (stop - start)
+                            reconstruction_kl = np.mean([sum(item.values()) for item in step_losses[start:stop]])
+                            self.assertAlmostEqual(update[1], reconstruction_kl + trajectory, places=5)
+                        self.assertAlmostEqual(losses['trajectory'], expected_sum / count)
+                        self.assertTrue(np.isfinite(losses['trajectory']))
+                        self.assertTrue(model.optimizer.state)
+
     def test_train_continues_epoch_counter_and_schedules(self):
         with patch('vid2player.motion_vae.base.SummaryWriter'):
             original = self.model(no_log=False)

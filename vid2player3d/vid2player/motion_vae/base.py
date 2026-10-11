@@ -2,7 +2,10 @@ from vid2player.motion_vae.config import *
 from vid2player.motion_vae.dataset import Video3DPoseDataset
 from vid2player.motion_vae.model import PoseMixtureVAE
 from vid2player.motion_vae.monitoring import train_tag, write_run_config
-from vid2player.motion_vae.loss import build_recon_feature_weights, feature_squared_error
+from vid2player.motion_vae.loss import (
+    build_recon_feature_weights, feature_squared_error,
+    trajectory_loss_settings, accumulated_root_trajectory_loss,
+)
 from vid2player.utils.konia_transform import quaternion_to_angle_axis
 from vid2player.utils.torch_transform import rot6d_to_angle_axis
 
@@ -37,6 +40,7 @@ class MotionVAEModel(object):
                     logging.info('CUDA unavailable or hidden; running MVAE test-only on CPU.')
 
         self.recon_feature_weights = build_recon_feature_weights(opt, self.device)
+        self.accumulate_trajectory_loss, self.trajectory_displacement_slice = trajectory_loss_settings(opt)
         frame_size_condition = frame_size_truth = frame_size_pred = opt.frame_size
         if opt.predict_phase:
             frame_size_pred += 2
@@ -57,7 +61,7 @@ class MotionVAEModel(object):
         self.checkpoint_dir = os.path.join(opt.checkpoint_dir, opt.model_ver)
         self.start_epoch = 0  # Number of fully completed epochs.
         self.total_iters = 0  # Number of sampled training windows.
-        self.train_steps = 0  # Completed batches (each has L-T-S+1 optimizer updates).
+        self.train_steps = 0  # Completed batches; trajectory mode updates once per bounded chunk.
         self.validation_split = None
         if not opt.test_only and not opt.continue_train:
             if os.path.exists(self.checkpoint_dir):
@@ -228,6 +232,12 @@ class MotionVAEModel(object):
         self.model.train()
         self.optimizer.zero_grad()
         loss_dict_seq = defaultdict(float)
+        if self.accumulate_trajectory_loss:
+            window_losses, predicted_displacements, target_displacements = [], [], []
+            trajectory_loss_sum = 0.0
+        predicted_steps = L - S - T + 1
+        if self.accumulate_trajectory_loss and predicted_steps < 1:
+            raise ValueError('Trajectory training requires at least one predicted step per window.')
 
         condition = batch_feature[:, :T].clone()
 
@@ -251,23 +261,46 @@ class MotionVAEModel(object):
             with torch.cuda.amp.autocast(enabled=opt.use_amp):
                 (output, output_phase, _, _), loss_dict = self.feed_vae(gt_feature, condition, gt_phase, gt_action)
 
-            # backward pass
-            self.optimizer.zero_grad()
-            loss_total = sum(loss_dict.values())
-            if opt.use_amp:
-                self.scaler.scale(loss_total).backward()
-                self.scaler.step(self.optimizer)
-                self.scaler.update()
+            if self.accumulate_trajectory_loss:
+                window_losses.append(sum(loss_dict.values()))
+                # Only the first prediction advances the autoregressive window;
+                # subsequent future predictions overlap with the next step.
+                indices = self.trajectory_displacement_slice
+                predicted_displacements.append(output[:, 0, indices])
+                target_displacements.append(gt_feature[:, 0, indices])
             else:
-                loss_total.backward()
-                self.optimizer.step()
+                self._optimize_loss(sum(loss_dict.values()))
 
             for k, v in loss_dict.items():
                 loss_dict_seq[k] += v.item()
 
+            if self.accumulate_trajectory_loss and (
+                    len(window_losses) == opt.trajectory_window_frames or i == L - S - 1):
+                trajectory = accumulated_root_trajectory_loss(
+                    torch.stack(predicted_displacements, dim=1),
+                    torch.stack(target_displacements, dim=1),
+                    self.std[self.trajectory_displacement_slice])
+                weighted_trajectory = trajectory * opt.weights['trajectory']
+                self._optimize_loss(torch.stack(window_losses).mean() + weighted_trajectory)
+                # Log a frame-weighted mean, including the shorter final chunk.
+                trajectory_loss_sum += weighted_trajectory.item() * len(window_losses)
+                window_losses, predicted_displacements, target_displacements = [], [], []
+
         for k, v in loss_dict_seq.items():
-            loss_dict_seq[k] = v / ((L - S - T + 1))
+            loss_dict_seq[k] = v / predicted_steps
+        if self.accumulate_trajectory_loss:
+            loss_dict_seq['trajectory'] = trajectory_loss_sum / predicted_steps
         return loss_dict_seq
+
+    def _optimize_loss(self, loss_total):
+        self.optimizer.zero_grad()
+        if self.opt.use_amp:
+            self.scaler.scale(loss_total).backward()
+            self.scaler.step(self.optimizer)
+            self.scaler.update()
+        else:
+            loss_total.backward()
+            self.optimizer.step()
     
 
     def feed_vae(self, ground_truth, condition, gt_phase=None, gt_action=None):

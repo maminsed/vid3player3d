@@ -23,6 +23,13 @@ class MonitoringTests(unittest.TestCase):
         self.assertEqual(len([k for k in result if not k.startswith('diagnostics/')]), 12)
         self.assertEqual(train_tag('recon'), 'train/recon_loss')
         self.assertEqual(train_tag('kl'), 'train/kl_loss')
+        self.assertEqual(train_tag('trajectory'), 'train/trajectory_loss')
+
+    def test_trajectory_validation_stays_separate_from_reconstruction(self):
+        values = dict(recon_weighted_mean=1., trajectory_weighted_mean=3.)
+        result = validation_scalars({'window_100/autoregressive': values})
+        self.assertEqual(result['val_100/recon_loss'], 1.)
+        self.assertEqual(result['diagnostics/val_100/trajectory_loss'], 3.)
 
     def test_flat_model_results_remain_but_static_facts_and_unknown_metrics_do_not(self):
         values = dict(kl_weighted_mean=0., failed_rollouts=0,
