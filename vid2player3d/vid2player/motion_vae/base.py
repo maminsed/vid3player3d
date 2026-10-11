@@ -2,6 +2,7 @@ from vid2player.motion_vae.config import *
 from vid2player.motion_vae.dataset import Video3DPoseDataset
 from vid2player.motion_vae.model import PoseMixtureVAE
 from vid2player.motion_vae.monitoring import train_tag, write_run_config
+from vid2player.motion_vae.loss import build_recon_feature_weights, feature_squared_error
 from vid2player.utils.konia_transform import quaternion_to_angle_axis
 from vid2player.utils.torch_transform import rot6d_to_angle_axis
 
@@ -35,6 +36,7 @@ class MotionVAEModel(object):
                 if opt.gpu_ids and opt.test_only:
                     logging.info('CUDA unavailable or hidden; running MVAE test-only on CPU.')
 
+        self.recon_feature_weights = build_recon_feature_weights(opt, self.device)
         frame_size_condition = frame_size_truth = frame_size_pred = opt.frame_size
         if opt.predict_phase:
             frame_size_pred += 2
@@ -287,7 +289,8 @@ class MotionVAEModel(object):
         kl_loss = -0.5 * (1 + logvar - mu.pow(2) - logvar.exp()).sum().clamp(max=0)
         kl_loss /= logvar.numel()
 
-        recon_feature_loss = (output - ground_truth.detach()).pow(2).mean(dim=(0, -1))
+        recon_feature_loss = feature_squared_error(
+            output, ground_truth, self.recon_feature_weights).mean(dim=(0, -1))
         recon_feature_loss = recon_feature_loss.mul(self.future_weights).sum()
 
         if opt.predict_phase and gt_phase is not None:

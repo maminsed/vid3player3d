@@ -62,6 +62,18 @@ class ReconstructionTests(unittest.TestCase):
         self.assertEqual(result['rows'][1]['frame'], 2)
         self.assertAlmostEqual(result['rows'][1]['time_s'], 2 / 30)
 
+    def test_feature_weights_change_reported_objective_only(self):
+        baseline = self.run_reconstruction()
+        self.model.opt.recon_feature_weights = {'root_velo': 5.0}
+        weighted = self.run_reconstruction()
+        np.testing.assert_array_equal(weighted['roots'], baseline['roots'])
+        np.testing.assert_array_equal(weighted['joints'], baseline['joints'])
+        for old, new in zip(baseline['rows'][1:], weighted['rows'][1:]):
+            self.assertEqual(old['recon'], new['recon'])
+            self.assertEqual(old['kl_weighted'], new['kl_weighted'])
+            # FakeVAE emits displacement [1, 0, 0]; normalized target is zero.
+            self.assertAlmostEqual(new['recon_weighted'], old['recon_weighted'] + 4 / 288, delta=2e-6)
+
     def test_periodic_reset_uses_previous_ground_truth_without_erasing_errors(self):
         result = self.run_reconstruction(resample=2)
         np.testing.assert_allclose(result['roots'][1, :, 0], [0, 2, 4, 22, 24, 42])

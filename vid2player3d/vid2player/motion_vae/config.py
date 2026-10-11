@@ -34,6 +34,10 @@ class MotionVAEOption(object):
     curriculum_schedule = None
     mixed_phase_schedule = None
     weights = {'recon': 1, 'kl': 1, 'recon_phase': 10}
+    # Multipliers on normalized squared error per coordinate; omitted groups = 1.
+    # {} (or all ones) preserves the original loss, including its denominator.
+    # Keys: root_pos, root_velo, joint_pos, joint_velo, joint_rotmat, joint_quat.
+    recon_feature_weights = {}
     softmax_future = False
 
     batch_size = 64
@@ -145,7 +149,19 @@ motion_vae_opt_dict = {
 'usopen_4': {
     'model_ver'                             : 'usopen_4',
     'base_opt_ver'                          : 'usopen',
-    'weights'                               : {'recon': 1, 'kl': 0.05, 'recon_phase': 10},
+    'weights'                               : {'recon': 1, 'kl': 0.05, 'recon_phase': 0},
+},
+
+'usopen_5': {
+    'model_ver'                             : 'usopen_5',
+    'base_opt_ver'                          : 'usopen_4',
+    # Runtime integrates root_velo (per-frame displacement) to move the player.
+    'recon_feature_weights'                 : {'root_velo': 2.0, 'root_pos': 2.0},
+},
+
+'usopen_6': {
+    'model_ver'                             : 'usopen_6',
+    'base_opt_ver'                          : 'usopen_5',
 },
 
 'djokovic': {

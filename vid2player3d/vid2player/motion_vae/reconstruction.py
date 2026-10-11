@@ -12,6 +12,7 @@ import torch
 from vid2player.motion_vae.base import MotionVAEModel
 from vid2player.motion_vae.dataset import Video3DPoseDataset
 from vid2player.motion_vae.metrics import add_motion_metrics, summarize_rows
+from vid2player.motion_vae.loss import build_recon_feature_weights, feature_squared_error
 
 
 # The dataset concatenates features in this order, regardless of pose_feature order.
@@ -83,6 +84,7 @@ def reconstruct(model, raw_features, roots, source_frames, fps, resample=None, l
         raise ValueError('Unknown latent_mode: ' + latent_mode)
     opt = model.opt
     fields = feature_slices(opt)
+    recon_feature_weights = build_recon_feature_weights(opt, model.device)
     if resample is not None and resample <= 0:
         raise ValueError('resample must be positive')
     T = opt.num_condition_frames
@@ -130,10 +132,12 @@ def reconstruct(model, raw_features, roots, source_frames, fps, resample=None, l
                 latent = truth.new_zeros((1, opt.latent_size))
             output = model.model.sample(latent, condition.reshape(1, -1)).reshape(-1)[:opt.frame_size]
             recon = (output - truth[i]).square().mean()
+            weighted_recon = recon if recon_feature_weights is None else feature_squared_error(
+                output, truth[i], recon_feature_weights).mean()
             if detailed_metrics:
                 for field, indices in fields.items():
                     row['recon_' + field] = float((output[indices] - truth[i, indices]).square().mean())
-            if (not torch.isfinite(output).all() or not torch.isfinite(recon)
+            if (not torch.isfinite(output).all() or not torch.isfinite(weighted_recon)
                     or (kl is not None and not torch.isfinite(kl))):
                 raise ValueError('Non-finite prediction/loss at source frame {}.'.format(source_frames[i]))
             raw_output = model.unnormalize(output)
@@ -154,7 +158,7 @@ def reconstruct(model, raw_features, roots, source_frames, fps, resample=None, l
                 feedback[fields['root_pos']] = root
             condition = torch.cat((condition[1:], model.normalize(feedback).unsqueeze(0)))
             row.update(recon=float(recon), kl=float(kl) if kl is not None else None,
-                       recon_weighted=float(recon) * opt.weights['recon'],
+                       recon_weighted=float(weighted_recon) * opt.weights['recon'],
                        kl_weighted=float(kl) * opt.weights['kl'] if kl is not None else None)
         for label, pos in [('gt', roots[i]), ('pred', predicted_roots[i])]:
             row.update({label + '_root_' + axis: float(value) for axis, value in zip('xyz', pos)})
@@ -471,7 +475,7 @@ def record_unit_actions(directory, model, features, roots, source_frames, fps, m
             'Unit scale means N(0,1) per latent coordinate; no normalization or clipping. '
             'The parent reconstruction resample setting does not apply.')
     base_metadata = {key: metadata[key] for key in (
-        'name', 'dataset_dir', 'checkpoint', 'frames', 'fps', 'weights',
+        'name', 'dataset_dir', 'checkpoint', 'frames', 'fps', 'weights', 'recon_feature_weights',
         'start_root', 'camera_position', 'camera_target') if key in metadata}
     base_metadata.update(resample=None, note=note, action_seed=seed,
                          zero_baseline='../zero/history.csv')
@@ -534,11 +538,13 @@ def record_reconstruction(opt, name, resample=None, nframes=None, suffix='',
     metadata = dict(name=canonical, dataset_dir=opt.dataset_dir,
                     checkpoint=str(Path(model.checkpoint_dir) / 'latest.tar'),
                     frames=length, fps=fps, resample=resample, weights=opt.weights,
+                    recon_feature_weights=opt.recon_feature_weights,
                     start_root=roots[0].tolist(), camera_position=[0, -28, 9], camera_target=[0, -1, 0],
                     note='Posterior mean latent; target enters encoder at every step. Resample resets '
                          'conditioning history and integrated root before the next prediction. '
                          'Joint positions are direct root-relative decoder outputs, not SMPL FK. '
-                         'Recon is normalized feature MSE; KL is averaged over latent dimensions. '
+                         'Recon is unweighted normalized feature MSE; recon_weighted includes feature '
+                         'multipliers and the outer recon weight. KL is averaged over latent dimensions. '
                          'Loss is measured before root integration. Initial conditioning frames have no loss. '
                          'The first source frame is reserved for velocity computation.')
     comparison = add_zero_comparison(result, zero_result, feature_slices(opt))
@@ -547,7 +553,7 @@ def record_reconstruction(opt, name, resample=None, nframes=None, suffix='',
     zero_dir = directory / 'zero'
     zero_dir.mkdir()
     zero_metadata = {key: metadata[key] for key in (
-        'name', 'dataset_dir', 'checkpoint', 'frames', 'fps', 'weights',
+        'name', 'dataset_dir', 'checkpoint', 'frames', 'fps', 'weights', 'recon_feature_weights',
         'start_root', 'camera_position', 'camera_target')}
     zero_metadata.update(resample=None, rollout_label='Always z=0',
                          note='Independent z=0 rollout; GT initialization only; no encoder or KL.')

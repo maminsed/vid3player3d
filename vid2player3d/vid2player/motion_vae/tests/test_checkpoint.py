@@ -82,6 +82,24 @@ class CheckpointTests(unittest.TestCase):
         self.assertEqual(original_loss, resumed_loss)
         self.assert_weights_equal(original, resumed)
 
+    def test_feed_vae_uses_feature_weights_and_preserves_kl(self):
+        baseline = self.model()
+        weighted = self.model(recon_feature_weights={'root_velo': 5.0})
+        weighted.model.load_state_dict(baseline.model.state_dict())
+        truth = self.batch['feature'][:, 1:2]
+        condition = self.batch['feature'][:, :1]
+        torch.manual_seed(123)
+        (output, _, _, _), old_losses = baseline.feed_vae(truth, condition)
+        torch.manual_seed(123)
+        (weighted_output, _, _, _), losses = weighted.feed_vae(truth, condition)
+        self.assertTrue(torch.equal(output, weighted_output))
+        self.assertTrue(torch.equal(losses['kl'], old_losses['kl']))
+        errors = (output - truth).square()
+        self.assertTrue(torch.equal(old_losses['recon'], errors.mean(dim=(0, -1)).mul(
+            baseline.future_weights).sum() * baseline.opt.weights['recon']))
+        expected = old_losses['recon'] + 4 * errors[..., 3:6].sum() / errors.numel() * baseline.opt.weights['recon']
+        torch.testing.assert_close(losses['recon'], expected)
+
     def test_train_continues_epoch_counter_and_schedules(self):
         with patch('vid2player.motion_vae.base.SummaryWriter'):
             original = self.model(no_log=False)

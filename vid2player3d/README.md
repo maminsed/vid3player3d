@@ -346,6 +346,17 @@ PYTHONPATH=..:. python -u vid2player/motion_vae/train.py --exp usopen > logs/mva
 tensorboard --logdir results/motionVAE/usopen_3/logs --port 6006
 ```
 
+Reconstruction feature weights are configurable in
+`vid2player/motion_vae/config.py` through `recon_feature_weights`. The baseline
+default `{}` and explicit all-one weights use the exact original MSE calculation.
+Available keys are `root_pos`, `root_velo`, `joint_pos`, `joint_velo`,
+`joint_rotmat`, and `joint_quat`; only enabled features can be weighted.
+Unspecified features have weight 1. Each multiplier applies to squared errors
+in **normalized feature space**, before averaging over all feature coordinates
+and applying the existing future-frame weights and outer `weights['recon']`.
+The denominator stays `frame_size`, rather than the sum of feature weights, so
+increasing a root multiplier leaves local-pose and KL coefficients unchanged.
+
 Configure validation in `vid2player/motion_vae/config.py`:
 
 | Option | `usopen` default | Meaning |
