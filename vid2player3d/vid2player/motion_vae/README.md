@@ -17,6 +17,108 @@ python vid2player/motion_vae/convert_export_dataset.py --input-yaml exports/moti
 python vid2player/motion_vae/train.py  --exp federer_physics &> mvae_logs.txt
 ```
 
+## Optional phase labels from TennisProject
+
+Add `--tp_dir` explicitly when converting exports; it has no default folder:
+
+```bash
+python vid2player/motion_vae/convert_export_dataset.py \
+  --input-yaml exports/tennis_motion_2/motions.yaml \
+  --out-dir exports/vae_input/tennis_motion_dataset_phase \
+  --tp_dir ../TennisProject/res_2 \
+  --gvhmr_dir ../GVHMR/outputs/demo_2
+
+PYTHONPATH=..:. python -u vid2player/motion_vae/train.py --exp usopen_4
+```
+
+Set `usopen_4.dataset_dir` to the converted folder before training. `usopen_4`
+enables the phase head with phase-loss weight 10 and mixed-phase scheduling off:
+labelled and unlabelled frames can now coexist in one batch. Existing phase-free
+checkpoints cannot resume this model because its output dimension changes.
+
+CSV matching uses the export filename, stripping `demo_` / `0-` prefixes and
+known file extensions without stripping dots inside player names. Missing CSVs
+produce fully unlabelled sequences.
+
+`--gvhmr_dir` is optional and has no default. It accepts the GVHMR output root or
+one matching clip directory. The converter matches the export filename to the
+clip directory, reads `0_input_video.json`'s `source.start_frame`, `end_frame`
+(exclusive) and `fps`, and validates the source-video identity. Missing or
+ambiguous metadata fails explicitly rather than guessing an offset.
+
+TennisProject records input-video `global_frame` without changing temporal
+sampling. `GVHMR/extraction_pipeline.sh` trims each source using the CSV range;
+the JSON stores the actual retained range. Ground correction preserves those
+motion frames. Low-level exports introduce another timing change: they save
+**after** stepping the simulation. The normal `--export_dataset` configuration
+forces a Start reset, so the first saved frame corresponds to reference frame 1
+at 30 FPS. Alternate Hybrid/Random resets can start later in the reference
+motion. New exports therefore include one `reference_times`
+timestamp (seconds in the reference motion) per saved pose and `export_fps`.
+With GVHMR metadata, the CSV frame is:
+
+```
+source.start_frame + reference_times[export_frame] * source.fps
+```
+
+Fractional source times use circular phase interpolation only when both adjacent
+CSV frames have valid labels. Frames outside the JSON range remain phase-masked.
+Converter `--trim-start`/`--trim-end` slice the mapping along with the poses;
+a short export is never stretched to the full source-video range.
+
+Legacy exports without timestamps assume Start reset and 30 FPS control steps:
+`CSV frame = JSON start_frame + export_frame + 1`. Override
+`--export-frame-offset` (default 1) if their first saved reference frame is known
+to differ. Existing randomly initialized exports need that known offset or
+re-exporting with timestamps; their exact reset time cannot be recovered from
+GVHMR JSON alone. Mapping provenance and out-of-range counts are recorded in
+`conversion_summary.json` and each manifest sequence's `frame_alignment`.
+
+Without `--gvhmr_dir`, the previous mapping remains available:
+`CSV frame = export_frame + --source-start-frame` (default 0). This manual absolute
+mapping cannot be combined with `--gvhmr_dir`.
+`--side fg` labels the near/bottom player; `bg` labels the far/top player.
+
+CSV ball predictions are **image coordinates**, not a recovered 3D flight path.
+The converter infers their output-image scale from court keypoints and the
+homography, then projects to court coordinates using the ground-correction
+convention (near player at negative Y). This ground-plane projection of an
+airborne ball is approximate and is used only to detect weak hit timings.
+Detection requires sustained Y reversals near a player, excluding annotated
+bounces. A stationary ball beginning sustained travel toward the other side can
+also supply an initial hit. It does not treat the first visible moving ball as a
+confirmed hit. Detection can bridge missing observations of at most 0.2 seconds;
+those missing frames still receive **no** phase supervision.
+
+Phase is interpolated in **time** between alternating inferred hits: opponent
+contact = 0/2π, controlled-player contact = π. It is not proportional to ball
+position or distance travelled. Frames before the first hit, after the last
+(unanswered) hit, and missing/unusable ball observations are masked. Intervals
+containing longer tracking gaps, missing source frames, same-player consecutive
+hits, or more than 3 seconds between hits are left unlabelled internally.
+These conservative heuristics can miss or misidentify hits; inspect inferred
+`hits`, detection methods and per-sequence label counts in
+`conversion_summary.json` before relying on them as supervision.
+
+The dataset adds `phase.npy` (N×2 `[sin φ, cos φ]`) and `phase_mask.npy` (N booleans),
+aligned with the existing motion arrays. With `predict_phase=True`, the loader
+retains all selected sequences; it also supports legacy manifest hit annotations
+without extrapolating at their boundaries. Reconstruction/KL use every valid
+motion frame. Phase loss uses only labelled frames and renormalizes observed
+future weights; a fully unlabelled batch has no phase loss. Missing phase is
+represented by the mask, not a zero angle.
+
+Training logs `train/phase_loss`, `train/phase_mse`,
+`train/phase_angular_error_rad` and `train/phase_label_fraction`. MSE/angular error
+pool labelled prediction positions; coverage includes all prediction positions.
+Validation reports phase loss, circular angular error and label coverage in its
+main autoregressive TensorBoard groups when reference labels are available.
+Reconstruction `history.csv`, `summary.json` and `metrics.png` include phase
+coverage, raw/weighted phase MSE, circular angular error, and predicted/reference
+phase. The video shows phase in radians and multiples of π at the top left;
+reference phase reads `unavailable` on masked frames. Initial conditioning frames
+have no model-predicted phase or evaluation loss.
+
 ## Named reconstruction recordings
 
 ```bash
@@ -63,7 +165,9 @@ calculation, and the following `num_condition_frames` frames seed the model and
 have no evaluation loss. `--nframes N` caps recorded frames. Sequences with invalid
 frames are rejected. This recorder supports the existing one-step prediction
 configs with full XYZ root features and joint-position features. Phase labels are
-not required for pose/KL evaluation, and phase loss is not evaluated. `--run_test`
+not required for pose/KL evaluation. With a phase-enabled model, predicted phase
+is recorded on every prediction, and phase loss/error are evaluated only where
+reference labels are valid. `--run_test`
 retains the old random-motion preview after training; its viewer/HTML flags do not
 apply to `--test_only`.
 

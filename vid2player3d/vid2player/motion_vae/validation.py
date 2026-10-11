@@ -83,7 +83,6 @@ class MotionValidation:
     def __init__(self, opt, videos):
         self.opt = opt
         data_opt = copy.deepcopy(opt)
-        data_opt.predict_phase = False
         data_opt.database_ratio = 1.0
         python_state = random.getstate()
         try:
@@ -162,7 +161,8 @@ class MotionValidation:
                                         ('whole_sequence', self.full)]:
                     for segment in segments:
                         seq, start, length = segment['seq'], segment['start'], segment['length']
-                        raw = self.dataset.get_window(start, length)['feature']
+                        window = self.dataset.get_window(start, length)
+                        raw = window['feature']
                         roots = np.array(self.dataset.joint_pos_arr[start + 1:start + length + 1, :3])
                         first = seq['start'] + start - seq['base'] + 1
                         frames = np.arange(first, first + length)
@@ -176,7 +176,8 @@ class MotionValidation:
                             bucket['rollouts'] += 1
                             try:
                                 result = reconstruct(model, raw, roots, frames, fps, reset,
-                                                     latent_diagnostics=(mode == 'teacher_forced'))
+                                                     latent_diagnostics=(mode == 'teacher_forced'),
+                                                     phases=window.get('phase'), phase_mask=window.get('phase_mask'))
                             except ValueError as error:
                                 if 'Non-finite' not in str(error):
                                     raise

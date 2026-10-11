@@ -7,6 +7,7 @@ import numpy as np
 
 
 METRICS = (
+    'phase_mse', 'phase_weighted', 'phase_angular_error_rad',
     'recon', 'kl', 'recon_weighted', 'kl_weighted', 'recon_zero_latent',
     'trajectory_mse_m2', 'trajectory_weighted',
     'recon_root_pos', 'recon_root_velo', 'recon_joint_pos', 'recon_joint_velo',
@@ -85,7 +86,9 @@ def add_motion_metrics(result, truth, fields, fps, opt):
 def summarize_rows(rows):
     """Frame-weighted means, with explicit denominators for subgroup metrics."""
     evaluated = [r for r in rows if r['recon'] is not None]
-    summary = {'predicted_frames': len(evaluated)}
+    labelled = sum(bool(r.get('phase_labelled')) for r in evaluated)
+    summary = {'predicted_frames': len(evaluated), 'phase_labelled_frames': labelled,
+               'phase_label_fraction': labelled / max(1, len(evaluated))}
     for key in METRICS:
         values = [r[key] for r in evaluated if r.get(key) is not None]
         if values:

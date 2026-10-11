@@ -13,7 +13,7 @@ import numpy as np
 import torch
 
 from vid2player.motion_vae.base import MotionVAEModel
-from vid2player.motion_vae.config import MotionVAEOption
+from vid2player.motion_vae.tests.options import motion_options
 from vid2player.motion_vae.dataset import Video3DPoseDataset
 from vid2player.motion_vae.metrics import add_motion_metrics, summarize_rows
 from vid2player.motion_vae.validation import MotionValidation
@@ -53,8 +53,7 @@ class ValidationTests(unittest.TestCase):
         np.save(str(data / 'joint_rotmat.npy'), np.tile(np.eye(3, dtype=np.float32), (count, 24, 1, 1)))
         np.save(str(data / 'valid.npy'), np.ones(count, dtype=bool))
         (data / 'manifest.json').write_text(json.dumps(manifest))
-        self.opt = MotionVAEOption()
-        self.opt.load('federer_physics')
+        self.opt = motion_options()
         self.opt.update(dataset_dir=str(data), checkpoint_dir=str(root), model_ver='model',
                         gpu_ids=[], hidden_size=8, latent_size=2, num_experts=2,
                         batch_size=2, nframes_seq=3, nseqs=4, num_threads=0, n_epochs=1,

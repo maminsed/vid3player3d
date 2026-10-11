@@ -58,6 +58,10 @@ def parse_args():
         default="tennis_dataset_physics",
         help="Directory to write manifest.json and *.npy arrays.",
     )
+    parser.add_argument("--tp_dir", type=Path, help="Optional TennisProject CSV folder; infer masked weak phase labels.")
+    parser.add_argument("--gvhmr_dir", type=Path, help="Optional GVHMR clip root (e.g. GVHMR/outputs/demo_2); read per-clip source ranges.")
+    parser.add_argument("--source-start-frame", type=int, default=None, help="Manual absolute CSV frame of export frame zero; without --gvhmr_dir only (default: 0).")
+    parser.add_argument("--export-frame-offset", type=float, default=1., help="First reference-motion frame in legacy exports with --gvhmr_dir (default: 1, poses saved after first step). Recorded reference_times take precedence.")
     parser.add_argument("--side", choices=["fg", "bg"], default="fg")
     parser.add_argument("--background", default="usopen")
     parser.add_argument("--manifest-gender", default="mens")
@@ -259,6 +263,7 @@ def build_manifest_entry(name, seq_meta, base, length, beta, args, entry):
         "source_export": seq_meta["source_export"],
         "source_key": seq_meta["source_key"],
         "fps": float(seq_meta.get("fps", 30.0)),
+        "frame_alignment": seq_meta.get("frame_alignment"),
     }
     return {
         "name": name,
@@ -283,8 +288,20 @@ def main():
     from scipy.spatial.transform import Rotation
 
     out_dir = Path(args.out_dir)
+    if args.tp_dir is None and any((out_dir / name).exists() for name in ('phase.npy', 'phase_mask.npy')):
+        raise ValueError('Output contains phase labels; use a fresh --out-dir for a phase-free conversion.')
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    from vid2player.motion_vae.phase import find_csv, infer_csv_phase, align_phase
+    from vid2player.motion_vae.frame_alignment import load_gvhmr_range, export_source_frames
+    if args.tp_dir is not None and not args.tp_dir.is_dir():
+        raise ValueError("--tp_dir must be an existing directory")
+    if args.gvhmr_dir is not None and not args.gvhmr_dir.is_dir():
+        raise ValueError('--gvhmr_dir must be an existing directory')
+    if args.gvhmr_dir is not None and args.source_start_frame is not None:
+        raise ValueError('--source-start-frame and --gvhmr_dir cannot be combined')
+    phase_arr, phase_mask_arr, phase_diagnostics = [], [], []
+    frame_alignments = []
     manifest = []
     joint_pos_arr = []
     joint_rot_arr = []
@@ -309,6 +326,12 @@ def main():
                 skipped.append((seq_key, len(pose_aa), "too_short"))
                 continue
 
+            gvhmr_range = load_gvhmr_range(args.gvhmr_dir, entry['file']) if args.gvhmr_dir is not None else None
+            source_frames, source_in_range, alignment = export_source_frames(
+                seq_data, num_frames, args.trim_start, len(pose_aa), gvhmr_range,
+                args.source_start_frame, args.export_frame_offset)
+            frame_alignments.append(dict(source_export=str(entry['file']), **alignment))
+
             beta = normalize_beta(seq_data)
             gender = normalize_gender(seq_data)
             pose_aa, trans, valid = sanitize_valid_frames(pose_aa, trans)
@@ -326,6 +349,7 @@ def main():
                 "source_export": str(entry["file"]),
                 "source_key": seq_key,
                 "fps": seq_data.get("fps", 30.0),
+                "frame_alignment": alignment,
             }
             manifest.append(build_manifest_entry(
                 name=seq_key,
@@ -336,6 +360,27 @@ def main():
                 args=args,
                 entry=entry,
             ))
+
+            if args.tp_dir is not None:
+                fps = float(seq_meta['fps'])
+                if not np.isclose(fps, 30):
+                    raise ValueError('TennisProject alignment requires 30 FPS exports')
+                csv_path = find_csv(args.tp_dir, entry['file'])
+                phase = np.zeros((len(pose_aa), 2), dtype=np.float32)
+                phase_mask = np.zeros(len(pose_aa), dtype=bool)
+                diagnostic = dict(source_export=str(entry['file']), csv=None, hits=[], labelled_frames=0)
+                if csv_path is not None:
+                    frames, values, mask, diagnostic = infer_csv_phase(
+                        csv_path, side=entry.get('side') or args.side, fps=fps)
+                    phase, phase_mask = align_phase(source_frames, frames, values, mask)
+                else:
+                    print(f'No matching CSV for {entry["file"]}; phase remains unlabelled')
+                phase_mask &= valid & source_in_range
+                phase[~phase_mask] = 0
+                diagnostic.update(source_export=str(entry['file']), exported_labelled_frames=int(phase_mask.sum()))
+                phase_arr.append(phase)
+                phase_mask_arr.append(phase_mask)
+                phase_diagnostics.append(diagnostic)
 
             joint_pos_arr.append(joint_pos)
             joint_rot_arr.append(joint_rot)
@@ -360,11 +405,18 @@ def main():
     with open(out_dir / "manifest.json", "w") as fp:
         json.dump(manifest, fp, indent=2)
 
+    if args.tp_dir is not None:
+        np.save(out_dir / 'phase.npy', np.concatenate(phase_arr))
+        np.save(out_dir / 'phase_mask.npy', np.concatenate(phase_mask_arr))
+
     summary = {
         "num_sequences": len(manifest),
         "num_frames": int(len(valid_arr)),
         "num_valid_frames": int(valid_arr.sum()),
-        "predict_phase": False,
+        "predict_phase": args.tp_dir is not None,
+        "num_phase_labelled_frames": sum(int(mask.sum()) for mask in phase_mask_arr),
+        "phase_diagnostics": phase_diagnostics,
+        "frame_alignments": frame_alignments,
         "joint_pos_shape": list(joint_pos_arr.shape),
         "joint_rot_shape": list(joint_rot_arr.shape),
         "joint_rotmat_shape": list(joint_rotmat_arr.shape),

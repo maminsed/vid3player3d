@@ -88,3 +88,23 @@ def accumulated_root_trajectory_loss(prediction, target, displacement_std):
         raise ValueError('Trajectory loss requires matching [batch, steps, 3] displacements.')
     error_m = (prediction.float() - target.detach().float()) * displacement_std
     return error_m.cumsum(dim=1).square().mean()
+
+
+def masked_phase_loss(output, target, mask, future_weights):
+    """Weighted mean over labelled batch/future positions and two coordinates.
+
+    Renormalizing observed future weights preserves the all-labelled legacy
+    reduction, without dilution by missing frames. Sanitize BEFORE subtraction
+    so even NaN placeholders at unlabelled positions cannot poison gradients.
+    """
+    if mask is None:
+        mask = torch.ones(target.shape[:-1], dtype=torch.bool, device=target.device)
+    else:
+        mask = mask.to(device=target.device, dtype=torch.bool)
+    if mask.shape != target.shape[:-1]:
+        raise ValueError('Phase mask must match batch/future dimensions.')
+    safe_target = torch.where(mask.unsqueeze(-1), target.detach(), torch.zeros_like(target))
+    safe_output = torch.where(mask.unsqueeze(-1), output, torch.zeros_like(output))
+    weights = mask.to(output.dtype) * future_weights
+    errors = (safe_output - safe_target).square().mean(dim=-1)
+    return (errors * weights).sum() / weights.sum().clamp_min(torch.finfo(output.dtype).eps)

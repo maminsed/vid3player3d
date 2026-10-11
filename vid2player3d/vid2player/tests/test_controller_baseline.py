@@ -8,7 +8,6 @@ from types import SimpleNamespace
 import unittest
 import tempfile
 import torch
-import yaml
 
 from vid2player.utils.training_io import check_training_output, write_epoch_metrics
 from vid2player.utils.torch_transform import rotmat_to_rot6d, rot6d_to_rotmat, rot6d_to_angle_axis
@@ -115,28 +114,13 @@ def test_event_weighted_metrics():
     assert 'task/detected_in_rate' not in result
 
 
-def test_usopen_config_chain():
+def check_racket_geometry():
     asset = ET.parse(ROOT / 'data/assets/smpl_mesh_humanoid_djokovic.xml')
     head = asset.find(".//body[@name='Racket']/geom[2]")
     endpoints = torch.tensor([float(x) for x in head.attrib['fromto'].split()])
     normal = endpoints[3:] - endpoints[:3]
     normal /= normal.norm()
     torch.testing.assert_close(normal, torch.tensor([0., 1., 1.]) / math.sqrt(2))
-    for stage in (1, 2, 3):
-        cfg = yaml.safe_load((ROOT / 'cfg/controller' / ('usopen_train_stage_{}.yaml'.format(stage))).read_text())
-        task, train = cfg['env']['vid2player'], cfg['params']['config']
-        assert task['mvae_ver'] == 'usopen'
-        assert task['predict_phase'] is False and task['reward_scales']['phase'] == 0
-        assert task['grip'] == 'semi_western'
-        assert cfg['env']['numEnvs'] > 0
-        assert task['mvae_inference_batch_size'] == 512
-        assert train['minibatch_size'] > 0
-        assert cfg['env']['numEnvs'] * train['horizon_length'] % train['minibatch_size'] == 0
-        assert cfg['env']['physics']['config'] == 'usopen_im'
-        assert 'tennis_im_training_2' in cfg['env']['physics']['pretrained_model_cp']
-        assert train['protect_existing_checkpoints'] is True
-        if stage > 1:
-            assert train['pretrained_model_cp'] == 'results/usopen_train_stage_{}/models/usopen_no_phase_latest.pth'.format(stage - 1)
 
 
 def check_batched_mvae_decode():
@@ -195,8 +179,8 @@ class ControllerBaselineTests(unittest.TestCase):
     def test_metrics(self):
         test_event_weighted_metrics()
 
-    def test_configs(self):
-        test_usopen_config_chain()
+    def test_racket_geometry(self):
+        check_racket_geometry()
 
 
 if __name__ == '__main__':

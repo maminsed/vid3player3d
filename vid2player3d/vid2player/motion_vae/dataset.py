@@ -63,14 +63,23 @@ class Video3DPoseDataset(Dataset):
         if opt.predict_phase:
             self.phase_arr = np.zeros((self.valid_arr.shape[0], 2), dtype=float)
             self.phase_rad_arr = np.zeros(self.valid_arr.shape[0], dtype=float)
-        
-        def find_neighboring_hits(point, fid):
-            assert fid <= point[-1]['fid']
-            for hid, hit in enumerate(point):
-                if fid == point[hid+1]['fid'] and hid == 0:
-                    return point[hid+1], point[hid+2]
-                if fid >= hit['fid'] and fid <= point[hid+1]['fid']: 
-                    return hit, point[hid+1]
+            self.phase_mask_arr = np.zeros(self.valid_arr.shape[0], dtype=bool)
+            phase_path = os.path.join(opt.dataset_dir, 'phase.npy')
+            mask_path = os.path.join(opt.dataset_dir, 'phase_mask.npy')
+            explicit_phase = os.path.exists(phase_path)
+            if explicit_phase != os.path.exists(mask_path):
+                raise ValueError('phase.npy and phase_mask.npy must be supplied together.')
+            if explicit_phase:
+                self.phase_arr = np.load(phase_path)
+                self.phase_mask_arr = np.load(mask_path).astype(bool)
+                if self.phase_arr.shape != (len(self.valid_arr), 2) or self.phase_mask_arr.shape != self.valid_arr.shape:
+                    raise ValueError('Phase arrays must align with valid.npy.')
+                if not np.isfinite(self.phase_arr[self.phase_mask_arr]).all():
+                    raise ValueError('Labelled phases must be finite.')
+                self.phase_arr = self.phase_arr.copy()
+                self.phase_arr[~self.phase_mask_arr] = 0
+                self.phase_mask_arr &= self.valid_arr.astype(bool)
+                self.phase_rad_arr = np.mod(np.arctan2(self.phase_arr[:, 0], self.phase_arr[:, 1]), 2*np.pi)
         
         num_videos = 0
         betas = []
@@ -100,29 +109,34 @@ class Video3DPoseDataset(Dataset):
                     if video.get('is_orig') or seq['player'] is not None:
                         # These videos have player identity annotated
                         if opt.player_name is not None and seq['player'] not in opt.player_name: continue
+                sequence_side = 'fg' if seq in video['sequences']['fg'] else 'bg'
                 seq = seq.copy()
                 seq['_video_name'] = video['name']
                 
                 if opt.predict_phase:
-                    if not video.get('is_orig'): continue
-                    point = video['points_annotation'][seq['point_idx']]['keyframes']
-                    for idx in range(seq['length']):
-                        fid = idx + seq['start']
-                        arr_idx = idx + seq['base']
-                        prev_hit, next_hit = find_neighboring_hits(point, fid)
-                        phase = (fid - prev_hit['fid']) / (next_hit['fid'] - prev_hit['fid'])
-                        assert opt.side == 'fg'
-                        phase += 1 if prev_hit['fg'] else 0 # add 1 if in recovery
-                        self.phase_arr[arr_idx] = np.array([np.sin(phase * np.pi), np.cos(phase * np.pi)])
-                        self.phase_rad_arr[arr_idx] = phase * np.pi
-                    seq['has_phase'] = True 
-                
+                    if not explicit_phase:
+                        # Legacy hit annotations: interpolate only bracketed frames.
+                        points = video.get('points_annotation', [])
+                        point_idx = seq.get('point_idx')
+                        hits = points[point_idx].get('keyframes', []) if point_idx is not None and 0 <= point_idx < len(points) else []
+                        from vid2player.motion_vae.phase import labels_between_hits
+                        frames = np.arange(seq['start'], seq['start'] + seq['length'])
+                        events = [dict(frame=h['fid'], side='fg' if h['fg'] else 'bg') for h in hits]
+                        phase, mask = labels_between_hits(frames, np.ones(len(frames), dtype=bool), events, sequence_side)
+                        sl = slice(seq['base'], seq['base'] + seq['length'])
+                        self.phase_arr[sl], self.phase_mask_arr[sl] = phase, mask
+                        self.phase_rad_arr[sl] = np.mod(np.arctan2(phase[:, 0], phase[:, 1]), 2*np.pi)
+                    seq['has_phase'] = bool(self.phase_mask_arr[seq['base']:seq['base']+seq['length']].any())
+
                 self.sequences += [seq]
                 self.selected_arr[seq['base'] : seq['base']+seq['length']] = 1
                 betas += [seq['beta']]
               
         num_valid_frames = np.logical_and(self.valid_arr, self.selected_arr).sum()
         print(f"Loaded {len(self.sequences)} motion sequences from {num_videos} videos containing {num_valid_frames} frames")
+
+        if opt.predict_phase:
+            print('Phase labels: {} selected frames'.format(int((self.phase_mask_arr & self.selected_arr.astype(bool)).sum())))
 
         self.std, self.avg = None, None
 
@@ -268,6 +282,7 @@ class Video3DPoseDataset(Dataset):
         }
         if opt.predict_phase:
             data_dict['phase'] = self.phase_arr[start+1:end]
+            data_dict['phase_mask'] = self.phase_mask_arr[start+1:end]
         return data_dict
     
 

@@ -158,19 +158,28 @@ motion_vae_opt_dict = {
 'usopen_4': {
     'model_ver'                             : 'usopen_4',
     'base_opt_ver'                          : 'usopen',
-    'weights'                               : {'recon': 1, 'kl': 0.05, 'recon_phase': 0},
+    'predict_phase'                         : True,
+    'mixed_phase_schedule'                  : None,
+    'weights'                               : {'recon': 1, 'kl': 0.5, 'recon_phase': 10},
 },
 
 'usopen_5': {
     'model_ver'                             : 'usopen_5',
     'base_opt_ver'                          : 'usopen_4',
-    # Runtime integrates root_velo (per-frame displacement) to move the player.
-    'recon_feature_weights'                 : {'root_velo': 2.0, 'root_pos': 2.0},
+    'predict_phase'                         : False,
+    'weights'                               : {'recon': 1, 'kl': 0.05, 'recon_phase': 0},
 },
 
 'usopen_6': {
     'model_ver'                             : 'usopen_6',
     'base_opt_ver'                          : 'usopen_5',
+    # Runtime integrates root_velo (per-frame displacement) to move the player.
+    'recon_feature_weights'                 : {'root_velo': 2.0, 'root_pos': 2.0},
+},
+
+'usopen_7': {
+    'model_ver'                             : 'usopen_7',
+    'base_opt_ver'                          : 'usopen_6',
     'accumulate_trajectory_loss'            : True,
     'trajectory_window_frames'              : 9,
     'weights'                               : {'trajectory': 0.5},

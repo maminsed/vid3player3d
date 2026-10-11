@@ -4,7 +4,7 @@ from vid2player.motion_vae.model import PoseMixtureVAE
 from vid2player.motion_vae.monitoring import train_tag, write_run_config
 from vid2player.motion_vae.loss import (
     build_recon_feature_weights, feature_squared_error,
-    trajectory_loss_settings, accumulated_root_trajectory_loss,
+    trajectory_loss_settings, accumulated_root_trajectory_loss, masked_phase_loss,
 )
 from vid2player.utils.konia_transform import quaternion_to_angle_axis
 from vid2player.utils.torch_transform import rot6d_to_angle_axis
@@ -145,6 +145,7 @@ class MotionVAEModel(object):
         train_start_time = time.time()
         train_loss_dict = defaultdict(float)
         num_batch_phase = 0
+        logged_phase_frames = 0
         last_validation_step = None
         if self.validation is not None and self.start_epoch < opt.n_epochs + opt.n_epochs_decay:
             self.validation.evaluate(self, self.train_steps, total_iters, self.start_epoch)
@@ -170,17 +171,21 @@ class MotionVAEModel(object):
                     self.validation.evaluate(self, self.train_steps, total_iters,
                                              epoch + (total_iters - self.total_iters) / (len(self.trainset) * opt.batch_size))
                     last_validation_step = self.train_steps
-                num_batch_phase += batch_data.get('phase') is not None
+                num_batch_phase += 'recon_phase' in loss_dict
+                labelled_count = loss_dict.pop('_phase_labelled_frames', 0)
+                logged_phase_frames += labelled_count
 
                 for k, v in loss_dict.items():
-                    train_loss_dict[k] += v
+                    train_loss_dict[k] += v * labelled_count if k in ('phase_mse', 'phase_angular_error_rad') else v
 
                 if total_iters % opt.log_freq == 0:
                     for k, v in train_loss_dict.items():
-                        if k != 'recon_phase':
+                        if k in ('phase_mse', 'phase_angular_error_rad'):
+                            train_loss_dict[k] = v / max(1, logged_phase_frames)
+                        elif k != 'recon_phase':
                             train_loss_dict[k] = v / (opt.log_freq / opt.batch_size)
                         else:
-                            train_loss_dict[k] = v / num_batch_phase
+                            train_loss_dict[k] = v / max(1, num_batch_phase)
 
                     # dump loss to log
                     if not opt.no_log:
@@ -190,6 +195,7 @@ class MotionVAEModel(object):
                     self.print_loss(epoch + 1, total_iters, time.time() - train_start_time, train_loss_dict)
                     train_loss_dict = defaultdict(float)
                     num_batch_phase = 0
+                    logged_phase_frames = 0
 
             # Store the learning rate and progress for the next epoch, so a
             # resumed run follows the same LR and curriculum schedules.
@@ -225,6 +231,10 @@ class MotionVAEModel(object):
         batch_phase = None
         if batch_data.get('phase') is not None:
             batch_phase = batch_data['phase'].float().to(self.device)
+        batch_phase_mask = None
+        if batch_data.get('phase_mask') is not None:
+            batch_phase_mask = batch_data['phase_mask'].bool().to(self.device)
+        phase_error_sum, phase_angle_sum, phase_count, phase_total = 0., 0., 0, 0
         batch_action = None
         if batch_data.get('action') is not None:
             batch_action = batch_data['action'].float().to(self.device)
@@ -259,7 +269,19 @@ class MotionVAEModel(object):
 
             # forward pass
             with torch.cuda.amp.autocast(enabled=opt.use_amp):
-                (output, output_phase, _, _), loss_dict = self.feed_vae(gt_feature, condition, gt_phase, gt_action)
+                (output, output_phase, _, _), loss_dict = self.feed_vae(gt_feature, condition, gt_phase, gt_action,
+                    None if batch_phase_mask is None else batch_phase_mask[:, i+1:i+1+S])
+
+            if opt.predict_phase:
+                phase_total += B * S
+                if gt_phase is not None:
+                    mask = torch.ones((B, S), dtype=torch.bool, device=self.device) if batch_phase_mask is None else batch_phase_mask[:, i+1:i+1+S]
+                    with torch.no_grad():
+                        pred, target = output_phase[mask].float(), gt_phase[mask].float()
+                        phase_count += int(mask.sum())
+                        phase_error_sum += float((pred - target).square().mean(dim=-1).sum())
+                        angle = torch.atan2(pred[:, 0], pred[:, 1]) - torch.atan2(target[:, 0], target[:, 1])
+                        phase_angle_sum += float(torch.atan2(torch.sin(angle), torch.cos(angle)).abs().sum())
 
             if self.accumulate_trajectory_loss:
                 window_losses.append(sum(loss_dict.values()))
@@ -290,6 +312,14 @@ class MotionVAEModel(object):
             loss_dict_seq[k] = v / predicted_steps
         if self.accumulate_trajectory_loss:
             loss_dict_seq['trajectory'] = trajectory_loss_sum / predicted_steps
+        if opt.predict_phase:
+            loss_dict_seq['_phase_labelled_frames'] = phase_count
+            loss_dict_seq['phase_label_fraction'] = phase_count / max(1, phase_total)
+            if phase_count:
+                loss_dict_seq['phase_mse'] = phase_error_sum / phase_count
+                loss_dict_seq['phase_angular_error_rad'] = phase_angle_sum / phase_count
+            else:
+                loss_dict_seq.pop('recon_phase', None)
         return loss_dict_seq
 
     def _optimize_loss(self, loss_total):
@@ -303,7 +333,7 @@ class MotionVAEModel(object):
             self.optimizer.step()
     
 
-    def feed_vae(self, ground_truth, condition, gt_phase=None, gt_action=None):
+    def feed_vae(self, ground_truth, condition, gt_phase=None, gt_action=None, gt_phase_mask=None):
         opt = self.opt
         condition = condition.flatten(start_dim=1, end_dim=2)
         flattened_truth = ground_truth.flatten(start_dim=1, end_dim=2)
@@ -327,8 +357,7 @@ class MotionVAEModel(object):
         recon_feature_loss = recon_feature_loss.mul(self.future_weights).sum()
 
         if opt.predict_phase and gt_phase is not None:
-            recon_phase_loss = (output_phase - gt_phase.detach()).pow(2).mean(dim=(0, -1))
-            recon_phase_loss = recon_phase_loss.mul(self.future_weights).sum()
+            recon_phase_loss = masked_phase_loss(output_phase, gt_phase, gt_phase_mask, self.future_weights)
 
         loss_dict = {
             'recon': recon_feature_loss * self.opt.weights['recon'],

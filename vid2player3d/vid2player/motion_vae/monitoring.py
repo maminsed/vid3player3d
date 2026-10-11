@@ -8,11 +8,15 @@ from pathlib import Path
 PRIMARY_METRICS = {
     'recon_weighted_mean': 'recon_loss',
     'kl_weighted_mean': 'kl_loss',
+    'phase_weighted_mean': 'phase_loss',
+    'phase_angular_error_rad_mean': 'phase_angular_error_rad',
+    'phase_label_fraction': 'phase_label_fraction',
     'root_error_m_mean': 'root_error_m',
     'local_mpjpe_m_mean': 'local_joint_error_m',
     'root_endpoint_error_m_mean': 'root_endpoint_error_m',
 }
 SECONDARY_METRICS = {
+    'phase_mse_mean': 'phase_mse',
     'world_mpjpe_m_mean': 'world_joint_error_m',
     'root_error_m_p95': 'root_error_p95_m',
     'root_velocity_error_mps_mean': 'root_velocity_error_mps',
@@ -46,6 +50,8 @@ def validation_scalars(summaries):
         diagnostic = 'diagnostics/' + label + '/'
         if mode == 'autoregressive':
             for source, name in PRIMARY_METRICS.items():
+                if source.startswith('phase_') and 'phase_weighted_mean' not in values:
+                    continue
                 scalars[label + '/' + name] = values.get(source)
             scalars[label + '/wrist_error_m'] = _wrist_error(values)
             for source, name in SECONDARY_METRICS.items():
@@ -71,11 +77,13 @@ def write_run_config(model):
     predicted_steps = opt.nframes_seq - opt.num_condition_frames - opt.num_future_predictions + 1
     config = {key: value for key, value in vars(opt).items()
               if not key.startswith('_') and not callable(value)}
+    labelled_frames = int((model.dataset.phase_mask_arr & model.dataset.selected_arr.astype(bool)).sum()) if opt.predict_phase else 0
     metadata = dict(
         schema_version=1,
         config=config,
         validation_split=model.validation_split,
         training_data=dict(
+            phase_labelled_frames=labelled_frames,
             selected_sequences=len(model.dataset.sequences),
             valid_frames=int((model.dataset.valid_arr.astype(bool) & model.dataset.selected_arr.astype(bool)).sum()),
             available_training_windows=len(model.dataset.rollouts),

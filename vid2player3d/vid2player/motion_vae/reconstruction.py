@@ -70,7 +70,7 @@ def select_sequence(dataset, name):
 
 @torch.no_grad()
 def reconstruct(model, raw_features, roots, source_frames, fps, resample=None, latent_diagnostics=True,
-                latent_mode='posterior', actions=None, detailed_metrics=True):
+                latent_mode='posterior', actions=None, detailed_metrics=True, phases=None, phase_mask=None):
     """Posterior-mean reconstruction with autoregressive conditioning and root integration.
 
     In posterior mode targets enter the encoder every step. Zero mode bypasses
@@ -103,6 +103,13 @@ def reconstruct(model, raw_features, roots, source_frames, fps, resample=None, l
         raise ValueError('Cannot reconstruct non-finite motion features or root positions.')
     if not np.isfinite(fps) or fps <= 0:
         raise ValueError('Sequence fps must be positive and finite.')
+    if phases is not None:
+        phases = np.asarray(phases)
+        phase_mask = np.ones(len(raw_features), dtype=bool) if phase_mask is None else np.asarray(phase_mask, dtype=bool)
+        if phases.shape != (len(raw_features), 2) or phase_mask.shape != (len(raw_features),):
+            raise ValueError('Phase targets/mask must align with reconstruction frames.')
+        if not np.isfinite(phases[phase_mask]).all():
+            raise ValueError('Labelled phase targets must be finite.')
     raw_truth = torch.as_tensor(raw_features, dtype=torch.float32, device=model.device)
     truth = model.normalize(raw_truth)
     if accumulate_trajectory:
@@ -119,6 +126,11 @@ def reconstruct(model, raw_features, roots, source_frames, fps, resample=None, l
                    conditioned_from_gt=int(i < T or reset), recon=None, kl=None,
                    recon_weighted=None, kl_weighted=None,
                    recon_zero_latent=None, latent_joint_effect_m=None)
+        row.update(phase_labelled=int(phases is not None and phase_mask[i]),
+                   gt_phase_rad=None, pred_phase_rad=None, phase_mse=None,
+                   phase_weighted=None, phase_angular_error_rad=None)
+        if row['phase_labelled']:
+            row['gt_phase_rad'] = float(np.mod(np.arctan2(phases[i, 0], phases[i, 1]), 2*np.pi))
         if detailed_metrics:
             for field in fields:
                 row['recon_' + field] = None
@@ -135,7 +147,19 @@ def reconstruct(model, raw_features, roots, source_frames, fps, resample=None, l
                 latent = actions[i - T:i - T + 1]
             else:
                 latent = truth.new_zeros((1, opt.latent_size))
-            output = model.model.sample(latent, condition.reshape(1, -1)).reshape(-1)[:opt.frame_size]
+            decoded = model.model.sample(latent, condition.reshape(1, -1)).reshape(-1)
+            output = decoded[:opt.frame_size]
+            if opt.predict_phase:
+                predicted_phase = decoded[opt.frame_size:opt.frame_size+2].float()
+                if predicted_phase.numel() != 2 or not torch.isfinite(predicted_phase).all():
+                    raise ValueError('Non-finite or missing phase prediction.')
+                angle = float(torch.atan2(predicted_phase[0], predicted_phase[1])) % (2*np.pi)
+                row['pred_phase_rad'] = angle
+                if row['phase_labelled']:
+                    row['phase_mse'] = float((predicted_phase - torch.as_tensor(phases[i], device=model.device)).square().mean())
+                    row['phase_weighted'] = row['phase_mse'] * opt.weights.get('recon_phase', 0)
+                    delta = angle - row['gt_phase_rad']
+                    row['phase_angular_error_rad'] = float(abs(np.arctan2(np.sin(delta), np.cos(delta))))
             recon = (output - truth[i]).square().mean()
             weighted_recon = recon if recon_feature_weights is None else feature_squared_error(
                 output, truth[i], recon_feature_weights).mean()
@@ -277,7 +301,7 @@ def render_frame(result, index, camera, title, resample):
     for segment, segment_color, width in segments:
         line(segment, segment_color, width)
     # Cover anything projected above the scene with a legible fixed overlay.
-    draw.rectangle((0, 0, camera.width, 132), fill=(18, 27, 36, 255))
+    draw.rectangle((0, 0, camera.width, 160), fill=(18, 27, 36, 255))
     draw.text((16, 10), 'Ground truth (35% ghost)', fill=GT_COLOR + (255,), font=font)
     draw.text((390, 10), 'Reconstruction' if row['kl'] is not None else 'Action rollout', fill=pred_color, font=font)
     if row['recon_weighted'] is None:
@@ -296,6 +320,10 @@ def render_frame(result, index, camera, title, resample):
             ' | GT reset' if row['conditioned_from_gt'] else ''), fill=(248, 222, 137, 255), font=font)
     elif row['conditioned_from_gt']:
         draw.text((16, 94), 'Condition initialized from ground truth', fill=(248, 222, 137, 255), font=font)
+    def phase_text(value):
+        return 'unavailable' if value is None else '{:.2f} rad ({:.2f} pi)'.format(value, value / np.pi)
+    draw.text((16, 122), 'Phase pred: {} | ref: {}'.format(
+        phase_text(row.get('pred_phase_rad')), phase_text(row.get('gt_phase_rad'))), fill='white', font=font)
     draw.rectangle((0, camera.height - 32, camera.width, camera.height), fill=(18, 27, 36, 255))
     draw.text((16, camera.height - 27), title[:145], fill='white', font=font)
     return np.asarray(frame)
@@ -305,6 +333,7 @@ def render_frame(result, index, camera, title, resample):
 REPORT_COLUMNS = (
     'frame', 'time_s', 'conditioned_from_gt', 'recon',
     'trajectory_mse_m2', 'trajectory_weighted',
+    'phase_labelled', 'gt_phase_rad', 'pred_phase_rad', 'phase_mse', 'phase_weighted', 'phase_angular_error_rad',
     'root_error_m', 'local_mpjpe_m', 'left_wrist_error_m', 'right_wrist_error_m',
     'gt_root_speed_mps', 'pred_root_speed_mps',
     'gt_wrist_speed_mps', 'pred_wrist_speed_mps', 'pred_pose_wrist_speed_mps',
@@ -360,7 +389,9 @@ def save_report(directory, result, metadata):
     metadata['root_endpoint_error_m'] = evaluated[-1]['root_error_m']
     (directory / 'summary.json').write_text(json.dumps(metadata, indent=2))
     posterior = any(row.get('kl') is not None for row in evaluated)
-    figure, axes = new_figure(3 if posterior else 2, 2, (10, 9 if posterior else 6))
+    has_phase = any(row.get('pred_phase_rad') is not None for row in evaluated)
+    nrows = (3 if posterior else 2) + int(has_phase)
+    figure, axes = new_figure(nrows, 2, (10, nrows * 3))
     groups = [
         ((('root_error_m', 'Root'),), 'Root error versus reference', 'm'),
         ((('local_mpjpe_m', 'Mean joint'), ('left_wrist_error_m', 'Left wrist'),
@@ -376,6 +407,9 @@ def save_report(directory, result, metadata):
              'Normalized feature MSE (same history)', 'MSE'),
             ((('kl_weighted', 'Weighted KL'),), 'Posterior KL', 'Loss'),
         ] + groups
+    if has_phase:
+        groups += [((('gt_phase_rad', 'Reference'), ('pred_phase_rad', 'Predicted')), 'Stroke phase (missing labels left blank)', 'rad'),
+                   ((('phase_angular_error_rad', 'Circular error'),), 'Phase error on labelled frames', 'rad')]
     for ax, (keys, title, ylabel) in zip(axes, groups):
         plot_metrics(ax, evaluated, keys, title, ylabel)
     figure.suptitle('{}\n{}; resets: {}'.format(
@@ -528,7 +562,6 @@ def record_reconstruction(opt, name, resample=None, nframes=None, suffix='',
     feature_slices(opt)
     # No phase labels are needed to evaluate pose reconstruction and KL.
     data_opt = copy.deepcopy(opt)
-    data_opt.predict_phase = False
     dataset = Video3DPoseDataset(data_opt)
     canonical, seq = select_sequence(dataset, name)
     length = seq['length'] - 1  # Keep one preceding frame for exact velocity features.
@@ -539,14 +572,16 @@ def record_reconstruction(opt, name, resample=None, nframes=None, suffix='',
         raise ValueError('Sequence is too short for conditioning and at least one prediction.')
     if not dataset.valid_arr[base:base + length + 1].all():
         raise ValueError('Selected sequence contains invalid frames; choose a clean exported sequence.')
-    features = dataset.get_window(base, length)['feature']
+    window = dataset.get_window(base, length)
+    features = window['feature']
+    phase_labels = dict(phases=window.get('phase'), phase_mask=window.get('phase_mask'))
     roots = np.array(dataset.joint_pos_arr[base + 1:base + length + 1, :3], copy=True)
     source_frames = np.arange(seq['start'] + 1, seq['start'] + length + 1)
     fps = float(seq.get('fps', 30))
     model = MotionVAEModel(opt)
-    result = reconstruct(model, features, roots, source_frames, fps, resample, detailed_metrics=False)
+    result = reconstruct(model, features, roots, source_frames, fps, resample, detailed_metrics=False, **phase_labels)
     zero_result = reconstruct(model, features, roots, source_frames, fps,
-                              latent_diagnostics=False, latent_mode='zero', detailed_metrics=False)
+                              latent_diagnostics=False, latent_mode='zero', detailed_metrics=False, **phase_labels)
     safe_name = re.sub(r'[^A-Za-z0-9_.-]+', '_', canonical)[:160]
     stamp = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
     directory = Path(opt.result_dir) / (opt.model_ver + suffix) / (safe_name + '_' + stamp)

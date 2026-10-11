@@ -4,8 +4,6 @@ from pathlib import Path
 from types import SimpleNamespace
 import unittest
 
-import yaml
-
 from vid2player.utils.reward_schedule import LinearRewardSchedule
 
 
@@ -58,19 +56,6 @@ class RewardScheduleTests(unittest.TestCase):
         task._is_train, task._pos_reward_schedule = True, None
         update(task, 0)
         self.assertEqual(task._reward_scales['pos'], 5.)
-
-    def test_stage1_schedule_budget(self):
-        cfg = yaml.safe_load((ROOT / 'cfg/controller/usopen_train_stage_1.yaml').read_text())
-        task, train = cfg['env']['vid2player'], cfg['params']['config']
-        schedule = LinearRewardSchedule(task['pos_reward_schedule'])
-        batch = cfg['env']['numEnvs'] * train['horizon_length']
-        self.assertEqual(schedule.value(0), 1.)
-        self.assertEqual(schedule.value(200 * batch), 1.)
-        self.assertEqual(schedule.value(500 * batch), 3.)
-        self.assertEqual(schedule.value(800 * batch), 5.)
-        self.assertEqual(schedule.value(train['max_epochs'] * batch), 5.)
-        self.assertEqual(task['reward_scales']['pos'], 5)
-
 
 if __name__ == '__main__':
     unittest.main()

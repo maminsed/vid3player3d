@@ -15,7 +15,7 @@ import numpy as np
 import torch
 
 from vid2player.motion_vae.base import MotionVAEModel
-from vid2player.motion_vae.config import MotionVAEOption
+from vid2player.motion_vae.tests.options import motion_options
 
 
 class CheckpointTests(unittest.TestCase):
@@ -38,8 +38,7 @@ class CheckpointTests(unittest.TestCase):
                 'player': 'Federer', 'handness': 'right',
             }]},
         }]))
-        self.opt = MotionVAEOption()
-        self.opt.load('federer_physics')
+        self.opt = motion_options()
         self.opt.update(dataset_dir=str(data), checkpoint_dir=str(self.root),
                         model_ver='model', gpu_ids=[], hidden_size=8, latent_size=2,
                         num_experts=2, batch_size=2, nframes_seq=3, nseqs=4,

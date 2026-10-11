@@ -12,7 +12,7 @@ import imageio
 import numpy as np
 import torch
 
-from vid2player.motion_vae.config import MotionVAEOption
+from vid2player.motion_vae.tests.options import motion_options
 from vid2player.motion_vae.reconstruction import (
     CourtCamera, reconstruct, render_frame, save_report, select_sequence,
     record_unit_actions, unit_action_sequences, save_experiments,
@@ -36,8 +36,7 @@ class FakeVAE:
 
 class ReconstructionTests(unittest.TestCase):
     def setUp(self):
-        opt = MotionVAEOption()
-        opt.load('usopen')
+        opt = motion_options()
         self.model = SimpleNamespace(opt=opt, device=torch.device('cpu'), model=FakeVAE(),
                                      normalize=lambda x: x / 2, unnormalize=lambda x: x * 2)
         self.features = np.zeros((6, 288), dtype=np.float32)

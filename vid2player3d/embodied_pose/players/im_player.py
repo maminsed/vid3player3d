@@ -72,7 +72,8 @@ class ImitatorPlayer(common_player.CommonPlayer):
             logger.debug("Motion export enabled - will collect motion data during simulation")
             self.motion_export_data = {
                 'pose_aa': [],
-                'trans_orig': []
+                'trans_orig': [],
+                'reference_times': []
             }
         else:
             logger.debug("Motion export disabled - no data will be collected")
@@ -263,7 +264,8 @@ class ImitatorPlayer(common_player.CommonPlayer):
     def _reset_motion_export_data(self):
         self.motion_export_data = {
             'pose_aa': [],
-            'trans_orig': []
+            'trans_orig': [],
+            'reference_times': []
         }
 
     def _get_export_motion_ids(self):
@@ -637,6 +639,8 @@ class ImitatorPlayer(common_player.CommonPlayer):
 
         self.motion_export_data['pose_aa'].append(full_pose_aa_new.flatten())
         self.motion_export_data['trans_orig'].append(root_pos)
+        self.motion_export_data['reference_times'].append(
+            float(self.env.task._cur_ref_motion_times[env_id].item()))
 
     def _save_motion_data(self, motion_id=None, env_id=0):
         logger.debug("\n" + "="*60)
@@ -705,7 +709,9 @@ class ImitatorPlayer(common_player.CommonPlayer):
             'trans_orig': np.array(self.motion_export_data['trans_orig']),
             'beta': betas,
             'gender': gender,
-            'fps': fps
+            'fps': fps,
+            'reference_times': np.asarray(self.motion_export_data['reference_times'], dtype=np.float64),
+            'export_fps': 1.0 / self.env.task.dt,
         }
 
         filename = f"{source_name}.pk"

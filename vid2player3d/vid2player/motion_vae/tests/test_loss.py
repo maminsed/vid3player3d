@@ -3,7 +3,7 @@ import unittest
 
 import torch
 
-from vid2player.motion_vae.config import MotionVAEOption
+from vid2player.motion_vae.tests.options import motion_options
 from vid2player.motion_vae.loss import (
     build_recon_feature_weights, feature_squared_error,
     trajectory_loss_settings, accumulated_root_trajectory_loss,
@@ -12,8 +12,7 @@ from vid2player.motion_vae.loss import (
 
 class ReconstructionLossTests(unittest.TestCase):
     def setUp(self):
-        self.opt = MotionVAEOption()
-        self.opt.load('usopen')
+        self.opt = motion_options()
 
     def weights(self, configured):
         self.opt.recon_feature_weights = configured
@@ -71,35 +70,6 @@ class ReconstructionLossTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.weights({'root_velo': 5})
 
-    def test_usopen_5_changes_only_feature_weights_relative_to_usopen_4(self):
-        baseline = MotionVAEOption()
-        baseline.load('usopen_4')
-        experiment = MotionVAEOption()
-        experiment.load('usopen_5')
-        self.assertEqual(baseline.recon_feature_weights, {})
-        self.assertEqual(experiment.recon_feature_weights, {'root_velo': 2.0, 'root_pos': 2.0})
-        ignored = {'model_ver', 'base_opt_ver', 'recon_feature_weights'}
-        for name in vars(baseline).keys() - ignored:
-            if not callable(getattr(baseline, name)):
-                self.assertEqual(getattr(experiment, name), getattr(baseline, name), name)
-
-    def test_usopen_6_enables_trajectory_with_existing_usopen_5_weights(self):
-        baseline = MotionVAEOption()
-        baseline.load('usopen_5')
-        experiment = MotionVAEOption()
-        experiment.load('usopen_6')
-        self.assertFalse(baseline.accumulate_trajectory_loss)
-        self.assertTrue(experiment.accumulate_trajectory_loss)
-        self.assertEqual(experiment.weights['trajectory'], 1.0)
-        self.assertEqual(experiment.trajectory_window_frames, 9)
-        self.assertEqual(baseline.weights['trajectory'], 0)
-        self.assertEqual({k: v for k, v in experiment.weights.items() if k != 'trajectory'},
-                         {k: v for k, v in baseline.weights.items() if k != 'trajectory'})
-        ignored = {'model_ver', 'base_opt_ver', 'accumulate_trajectory_loss', 'weights'}
-        for name in vars(baseline).keys() - ignored:
-            if not callable(getattr(baseline, name)):
-                self.assertEqual(getattr(experiment, name), getattr(baseline, name), name)
-
     def test_trajectory_loss_recovers_metres_and_trains_all_prefix_displacements(self):
         prediction = torch.tensor([[[1., 0., 0.], [1., 0., 0.], [1., 0., 0.]]], requires_grad=True)
         target = torch.zeros_like(prediction, requires_grad=True)
@@ -148,8 +118,7 @@ class ReconstructionLossTests(unittest.TestCase):
 
     def test_weight_overrides_merge_without_mutating_shared_defaults(self):
         original = self.opt.weights.copy()
-        other = MotionVAEOption()
-        other.load('usopen')
+        other = motion_options()
         self.opt.update(weights={'trajectory': 3})
         self.assertEqual(self.opt.weights['trajectory'], 3)
         for key in original.keys() - {'trajectory'}:

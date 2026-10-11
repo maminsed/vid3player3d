@@ -164,10 +164,10 @@ class ControllerInitTests(unittest.TestCase):
     def test_skip_requires_name_and_nonnegative_integer(self):
         for skip in (0, 1):
             with self.assertRaisesRegex(ValueError, 'requires --name'):
-                prepare('usopen', 'unused.pt', skip=skip, device='cpu')
+                prepare('any_experiment_name', 'unused.pt', skip=skip, device='cpu')
         for skip in (-1, 1.5, True):
             with self.assertRaisesRegex(ValueError, 'nonnegative integer'):
-                prepare('usopen', 'unused.pt', name='ready', skip=skip, device='cpu')
+                prepare('any_experiment_name', 'unused.pt', name='ready', skip=skip, device='cpu')
 
     def test_centring_translates_root_only(self):
         expected = self.dataset.get_window(1, 1)['feature'].copy()
@@ -210,7 +210,7 @@ class ControllerInitTests(unittest.TestCase):
             _save_pose(torch.from_numpy(self.dataset.joint_pos_arr[2]), path, 'Test pose')
             self.assertEqual(path.read_bytes()[:8], b'\x89PNG\r\n\x1a\n')
             with self.assertRaises(FileExistsError):
-                prepare('usopen', path.with_suffix('.pt'), device='cpu')
+                prepare('any_experiment_name', path.with_suffix('.pt'), device='cpu')
 
 
 if __name__ == '__main__':

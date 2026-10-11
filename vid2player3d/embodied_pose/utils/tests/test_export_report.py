@@ -141,6 +141,7 @@ class ExportMetricsTests(unittest.TestCase):
             self.assertEqual(env_id, active['env_id'])
             player.motion_export_data['pose_aa'].append(np.zeros(72))
             player.motion_export_data['trans_orig'].append(np.zeros(3))
+            player.motion_export_data['reference_times'].append(float(player.task._cur_ref_motion_times[env_id]))
 
         player._prepare_export_motion = prepare
         player._collect_motion_data = collect
@@ -165,7 +166,10 @@ class ExportMetricsTests(unittest.TestCase):
                 for row in rows:
                     data = next(iter(joblib.load(output / row['export_file']).values()))
                     self.assertEqual(len(data['pose_aa']), int(row['frames_exported']))
-                    self.assertEqual(set(data), {'pose_aa', 'trans_orig', 'beta', 'gender', 'fps'})
+                    self.assertEqual(set(data), {'pose_aa', 'trans_orig', 'beta', 'gender', 'fps', 'reference_times', 'export_fps'})
+                    np.testing.assert_allclose(data['reference_times'],
+                                               np.arange(1, len(data['pose_aa']) + 1) * player.task.dt)
+                    self.assertAlmostEqual(data['export_fps'], 1. / player.task.dt)
                 self.assertNotIn('Export step', stream.getvalue())
                 self.assertNotIn('Environment step details', stream.getvalue())
                 self.assertIn('Saved complete.pk', stream.getvalue())
