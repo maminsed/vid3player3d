@@ -2,6 +2,7 @@ from vid2player.motion_vae.config import *
 from vid2player.motion_vae.dataset import Video3DPoseDataset
 from vid2player.motion_vae.model import PoseMixtureVAE
 from vid2player.motion_vae.monitoring import train_tag, write_run_config
+from vid2player.motion_vae.scheduling import sequence_length
 from vid2player.motion_vae.loss import (
     build_recon_feature_weights, feature_squared_error,
     trajectory_loss_settings, accumulated_root_trajectory_loss, masked_phase_loss,
@@ -30,6 +31,7 @@ class MotionVAEModel(object):
 
     def __init__(self, opt, device=None):
         self.opt = opt
+        sequence_length(opt, 0)  # Validate before allocating/loading data.
         if opt.train_root_feedback not in ('predicted', 'integrated'):
             raise ValueError("train_root_feedback must be 'predicted' or 'integrated'.")
         if opt.train_root_feedback == 'integrated' and not {'root_pos', 'root_velo'}.issubset(opt.pose_feature):
@@ -98,9 +100,14 @@ class MotionVAEModel(object):
         from vid2player.motion_vae.validation import prepare_validation_split, MotionValidation
         self.validation_split = prepare_validation_split(opt, self.validation_split)
         held_out = self.validation_split['validation_videos'] if self.validation_split else []
-        self.dataset = Video3DPoseDataset(opt, split='train', validation_videos=held_out)
+        # Fail before training if the final curriculum length has no valid windows.
+        maximum_length = sequence_length(opt, opt.n_epochs + opt.n_epochs_decay)
+        self.dataset = Video3DPoseDataset(opt, split='train', validation_videos=held_out,
+                                         nframes_seq=maximum_length)
         if not self.dataset.rollouts:
-            raise ValueError('No training windows remain after dataset filtering/holdout.')
+            raise ValueError('No training windows remain after dataset filtering/holdout '
+                             'at nframes_seq={}.'.format(maximum_length))
+        self.update_sequence_length(self.start_epoch)
         if len(self.dataset) < opt.batch_size:
             raise ValueError('nseqs must be at least batch_size.')
         if normalization is None:
@@ -148,6 +155,7 @@ class MotionVAEModel(object):
 
         for epoch in range(self.start_epoch, opt.n_epochs + opt.n_epochs_decay):
             epoch_start_time = time.time()
+            self.update_sequence_length(epoch)
             for _, batch_data in enumerate(self.trainset):
                 train_phase = (self.schedual_mixed_phase(epoch)
                                if opt.mixed_phase_schedule else True)
@@ -179,6 +187,8 @@ class MotionVAEModel(object):
                         else:
                             train_loss_dict[k] = v / max(1, num_batch_phase)
 
+                    # Report the active length, even if a log interval spans epochs.
+                    train_loss_dict['nframes_seq'] = self.dataset.nframes_seq
                     # dump loss to log
                     if not opt.no_log:
                         for k, v in train_loss_dict.items():
@@ -502,6 +512,14 @@ class MotionVAEModel(object):
         logging.info('update learning rate: %f -> %f' % (self.old_lr, lr))
         self.old_lr = lr
 
+
+    def update_sequence_length(self, epoch):
+        """Update before iterating: DataLoader workers get the new window pool."""
+        length = sequence_length(self.opt, epoch)
+        if self.dataset.nframes_seq != length:
+            self.dataset.init_rollouts(length)
+            logging.info('Training window length at epoch %d: %d frames (%d valid windows)',
+                         epoch + 1, length, len(self.dataset.rollouts))
 
     def schedual_regressive_training(self, epoch):
         opt = self.opt

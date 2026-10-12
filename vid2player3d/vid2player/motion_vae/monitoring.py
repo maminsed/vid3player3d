@@ -83,7 +83,7 @@ def validation_scalars(summaries):
 def write_run_config(model):
     """One JSON for resolved options, split identity, and model-independent facts."""
     opt = model.opt
-    predicted_steps = opt.nframes_seq - opt.num_condition_frames - opt.num_future_predictions + 1
+    predicted_steps = model.dataset.nframes_seq - opt.num_condition_frames - opt.num_future_predictions + 1
     config = {key: value for key, value in vars(opt).items()
               if not key.startswith('_') and not callable(value)}
     labelled_frames = int((model.dataset.phase_mask_arr & model.dataset.selected_arr.astype(bool)).sum()) if opt.predict_phase else 0
@@ -92,6 +92,7 @@ def write_run_config(model):
         config=config,
         validation_split=model.validation_split,
         training_data=dict(
+            initial_nframes_seq=model.dataset.nframes_seq,
             phase_labelled_frames=labelled_frames,
             selected_sequences=len(model.dataset.sequences),
             valid_frames=int((model.dataset.valid_arr.astype(bool) & model.dataset.selected_arr.astype(bool)).sum()),
@@ -115,6 +116,7 @@ def write_run_config(model):
                               'and expected sampled z RMS sqrt(E[mu^2 + exp(logvar)]). '
                               'TensorBoard dimension cards use true previous frames; test summaries follow the chosen reset mode.',
             note='Training samples posterior latents and uses the curriculum; validation always encodes the target. No physics rollout.',
+            sequence_length='train/nframes_seq tracks the active training length; window counts and optimizer updates in this file describe initialization.',
         ),
     )
     path = Path(model.checkpoint_dir) / 'run_config.json'

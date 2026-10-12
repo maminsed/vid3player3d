@@ -36,6 +36,7 @@ class Video3DPoseDataset(Dataset):
         opt,
         split='all',
         validation_videos=(),
+        nframes_seq=None,
     ):
         if split not in ('all', 'train', 'validation'):
             raise ValueError('Unknown dataset split: ' + split)
@@ -155,7 +156,7 @@ class Video3DPoseDataset(Dataset):
             [seq['length'] for seq in self.sequences], dtype=float)
         self.seq_weights /= np.sum(self.seq_weights)
 
-        self.init_rollouts(opt.nframes_seq)
+        self.init_rollouts(opt.nframes_seq if nframes_seq is None else nframes_seq)
 
 
     def init_rollouts(self, nframes_seq):

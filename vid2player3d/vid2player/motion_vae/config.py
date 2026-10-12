@@ -181,20 +181,19 @@ motion_vae_opt_dict = {
     'weights'                               : {'recon_phase': 2},
     'train_root_feedback'                   : 'integrated',
     'validation_freq_steps'                 : 30_000,
-},
-
-
-'usopen_5': {
-    'model_ver'                             : 'usopen_5',
-    'base_opt_ver'                          : 'usopen_4',
-    'weights'                               : {'kl': 0.05},
-},
+}, # Final as of now. 
 
 'usopen_6': {
     'model_ver'                             : 'usopen_6',
-    'base_opt_ver'                          : 'usopen_5',
+    'base_opt_ver'                          : 'usopen_4_1',
+    'validation_freq_steps'                 : 10_000,
     # Runtime integrates root_velo (per-frame displacement) to move the player.
     'recon_feature_weights'                 : {'root_velo': 2.0, 'root_pos': 2.0},
+},
+
+'usopen_6_1': {
+    'model_ver'                             : 'usopen_6_1',
+    'base_opt_ver'                          : 'usopen_6',
 },
 
 'usopen_7': {

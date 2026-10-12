@@ -11,6 +11,7 @@ parser.add_argument('-e', '--exp', action='store', dest='exp_list',
                     help="Examples: -e v8.3.1.0")
 parser.add_argument('-p', '--pre-run', action='store_true')
 parser.add_argument('--no_log', action='store_true')
+parser.add_argument('--cpu', action='store_true', help='Run training or reconstruction on CPU.')
 parser.add_argument('--continue_train', action='store_true',
                     help='Resume the latest checkpoint, including optimizer and completed epochs.')
 parser.add_argument('-t', '--run_test', action='store_true')
@@ -53,7 +54,8 @@ if args.nframes is not None and args.nframes < 2:
     parser.error('--nframes must be at least 2')
 if args.test_only and (args.interactive or args.record_html):
     parser.error('--test_only records MP4 and PNG directly; omit --interactive/--record_html')
-
+if not args.test_only and args.cpu:
+    parser.error("run only reconstruction on cpu. not trianing. ")
 
 if __name__ == '__main__':
 
@@ -61,6 +63,9 @@ if __name__ == '__main__':
         # load option 
         opt = MotionVAEOption()
         opt.load(version)
+        if args.cpu:
+            opt.gpu_ids = []
+            opt.use_amp = False
         if args.continue_train:
             opt.continue_train = True
         if args.pre_run:

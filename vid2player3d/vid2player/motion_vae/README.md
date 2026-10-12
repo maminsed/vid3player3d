@@ -277,6 +277,43 @@ reference labels are valid. `--run_test`
 retains the old random-motion preview after training; its viewer/HTML flags do not
 apply to `--test_only`.
 
+## Training window length curriculum
+
+`nframes_seq_schedule` optionally gives `(epoch_fraction, frames)` knots, where
+fractions refer to `n_epochs + n_epochs_decay`. Lengths interpolate linearly,
+round down to whole frames, and hold the first/last value outside the knots.
+`None` preserves fixed `nframes_seq`. Knots need increasing fractions in `[0, 1]`
+and nondecreasing integer lengths with room for conditioning plus a prediction.
+
+`usopen_6_1` uses `[(0.3, 10), (0.5, 30), (0.7, 60)]`: with its 500 epochs,
+it holds 10 frames for the first 150 epochs, reaches 30 at zero-based epoch 250,
+and reaches 60 at epoch 350, holding 60 for the remaining epochs. To stop at 30,
+use `[(0.3, 10), (0.5, 30)]` instead.
+
+The inherited self-fed sampling curriculum finishes at epoch 100, and phase-loss
+activation finishes at epoch 150. Window growth starts after both finish. Learning
+rate decay starts around epoch 250; the final 150 epochs train at 60 frames with
+a decreasing learning rate. These timings are a training choice to evaluate,
+not a guarantee of better long-horizon stability. All schedules use epoch counts;
+longer windows perform more optimizer updates per epoch in the default mode.
+
+Run from `vid2player3d`:
+```bash
+PYTHONPATH=..:. python -u vid2player/motion_vae/train.py --exp usopen_6_1
+# CPU-only execution (also disables AMP):
+PYTHONPATH=..:. python -u vid2player/motion_vae/train.py --exp usopen_6_1 --cpu
+```
+
+Training rebuilds valid windows before each epoch; windows cannot cross sequence
+boundaries or invalid frames. The longest length is checked against the filtered
+training split before training starts. Normalization and validation windows stay
+fixed. Resuming derives the active length from the saved next epoch, so keep the
+schedule and total epoch count unchanged. TensorBoard `train/nframes_seq` logs
+the active length; `run_config.json` records the schedule and initialization
+statistics. Longer windows increase batch memory, work per batch, and (in the
+default per-step optimizer mode) optimizer updates per batch. This extends
+self-fed training while feedback between prediction steps remains detached.
+
 ## Resuming training
 
 Resume MVAE training from the latest completed epoch with:
