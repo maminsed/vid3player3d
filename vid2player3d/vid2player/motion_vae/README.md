@@ -6,6 +6,112 @@ the motion model used by the high-level tennis controller. See the
 All commands below run from `vid2player3d`; command and output paths are relative
 to that directory.
 
+## Experiment controls
+
+Choose a reconstruction checkpoint by label. Omission means `latest`; `best` and
+`epoch_50` select their own embedded normalization as well as weights. A `.tar`
+suffix is accepted; paths and silent fallback to another label are not.
+
+```bash
+PYTHONPATH=. python vid2player/motion_vae/train.py --exp usopen_4 --test-only \
+  --checkpoint epoch_50 \
+  --name demo_Adrian_Mannarino_vs._Jiri_Lehecka_reencoded-scene000-001
+```
+
+The recorded `summary.json` identifies the checkpoint actually loaded, including
+the zero and optional unit-action comparisons. `--checkpoint` applies only to
+`--test-only`; training resumption continues to use `latest`.
+
+Set these options in a new experiment entry in [config.py](config.py):
+
+```python
+'train_root_feedback': 'integrated',
+'best_validation_metric': 'world_mpjpe_m_mean',
+```
+
+`train_root_feedback` controls **self-fed training** conditions:
+
+- `predicted` (default): feed the decoder's absolute root-position output back,
+  preserving previous training behavior.
+- `integrated`: unnormalize the first predicted root displacement, add it to the
+  previous conditioning root, and normalize that position into the next condition.
+  This matches reconstruction and MVAEPlayer's integration rule. It also supports
+  X-only / XZ root conditioning, multiple history frames, and overlapping future
+  predictions; only the first prediction advances the condition.
+
+Teacher-forced batches always use true previous frames. Other feedback features
+and the existing detachment of self-fed predictions remain unchanged. This option
+does not itself lengthen the training window or enable gradients through feedback.
+The root feedback mode is stored in checkpoints; changing it on `--continue_train`
+raises an error to avoid silently mixing experiments. Older checkpoints are treated
+as `predicted`. Inference always uses runtime integration regardless of this option.
+
+Training with validation enabled automatically saves `best.tar` when a complete,
+finite, uninterrupted validation-window evaluation improves. With 100 predicted
+frames, the default selection variable is `val_100/total_error_m`: mean Euclidean
+**world-space joint error**, in metres, pooled across predicted frames and joints.
+It includes accumulated root movement and local pose error together. The score
+excludes phase loss, KL, and feature-normalization weights; changing those weights
+does not change what physical error means. Any failed rollout disqualifies the
+evaluation. Initial untrained validation is not eligible. `--no_log` retains its
+existing behavior of disabling checkpoint saves.
+
+`best_validation_metric` names a lower-is-better validation summary field; its
+default is `world_mpjpe_m_mean`. Selection metadata is embedded in `best.tar` and
+subsequent checkpoints, and restored on continuation. `best.tar` stores the exact
+weights at validation time and is for inference: periodic evaluation can occur
+mid-epoch, so resume training from `latest` or an epoch checkpoint rather than
+pretending the best snapshot completed an epoch. Selection uses the configured
+validation window length (normally 100), not full-sequence validation.
+
+This is a motion-representation selection criterion, not a high-level tennis
+success metric. The reconstruction encoder still sees the target each step, and
+the skeleton metrics use decoded joint positions rather than physical SMPL tracking.
+Useful latent action influence, plausible motion under prior/policy actions, and
+ball-contact/return results need their own evaluations.
+
+`usopen_4_5.mixed_phase_schedule` now uses `[(0.2, 0), (0.4, 1)]` with phase weight
+2. With its 500-epoch budget, the probability of enabling phase loss on a
+batch is zero through epoch index 100, ramps linearly to one at index 200, and
+stays one afterward. A selected batch uses coefficient 2 in full; this is **batch
+frequency scheduling**, not continuous loss-weight annealing. All batches learn
+motion and KL on the same sampled frames, including phase-labelled frames when
+phase supervision is off. The schedule gates only the phase loss; it does not
+switch datasets or filter frames. Phase MSE/angular diagnostics remain available
+even when phase loss is disabled, and validation still evaluates phase normally.
+Log `train/phase_batch_probability` shows the actual scheduled
+probability. The previous `[(0, 1), (0.5, 0.1)]` did the opposite: start with phase
+on every batch, then reduce frequency to 10% at epoch 250. Fractions scale with
+`n_epochs + n_epochs_decay`. This delay is epoch-based, not a detector that latent
+control has become useful; check latent diagnostics before interpreting it that way.
+
+Encoder diagnostics now include:
+
+- Training: `train/latent_mu_rms`, `train/latent_posterior_std_mean`, and
+  `train/latent_z_rms` (means of batch/step statistics).
+- Validation: `diagnostics/val_100/latent/` and `diagnostics/val_full/latent/`,
+  using teacher-forced inputs to measure the encoder on real motion states.
+  Per-dimension cards report mean, RMS, variation of the mean across frames,
+  posterior standard deviation, and expected sampled-latent RMS.
+- Reconstruction: `summary.json.latent_statistics` contains the same vectors
+  for the selected reset mode; `history.csv` includes per-frame mean RMS and
+  posterior standard deviation. Zero/prior-action reports have no encoder statistics.
+
+Validation moments are pooled by predicted-frame count. For each dimension,
+`mu_rms = sqrt(E[mu^2])`, `mu_std = sqrt(E[mu^2] - E[mu]^2)`, and
+`z_rms = sqrt(E[mu^2 + exp(logvar)])`. The last quantity describes the stochastic
+latents actually used in MVAE training. A tiny posterior **mean** RMS does not
+mean the decoder was trained only near zero: posterior std near one still gives
+sampled latents with RMS near one. Avoid scaling high-level actions down solely
+to match posterior-mean RMS. Pair these diagnostics with latent reconstruction
+benefit, action-induced motion changes, and sustained controllability.
+
+`--resample 10` replaces motion history and root with ground truth every ten
+predictions. It is a useful short-horizon reconstruction diagnostic, but changing
+the high-level action every ten frames does not provide those ground-truth resets.
+Keep both short-horizon accuracy and 30/60/100-frame stability checks; do not force
+an arbitrary prior action to reproduce a particular ground-truth future motion.
+
 ## Training
 
 We provide code for training the motion embedding in [motion_vae](.) (assuming the motion data is organized in the format described in [Video3DPoseDataset](dataset.py)).

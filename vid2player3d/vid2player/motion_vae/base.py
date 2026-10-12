@@ -18,7 +18,8 @@ from torch.nn.functional import normalize
 import time
 from collections import defaultdict
 import logging
-import copy
+import math
+import re
 
 
 ###############################################################################
@@ -29,6 +30,12 @@ class MotionVAEModel(object):
 
     def __init__(self, opt, device=None):
         self.opt = opt
+        if opt.train_root_feedback not in ('predicted', 'integrated'):
+            raise ValueError("train_root_feedback must be 'predicted' or 'integrated'.")
+        if opt.train_root_feedback == 'integrated' and not {'root_pos', 'root_velo'}.issubset(opt.pose_feature):
+            raise ValueError('Integrated training root feedback requires root_pos and root_velo.')
+        if opt.mixed_phase_schedule is not None:
+            self.phase_batch_probability(0)  # Validate before allocating/loading data.
         if device is not None:
             self.device = device
         else:
@@ -63,6 +70,7 @@ class MotionVAEModel(object):
         self.total_iters = 0  # Number of sampled training windows.
         self.train_steps = 0  # Completed batches; trajectory mode updates once per bounded chunk.
         self.validation_split = None
+        self.best_validation = None
         if not opt.test_only and not opt.continue_train:
             if os.path.exists(self.checkpoint_dir):
                 logging.warning("Checkpoint already exists!")
@@ -71,7 +79,7 @@ class MotionVAEModel(object):
             logging.info('Checkpoint saved into {}'.format(self.checkpoint_dir))
       
         if opt.test_only: 
-            self.load_checkpoint()
+            self.load_checkpoint(label=opt.checkpoint)
             return 
 
         if not opt.no_log:
@@ -111,19 +119,6 @@ class MotionVAEModel(object):
             drop_last=True,
             num_workers=int(opt.num_threads))
         
-        if self.opt.mixed_phase_schedule:
-            opt_no_phase = copy.deepcopy(opt)
-            opt_no_phase.predict_phase = False
-            self.dataset_no_phase = Video3DPoseDataset(opt_no_phase, split='train', validation_videos=held_out)
-            self.dataset_no_phase.set_normalization_stats(self.dataset.avg, self.dataset.std)
-
-            self.trainset_no_phase = DataLoader(
-                self.dataset_no_phase,
-                batch_size=opt.batch_size,
-                shuffle=True,
-                drop_last=True,
-                num_workers=int(opt.num_threads))
-
         if opt.softmax_future:
             self.future_weights = torch.softmax(
                 torch.linspace(1, 0, opt.num_future_predictions), dim=0
@@ -153,23 +148,20 @@ class MotionVAEModel(object):
 
         for epoch in range(self.start_epoch, opt.n_epochs + opt.n_epochs_decay):
             epoch_start_time = time.time()
-            if opt.mixed_phase_schedule:
-                trainset_no_phase_sampler = iter(self.trainset_no_phase)
-
             for _, batch_data in enumerate(self.trainset):
-                if opt.mixed_phase_schedule:
-                    batch_data_no_phase = next(trainset_no_phase_sampler)
-                    sample_phase = self.schedual_mixed_phase(epoch)
-                    if not sample_phase:
-                        batch_data = batch_data_no_phase
+                train_phase = (self.schedual_mixed_phase(epoch)
+                               if opt.mixed_phase_schedule else True)
 
                 total_iters += opt.batch_size
                 regressive = self.schedual_regressive_training(epoch)
-                loss_dict = self.train_batch(batch_data, regressive)
+                loss_dict = self.train_batch(batch_data, regressive, train_phase=train_phase)
+                if opt.mixed_phase_schedule:
+                    loss_dict['phase_batch_probability'] = self.phase_batch_probability(epoch)
                 self.train_steps += 1
                 if self.validation is not None and self.train_steps % opt.validation_freq_steps == 0:
-                    self.validation.evaluate(self, self.train_steps, total_iters,
-                                             epoch + (total_iters - self.total_iters) / (len(self.trainset) * opt.batch_size))
+                    validation_epoch = epoch + (total_iters - self.total_iters) / (len(self.trainset) * opt.batch_size)
+                    report = self.validation.evaluate(self, self.train_steps, total_iters, validation_epoch)
+                    self.consider_best_validation(report)
                     last_validation_step = self.train_steps
                 num_batch_phase += 'recon_phase' in loss_dict
                 labelled_count = loss_dict.pop('_phase_labelled_frames', 0)
@@ -216,13 +208,17 @@ class MotionVAEModel(object):
                 epoch + 1, opt.n_epochs + opt.n_epochs_decay, time.time() - train_start_time))
 
         if self.validation is not None and last_validation_step is not None and last_validation_step != self.train_steps:
-            self.validation.evaluate(self, self.train_steps, total_iters, self.start_epoch)
+            report = self.validation.evaluate(self, self.train_steps, total_iters, self.start_epoch)
+            self.consider_best_validation(report)
+            if not opt.no_log:
+                self.save_checkpoint(label='latest')  # Persist final best-selection state too.
         if not opt.no_log:
             self.writer.close()
         logging.info('End of training Time Taken: %d sec\n' % (time.time() - train_start_time))
 
 
-    def train_batch(self, batch_data, regressive=False):
+    def train_batch(self, batch_data, regressive=False, train_phase=True):
+        """Always learn motion; optionally omit phase loss without changing the batch."""
         opt = self.opt
         B, L, F = batch_data['feature'].shape
         T = opt.num_condition_frames
@@ -254,8 +250,18 @@ class MotionVAEModel(object):
         for i in range(T-1, L - S):
             # set input
             if i >= T:
+                previous_root = condition[:, -1, :self._root_condition_size()].clone()
                 condition = condition.roll(-1, dims=1)
                 condition[:, -1].copy_(output[:, 0].detach() if regressive else batch_feature[:, i])
+                if regressive and opt.train_root_feedback == 'integrated':
+                    size = self._root_condition_size()
+                    axes = [0] if opt.condition_root_x_only else [0, 2] if opt.no_condition_root_y else [0, 1, 2]
+                    # All values in the training buffer are normalized. Integrate
+                    # raw metres, then normalize root only; other outputs remain
+                    # unchanged and detached as in the original feedback rule.
+                    root = previous_root * self.std[:size] + self.avg[:size]
+                    displacement = output[:, 0, size:size+3].detach() * self.std[size:size+3] + self.avg[size:size+3]
+                    condition[:, -1, :size] = (root + displacement[:, axes] - self.avg[:size]) / self.std[:size]
 
             gt_feature = batch_feature[:, i+1:i+1+S]
             if batch_phase is not None:
@@ -269,8 +275,14 @@ class MotionVAEModel(object):
 
             # forward pass
             with torch.cuda.amp.autocast(enabled=opt.use_amp):
-                (output, output_phase, _, _), loss_dict = self.feed_vae(gt_feature, condition, gt_phase, gt_action,
+                (output, output_phase, mu, logvar), loss_dict = self.feed_vae(gt_feature, condition, gt_phase, gt_action,
                     None if batch_phase_mask is None else batch_phase_mask[:, i+1:i+1+S])
+            if not train_phase:
+                loss_dict.pop('recon_phase', None)
+            with torch.no_grad():
+                loss_dict_seq['latent_mu_rms'] += mu.square().mean().sqrt().item()
+                loss_dict_seq['latent_posterior_std_mean'] += (.5 * logvar).exp().mean().item()
+                loss_dict_seq['latent_z_rms'] += (mu.square() + logvar.exp()).mean().sqrt().item()
 
             if opt.predict_phase:
                 phase_total += B * S
@@ -322,6 +334,38 @@ class MotionVAEModel(object):
                 loss_dict_seq.pop('recon_phase', None)
         return loss_dict_seq
 
+    def _root_condition_size(self):
+        if 'root_pos' not in self.opt.pose_feature:
+            return 0
+        return 1 if self.opt.condition_root_x_only else 2 if self.opt.no_condition_root_y else 3
+
+    def consider_best_validation(self, report):
+        """Keep the exact validation weights; failed/empty rollouts cannot win."""
+        if self.opt.no_log or report['train_step'] == 0:
+            return
+        key = 'window_{}/autoregressive'.format(self.opt.validation_window_frames)
+        values = report['summary'][key]
+        metric = self.opt.best_validation_metric
+        score = values.get(metric)
+        if (values['failed_rollouts'] or not values['predicted_frames']
+                or score is None or not math.isfinite(score)):
+            return
+        if self.best_validation is not None:
+            if self.best_validation['metric'] != metric:
+                raise ValueError('best_validation_metric changed on resume; use a new model_ver.')
+            if score >= self.best_validation['value']:
+                return
+        previous_best = self.best_validation
+        self.best_validation = dict(metric=metric, value=float(score),
+                                    train_step=report['train_step'],
+                                    sampled_windows=report['sampled_windows'], epoch=report['epoch'])
+        try:
+            self.save_checkpoint(label='best', validation_progress=report)
+        except Exception:
+            self.best_validation = previous_best
+            raise
+        logging.info('Saved best MVAE: %s=%g at batch %d', metric, score, report['train_step'])
+
     def _optimize_loss(self, loss_total):
         self.optimizer.zero_grad()
         if self.opt.use_amp:
@@ -368,7 +412,7 @@ class MotionVAEModel(object):
         return (output, output_phase, mu, logvar), loss_dict
 
 
-    def save_checkpoint(self, label=None):
+    def save_checkpoint(self, label=None, validation_progress=None):
         checkpoint = {
             'format_version': 2,
             'train_steps': self.train_steps,
@@ -381,7 +425,16 @@ class MotionVAEModel(object):
             'scaler_state_dict': self.scaler.state_dict() if self.scaler is not None else None,
             'avg': torch.as_tensor(self.dataset.avg),
             'std': torch.as_tensor(self.dataset.std),
+            'best_validation': self.best_validation,
+            'train_root_feedback': self.opt.train_root_feedback,
         }
+        if validation_progress is not None:
+            epoch = validation_progress['epoch']
+            checkpoint.update(next_epoch=int(epoch), total_iters=validation_progress['sampled_windows'],
+                              train_steps=validation_progress['train_step'],
+                              inference_only=True, validation_epoch=epoch)
+            # Validation may occur mid-epoch, before LR/counter bookkeeping.
+            # Preserve its exact weights for inference, resume from latest.
         checkpoint_path = os.path.join(self.checkpoint_dir, '{}.tar'.format(label))
         # An interrupted write must not destroy the previous complete checkpoint.
         temporary_path = checkpoint_path + '.tmp'
@@ -398,13 +451,24 @@ class MotionVAEModel(object):
 
 
     def load_checkpoint(self, label='latest', resume=False):
+        label = label[:-4] if label.endswith('.tar') else label
+        if re.fullmatch(r'[A-Za-z0-9_-]+', label) is None:
+            raise ValueError('Checkpoint must be a label such as latest, best, or epoch_50.')
         model_state_dict_path = os.path.join(self.checkpoint_dir, '{}.tar'.format(label))
+        self.loaded_checkpoint_path = model_state_dict_path
         checkpoint = torch.load(model_state_dict_path, map_location='cpu')
         if 'model_state_dict' in checkpoint:
             self.model.load_state_dict(checkpoint['model_state_dict'])
             avg = checkpoint['avg'].cpu().numpy()
             std = checkpoint['std'].cpu().numpy()
             if resume:
+                if checkpoint.get('inference_only'):
+                    raise ValueError('Validation best checkpoint is for inference; resume from latest or an epoch checkpoint.')
+                if checkpoint.get('train_root_feedback', 'predicted') != self.opt.train_root_feedback:
+                    raise ValueError('train_root_feedback changed on resume; use a new model_ver.')
+                self.best_validation = checkpoint.get('best_validation')
+                if self.best_validation and self.best_validation['metric'] != self.opt.best_validation_metric:
+                    raise ValueError('best_validation_metric changed on resume; use a new model_ver.')
                 self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
                 self.start_epoch = checkpoint['next_epoch']
                 self.total_iters = checkpoint['total_iters']
@@ -449,11 +513,15 @@ class MotionVAEModel(object):
         return np.random.rand() <= thresh
     
 
-    def schedual_mixed_phase(self, epoch):
+    def phase_batch_probability(self, epoch):
         (e1, t1), (e2, t2) = self.opt.mixed_phase_schedule
         opt = self.opt
+        if not (0 <= e1 < e2 <= 1 and 0 <= t1 <= 1 and 0 <= t2 <= 1):
+            raise ValueError('mixed_phase_schedule needs increasing epoch fractions and probabilities in [0,1].')
         l = int((opt.n_epochs + opt.n_epochs_decay) * e1)
         h = int((opt.n_epochs + opt.n_epochs_decay) * e2)
+        if h <= l:
+            raise ValueError('mixed_phase_schedule endpoints must span at least one epoch.')
         p = min(h-l, max(0, epoch - l)) / (h - l)
         if p == 0:
             thresh = t1
@@ -461,7 +529,10 @@ class MotionVAEModel(object):
             thresh = t2
         else:
             thresh = t1 + (t2 - t1) * p
-        return np.random.rand() <= thresh
+        return thresh
+
+    def schedual_mixed_phase(self, epoch):
+        return np.random.rand() < self.phase_batch_probability(epoch)
 
 
     def print_loss(self, epoch, iter, t, loss_dict):

@@ -11,7 +11,7 @@ import torch
 
 from vid2player.motion_vae.base import MotionVAEModel
 from vid2player.motion_vae.dataset import Video3DPoseDataset
-from vid2player.motion_vae.metrics import add_motion_metrics, summarize_rows
+from vid2player.motion_vae.metrics import add_motion_metrics, summarize_rows, pool_latent_statistics
 from vid2player.motion_vae.loss import build_recon_feature_weights, feature_squared_error, trajectory_loss_settings
 
 
@@ -120,6 +120,8 @@ def reconstruct(model, raw_features, roots, source_frames, fps, resample=None, l
     predicted_roots = np.array(roots, dtype=np.float32, copy=True)
     root = torch.as_tensor(roots[T - 1], dtype=torch.float32, device=model.device).clone()
     rows = []
+    latent_sum = latent_square_sum = latent_std_sum = latent_variance_sum = None
+    latent_count = 0
     for i in range(len(truth)):
         reset = i >= T and resample is not None and (i - T) > 0 and (i - T) % resample == 0
         row = dict(frame=int(source_frames[i]), time_s=float(source_frames[i] / fps),
@@ -142,6 +144,18 @@ def reconstruct(model, raw_features, roots, source_frames, fps, resample=None, l
             if latent_mode == 'posterior':
                 mu, logvar = model.model.encode(truth[i:i + 1], condition.reshape(1, -1))
                 latent = mu
+                if latent_sum is None:
+                    latent_sum = torch.zeros_like(mu[0])
+                    latent_square_sum = torch.zeros_like(mu[0])
+                    latent_std_sum = torch.zeros_like(mu[0])
+                    latent_variance_sum = torch.zeros_like(mu[0])
+                latent_sum += mu.sum(dim=0)
+                latent_square_sum += mu.square().sum(dim=0)
+                latent_std_sum += (.5 * logvar).exp().sum(dim=0)
+                latent_variance_sum += logvar.exp().sum(dim=0)
+                latent_count += len(mu)
+                row.update(latent_mu_rms=float(mu.square().mean().sqrt()),
+                           latent_posterior_std_mean=float((.5 * logvar).exp().mean()))
                 kl = (-0.5 * (1 + logvar - mu.square() - logvar.exp()).mean()).clamp_min(0)
             elif latent_mode == 'actions':
                 latent = actions[i - T:i - T + 1]
@@ -210,6 +224,12 @@ def reconstruct(model, raw_features, roots, source_frames, fps, resample=None, l
     joints[1] += predicted_roots[:, None, :]
     result = dict(rows=rows, joints=joints, roots=np.stack((roots, predicted_roots)),
                   predicted_features=predicted)
+    if latent_count:
+        result['latent_statistics'] = pool_latent_statistics([dict(
+            frames=latent_count, mu_mean_per_dim=(latent_sum / latent_count).cpu().tolist(),
+            mu_rms_per_dim=(latent_square_sum / latent_count).sqrt().cpu().tolist(),
+            posterior_std_mean_per_dim=(latent_std_sum / latent_count).cpu().tolist(),
+            posterior_variance_mean_per_dim=(latent_variance_sum / latent_count).cpu().tolist())])
     add_motion_metrics(result, raw_features, fields, fps, opt)
     for row in rows:
         if any(value is not None and not np.isfinite(value) for value in row.values()):
@@ -341,6 +361,7 @@ REPORT_COLUMNS = (
 )
 POSTERIOR_COLUMNS = (
     'kl', 'kl_weighted', 'recon_zero_latent', 'latent_joint_effect_m',
+    'latent_mu_rms', 'latent_posterior_std_mean',
 )
 
 
@@ -376,6 +397,8 @@ def plot_metrics(ax, rows, keys, title, ylabel):
 
 def save_report(directory, result, metadata):
     """One compact report per rollout; baseline data is never copied here."""
+    if 'latent_statistics' in result:
+        metadata['latent_statistics'] = result['latent_statistics']
     rows = report_rows(result)
     with (directory / 'history.csv').open('w', newline='') as stream:
         writer = csv.DictWriter(stream, fieldnames=list(rows[0]))
@@ -587,7 +610,7 @@ def record_reconstruction(opt, name, resample=None, nframes=None, suffix='',
     directory = Path(opt.result_dir) / (opt.model_ver + suffix) / (safe_name + '_' + stamp)
     directory.mkdir(parents=True, exist_ok=True)
     metadata = dict(name=canonical, dataset_dir=opt.dataset_dir,
-                    checkpoint=str(Path(model.checkpoint_dir) / 'latest.tar'),
+                    checkpoint=model.loaded_checkpoint_path,
                     frames=length, fps=fps, resample=resample, weights=opt.weights,
                     recon_feature_weights=opt.recon_feature_weights,
                     accumulate_trajectory_loss=opt.accumulate_trajectory_loss,

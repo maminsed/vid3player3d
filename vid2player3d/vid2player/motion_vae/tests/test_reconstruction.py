@@ -242,6 +242,7 @@ class ReconstructionTests(unittest.TestCase):
             get_window=lambda *args: {'feature': self.features})
         sequence = dict(base=0, start=0, length=7, fps=30)
         self.model.checkpoint_dir = '/tmp/checkpoints'
+        self.model.loaded_checkpoint_path = '/tmp/checkpoints/epoch_50.tar'
         with tempfile.TemporaryDirectory() as temp:
             self.model.opt.result_dir = temp
             with patch('vid2player.motion_vae.reconstruction.Video3DPoseDataset', return_value=dataset), \
@@ -253,6 +254,7 @@ class ReconstructionTests(unittest.TestCase):
                  patch('vid2player.motion_vae.reconstruction.record_unit_actions') as probes:
                 # The mocked report still needs the existing print-summary values.
                 def report(directory, result, metadata, **kwargs):
+                    self.assertEqual(metadata['checkpoint'], '/tmp/checkpoints/epoch_50.tar')
                     metadata.update(recon_mean=0., kl_weighted_mean=0.,
                                     root_error_m_mean=0., local_mpjpe_m_mean=0.)
                 with patch('vid2player.motion_vae.reconstruction.save_report', side_effect=report):
@@ -288,6 +290,23 @@ class ReconstructionTests(unittest.TestCase):
         self.features[2, 0] = np.nan
         with self.assertRaisesRegex(ValueError, 'non-finite'):
             self.run_reconstruction()
+
+    def test_latent_statistics_include_per_dimension_moments_and_survive_report(self):
+        result=self.run_reconstruction(resample=1)
+        stats=result['latent_statistics']
+        self.assertEqual(stats['frames'],5)
+        self.assertEqual(stats['mu_rms'],1.)
+        self.assertEqual(stats['mu_mean_per_dim'],[1.,1.])
+        self.assertEqual(stats['mu_std_per_dim'],[0.,0.])
+        self.assertEqual(stats['posterior_std_mean_per_dim'],[1.,1.])
+        np.testing.assert_allclose(stats['z_rms_per_dim'],[np.sqrt(2),np.sqrt(2)])
+        with tempfile.TemporaryDirectory() as temp:
+            save_report(Path(temp),result,dict(name='latents',resample=1))
+            summary=json.loads((Path(temp)/'summary.json').read_text())
+            self.assertEqual(summary['latent_statistics'],stats)
+            self.assertIn('latent_mu_rms',(Path(temp)/'history.csv').read_text().splitlines()[0])
+        zero=reconstruct(self.model,self.features,self.roots,self.frames,30.,latent_mode='zero')
+        self.assertNotIn('latent_statistics',zero)
 
     def test_headless_video_and_report_have_aligned_frame_counts(self):
         result = self.run_reconstruction(resample=2)

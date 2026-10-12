@@ -13,6 +13,7 @@ METRICS = (
     'recon_root_pos', 'recon_root_velo', 'recon_joint_pos', 'recon_joint_velo',
     'recon_joint_rotmat', 'recon_joint_quat',
     'latent_joint_effect_m', 'root_error_m', 'root_xy_error_m',
+    'latent_mu_rms', 'latent_posterior_std_mean',
     'local_mpjpe_m', 'world_mpjpe_m', 'left_wrist_error_m', 'right_wrist_error_m',
     'root_displacement_error_m', 'root_velocity_error_mps',
     'root_velocity_bias_x_mps', 'root_velocity_bias_y_mps', 'root_velocity_bias_z_mps',
@@ -21,6 +22,26 @@ METRICS = (
     'gt_wrist_speed_mps', 'pred_wrist_speed_mps', 'pred_pose_wrist_speed_mps',
     'pose_wrist_velocity_error_mps',
 )
+
+
+def pool_latent_statistics(statistics):
+    """Pool moments by frame count, retaining each latent dimension's scale."""
+    statistics = [s for s in statistics if s and s['frames']]
+    if not statistics:
+        return None
+    counts = np.asarray([s['frames'] for s in statistics], dtype=float)
+    mean = np.average([s['mu_mean_per_dim'] for s in statistics], axis=0, weights=counts)
+    square = np.average([np.square(s['mu_rms_per_dim']) for s in statistics], axis=0, weights=counts)
+    posterior_std = np.average([s['posterior_std_mean_per_dim'] for s in statistics], axis=0, weights=counts)
+    variance = np.average([s['posterior_variance_mean_per_dim'] for s in statistics], axis=0, weights=counts)
+    return dict(frames=int(counts.sum()), mu_rms=float(np.sqrt(square.mean())),
+                mu_mean_per_dim=mean.tolist(), mu_rms_per_dim=np.sqrt(square).tolist(),
+                mu_std_per_dim=np.sqrt(np.maximum(0, square - mean**2)).tolist(),
+                posterior_std_mean_per_dim=posterior_std.tolist(),
+                posterior_std_mean=float(posterior_std.mean()),
+                posterior_variance_mean_per_dim=variance.tolist(),
+                z_rms_per_dim=np.sqrt(square + variance).tolist(),
+                z_rms=float(np.sqrt((square + variance).mean())))
 
 
 def add_motion_metrics(result, truth, fields, fps, opt):

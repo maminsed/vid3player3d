@@ -14,6 +14,7 @@ PRIMARY_METRICS = {
     'root_error_m_mean': 'root_error_m',
     'local_mpjpe_m_mean': 'local_joint_error_m',
     'root_endpoint_error_m_mean': 'root_endpoint_error_m',
+    'world_mpjpe_m_mean': 'total_error_m',
 }
 SECONDARY_METRICS = {
     'phase_mse_mean': 'phase_mse',
@@ -58,6 +59,14 @@ def validation_scalars(summaries):
                 scalars[diagnostic + name] = values.get(source)
             scalars[diagnostic + 'fast_motion_wrist_error_m'] = _wrist_error(values, 'fast_motion_')
         elif mode == 'teacher_forced':
+            stats = values.get('latent_statistics')
+            if stats:
+                scalars[diagnostic + 'latent/mu_rms'] = stats['mu_rms']
+                scalars[diagnostic + 'latent/posterior_std_mean'] = stats['posterior_std_mean']
+                scalars[diagnostic + 'latent/z_rms'] = stats['z_rms']
+                for key in ('mu_mean_per_dim', 'mu_rms_per_dim', 'mu_std_per_dim', 'posterior_std_mean_per_dim', 'z_rms_per_dim'):
+                    for dimension, value in enumerate(stats[key]):
+                        scalars[diagnostic + 'latent/' + key.replace('_per_dim', '') + '/dim_{:02d}'.format(dimension)] = value
             for source, name in [('recon_weighted_mean', 'recon_loss'),
                                  ('root_error_m_mean', 'root_error_m'),
                                  ('local_mpjpe_m_mean', 'local_joint_error_m')]:
@@ -102,6 +111,9 @@ def write_run_config(model):
             main_validation_mode='autoregressive conditioning, posterior-mean latent, integrated root',
             aggregation='frame-weighted means across all held-out videos; endpoint errors average rollouts; wrist error averages both wrists',
             latent_recon_benefit='zero-latent MSE minus posterior-mean MSE under teacher forcing; positive means latent helps',
+            latent_statistics='Per-dimension encoder mean, RMS, standard deviation across frames, posterior std, '
+                              'and expected sampled z RMS sqrt(E[mu^2 + exp(logvar)]). '
+                              'TensorBoard dimension cards use true previous frames; test summaries follow the chosen reset mode.',
             note='Training samples posterior latents and uses the curriculum; validation always encodes the target. No physics rollout.',
         ),
     )

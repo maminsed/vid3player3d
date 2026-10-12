@@ -18,6 +18,7 @@ parser.add_argument('-t', '--run_test', action='store_true')
 parser.add_argument('-to', '--test_only', '--test-only', action='store_true',
                     help='Record a named ground-truth versus MVAE reconstruction MP4.')
 parser.add_argument('--name', help='Manifest video/sequence name, source key, or unique export filename stem.')
+parser.add_argument('--checkpoint', help='Test-only checkpoint label: latest (default), best, epoch_50, etc.')
 parser.add_argument('--resample', type=int, help='Reset conditioning pose and root from ground truth every N predictions.')
 parser.add_argument('--unit-actions', action='store_true',
                     help='Add independent unit-Gaussian action rollouts to --test-only output.')
@@ -46,6 +47,8 @@ if (args.name is not None or args.resample is not None) and not args.test_only:
     parser.error('--name and --resample require --test_only')
 if args.unit_actions and not args.test_only:
     parser.error('--unit-actions requires --test-only')
+if args.checkpoint is not None and not args.test_only:
+    parser.error('--checkpoint requires --test-only')
 if args.nframes is not None and args.nframes < 2:
     parser.error('--nframes must be at least 2')
 if args.test_only and (args.interactive or args.record_html):
@@ -66,6 +69,8 @@ if __name__ == '__main__':
             opt.n_epochs_decay = 5
             opt.nseqs = 1000
         opt.no_log = args.no_log
+        if args.checkpoint is not None:
+            opt.checkpoint = args.checkpoint
 
         if not args.test_only:
             motion_vae = MotionVAEModel(opt)

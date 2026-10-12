@@ -10,7 +10,7 @@ import numpy as np
 import torch
 
 from vid2player.motion_vae.dataset import Video3DPoseDataset
-from vid2player.motion_vae.metrics import summarize_rows
+from vid2player.motion_vae.metrics import summarize_rows, pool_latent_statistics
 from vid2player.motion_vae.monitoring import validation_scalars
 
 
@@ -172,7 +172,7 @@ class MotionValidation:
                                           sequence=seq['_video_name'], sequence_base=seq['base'],
                                           first_source_frame=int(first), predicted_frames=length - self.opt.num_condition_frames,
                                           whole_sequence=segment['whole_sequence'], fps=fps)
-                            bucket = buckets.setdefault((scope, mode), dict(rows=[], endpoints=[], failed=0, rollouts=0))
+                            bucket = buckets.setdefault((scope, mode), dict(rows=[], endpoints=[], failed=0, rollouts=0, latents=[]))
                             bucket['rollouts'] += 1
                             try:
                                 result = reconstruct(model, raw, roots, frames, fps, reset,
@@ -187,6 +187,9 @@ class MotionValidation:
                             else:
                                 rows = [r for r in result['rows'] if r['recon'] is not None]
                                 record['metrics'] = summarize_rows(rows)
+                                if 'latent_statistics' in result:
+                                    record['latent_statistics'] = result['latent_statistics']
+                                    bucket['latents'].append(result['latent_statistics'])
                                 record['metrics']['root_endpoint_error_m'] = rows[-1]['root_error_m']
                                 bucket['rows'].extend(rows)
                                 bucket['endpoints'].append(rows[-1]['root_error_m'])
@@ -200,6 +203,9 @@ class MotionValidation:
             values = summarize_rows(bucket['rows'])
             values.update(rollouts=bucket['rollouts'], failed_rollouts=bucket['failed'],
                           root_endpoint_error_m_mean=float(np.mean(bucket['endpoints'])) if bucket['endpoints'] else None)
+            latent_statistics = pool_latent_statistics(bucket['latents'])
+            if latent_statistics is not None:
+                values['latent_statistics'] = latent_statistics
             summaries[scope + '/' + mode] = values
         coverage = self.reference_stats['coverage']
         report = dict(coverage=coverage, train_step=step, sampled_windows=sampled_windows, epoch=epoch,

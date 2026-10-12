@@ -32,7 +32,13 @@ class MotionVAEOption(object):
     nframes_seq = 10
     nseqs = 50000
     curriculum_schedule = None
+    # [(epoch_fraction, probability), ...]: enable phase loss per batch.
+    # Motion/KL use every sampled batch, regardless of phase supervision.
     mixed_phase_schedule = None
+    # Self-fed training only: 'predicted' uses the absolute root output (legacy);
+    # 'integrated' adds decoded per-frame displacement to the previous root,
+    # matching MVAEPlayer/reconstruction. Teacher forcing always uses GT.
+    train_root_feedback = 'predicted'
     weights = {'recon': 1, 'kl': 1, 'recon_phase': 10, 'trajectory': 0}
     # Multipliers on normalized squared error per coordinate; omitted groups = 1.
     # {} (or all ones) preserves the original loss, including its denominator.
@@ -63,11 +69,15 @@ class MotionVAEOption(object):
     validation_freq_steps = 3000  # Batches; one epoch has nseqs // batch_size batches.
     validation_window_frames = 100  # Predicted frames, plus conditioning history.
     validation_windows_per_video = 3
+    # Minimize physical error on uninterrupted posterior val_100 rollouts.
+    # World joints include root drift and local pose; phase/KL are excluded.
+    best_validation_metric = 'world_mpjpe_m_mean'
     metric_stationary_speed_mps = 0.1  # Ground-truth horizontal root speed.
     metric_fast_wrist_speed_mps = 2.0  # Either ground-truth world-space wrist.
 
     # Test
     test_only = False
+    checkpoint = 'latest'  # Inference label, e.g. latest, best, epoch_50.
     result_dir = 'out/motionVAE'
     infer_racket = False
 
@@ -157,17 +167,27 @@ motion_vae_opt_dict = {
 
 'usopen_4': {
     'model_ver'                             : 'usopen_4',
+    'dataset_dir'                           : 'exports/vae_input/tennis_motion_dataset_3',
     'base_opt_ver'                          : 'usopen',
     'predict_phase'                         : True,
     'mixed_phase_schedule'                  : None,
     'weights'                               : {'recon': 1, 'kl': 0.5, 'recon_phase': 10},
 },
 
+'usopen_4_1': {
+    'model_ver'                             : 'usopen_4_1',
+    'base_opt_ver'                          : 'usopen_4',
+    'mixed_phase_schedule'                  : [(0.1, 0), (0.3, 1)],
+    'weights'                               : {'recon_phase': 2},
+    'train_root_feedback'                   : 'integrated',
+    'validation_freq_steps'                 : 30_000,
+},
+
+
 'usopen_5': {
     'model_ver'                             : 'usopen_5',
     'base_opt_ver'                          : 'usopen_4',
-    'predict_phase'                         : False,
-    'weights'                               : {'recon': 1, 'kl': 0.05, 'recon_phase': 0},
+    'weights'                               : {'kl': 0.05},
 },
 
 'usopen_6': {

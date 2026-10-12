@@ -115,8 +115,9 @@ class ValidationTests(unittest.TestCase):
         self.assertIn(tag, events.Tags()['scalars'])
         self.assertEqual(events.Scalars(tag)[0].step, 2)
         tags = events.Tags()['scalars']
-        self.assertEqual(len([t for t in tags if not t.startswith('diagnostics/')]), 12)
-        self.assertLessEqual(len(tags), 46)
+        self.assertEqual(len([t for t in tags if not t.startswith('diagnostics/')]), 14)
+        self.assertIn('val_3/total_error_m', tags)
+        self.assertIn('diagnostics/val_3/latent/mu_rms/dim_00', tags)
         self.assertTrue(any(t.startswith('diagnostics/') for t in tags))
         self.assertFalse(any(t.startswith('validation/') or 'video' in t or 'gt_' in t or 'frames' in t for t in tags))
         metadata = json.loads((directory / 'run_config.json').read_text())
