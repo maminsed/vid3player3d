@@ -124,7 +124,8 @@ class MotionVAEModel(object):
             batch_size=opt.batch_size,
             shuffle=True,
             drop_last=True,
-            num_workers=int(opt.num_threads))
+            num_workers=int(opt.num_threads),
+            pin_memory=self.device.type == 'cuda')
         
         if opt.softmax_future:
             self.future_weights = torch.softmax(
@@ -149,6 +150,8 @@ class MotionVAEModel(object):
         num_batch_phase = 0
         logged_phase_frames = 0
         last_validation_step = None
+        performance_frames = 0
+        performance_seconds = 0.0
         if self.validation is not None and self.start_epoch < opt.n_epochs + opt.n_epochs_decay:
             self.validation.evaluate(self, self.train_steps, total_iters, self.start_epoch)
             last_validation_step = self.train_steps
@@ -156,6 +159,7 @@ class MotionVAEModel(object):
         for epoch in range(self.start_epoch, opt.n_epochs + opt.n_epochs_decay):
             epoch_start_time = time.time()
             self.update_sequence_length(epoch)
+            batch_interval_start = time.perf_counter()
             for _, batch_data in enumerate(self.trainset):
                 train_phase = (self.schedual_mixed_phase(epoch)
                                if opt.mixed_phase_schedule else True)
@@ -165,6 +169,9 @@ class MotionVAEModel(object):
                 loss_dict = self.train_batch(batch_data, regressive, train_phase=train_phase)
                 if opt.mixed_phase_schedule:
                     loss_dict['phase_batch_probability'] = self.phase_batch_probability(epoch)
+                performance_seconds += time.perf_counter() - batch_interval_start
+                performance_frames += batch_data['feature'].shape[0] * (
+                    batch_data['feature'].shape[1] - opt.num_condition_frames - opt.num_future_predictions + 1)
                 self.train_steps += 1
                 if self.validation is not None and self.train_steps % opt.validation_freq_steps == 0:
                     validation_epoch = epoch + (total_iters - self.total_iters) / (len(self.trainset) * opt.batch_size)
@@ -189,6 +196,11 @@ class MotionVAEModel(object):
 
                     # Report the active length, even if a log interval spans epochs.
                     train_loss_dict['nframes_seq'] = self.dataset.nframes_seq
+                    # Approximate end-to-end training throughput, including loader
+                    # wait and batch transfers, excluding validation/checkpointing.
+                    train_loss_dict['predicted_frames_per_second'] = performance_frames / max(performance_seconds, 1e-9)
+                    performance_frames = 0
+                    performance_seconds = 0.0
                     # dump loss to log
                     if not opt.no_log:
                         for k, v in train_loss_dict.items():
@@ -198,6 +210,7 @@ class MotionVAEModel(object):
                     train_loss_dict = defaultdict(float)
                     num_batch_phase = 0
                     logged_phase_frames = 0
+                batch_interval_start = time.perf_counter()
 
             # Store the learning rate and progress for the next epoch, so a
             # resumed run follows the same LR and curriculum schedules.
@@ -233,17 +246,20 @@ class MotionVAEModel(object):
         B, L, F = batch_data['feature'].shape
         T = opt.num_condition_frames
         S = opt.num_future_predictions
-        batch_feature = batch_data['feature'].float().to(self.device)
+        batch_feature = batch_data['feature'].to(self.device, dtype=torch.float32, non_blocking=True)
         batch_phase = None
         if batch_data.get('phase') is not None:
-            batch_phase = batch_data['phase'].float().to(self.device)
+            batch_phase = batch_data['phase'].to(self.device, dtype=torch.float32, non_blocking=True)
         batch_phase_mask = None
         if batch_data.get('phase_mask') is not None:
-            batch_phase_mask = batch_data['phase_mask'].bool().to(self.device)
-        phase_error_sum, phase_angle_sum, phase_count, phase_total = 0., 0., 0, 0
+            batch_phase_mask = batch_data['phase_mask'].to(self.device, dtype=torch.bool, non_blocking=True)
+        phase_error_sum = torch.zeros((), dtype=torch.float64, device=self.device)
+        phase_angle_sum = torch.zeros((), dtype=torch.float64, device=self.device)
+        phase_count = torch.zeros((), dtype=torch.long, device=self.device)
+        phase_total = 0
         batch_action = None
         if batch_data.get('action') is not None:
-            batch_action = batch_data['action'].float().to(self.device)
+            batch_action = batch_data['action'].to(self.device, dtype=torch.float32, non_blocking=True)
 
         self.model.train()
         self.optimizer.zero_grad()
@@ -290,20 +306,22 @@ class MotionVAEModel(object):
             if not train_phase:
                 loss_dict.pop('recon_phase', None)
             with torch.no_grad():
-                loss_dict_seq['latent_mu_rms'] += mu.square().mean().sqrt().item()
-                loss_dict_seq['latent_posterior_std_mean'] += (.5 * logvar).exp().mean().item()
-                loss_dict_seq['latent_z_rms'] += (mu.square() + logvar.exp()).mean().sqrt().item()
+                loss_dict_seq['latent_mu_rms'] += mu.square().mean().sqrt().detach().double()
+                loss_dict_seq['latent_posterior_std_mean'] += (.5 * logvar).exp().mean().detach().double()
+                loss_dict_seq['latent_z_rms'] += (mu.square() + logvar.exp()).mean().sqrt().detach().double()
 
             if opt.predict_phase:
                 phase_total += B * S
                 if gt_phase is not None:
                     mask = torch.ones((B, S), dtype=torch.bool, device=self.device) if batch_phase_mask is None else batch_phase_mask[:, i+1:i+1+S]
                     with torch.no_grad():
-                        pred, target = output_phase[mask].float(), gt_phase[mask].float()
-                        phase_count += int(mask.sum())
-                        phase_error_sum += float((pred - target).square().mean(dim=-1).sum())
-                        angle = torch.atan2(pred[:, 0], pred[:, 1]) - torch.atan2(target[:, 0], target[:, 1])
-                        phase_angle_sum += float(torch.atan2(torch.sin(angle), torch.cos(angle)).abs().sum())
+                        # Sanitize unlabelled entries before arithmetic (including NaNs).
+                        pred = torch.where(mask.unsqueeze(-1), output_phase.float(), 0.)
+                        target = torch.where(mask.unsqueeze(-1), gt_phase.float(), 0.)
+                        phase_count += mask.sum()
+                        phase_error_sum += (pred - target).square().mean(dim=-1).sum()
+                        angle = torch.atan2(pred[..., 0], pred[..., 1]) - torch.atan2(target[..., 0], target[..., 1])
+                        phase_angle_sum += (torch.atan2(torch.sin(angle), torch.cos(angle)).abs() * mask).sum()
 
             if self.accumulate_trajectory_loss:
                 window_losses.append(sum(loss_dict.values()))
@@ -316,7 +334,7 @@ class MotionVAEModel(object):
                 self._optimize_loss(sum(loss_dict.values()))
 
             for k, v in loss_dict.items():
-                loss_dict_seq[k] += v.item()
+                loss_dict_seq[k] += v.detach().double()
 
             if self.accumulate_trajectory_loss and (
                     len(window_losses) == opt.trajectory_window_frames or i == L - S - 1):
@@ -327,13 +345,25 @@ class MotionVAEModel(object):
                 weighted_trajectory = trajectory * opt.weights['trajectory']
                 self._optimize_loss(torch.stack(window_losses).mean() + weighted_trajectory)
                 # Log a frame-weighted mean, including the shorter final chunk.
-                trajectory_loss_sum += weighted_trajectory.item() * len(window_losses)
+                trajectory_loss_sum += weighted_trajectory.detach().double() * len(window_losses)
                 window_losses, predicted_displacements, target_displacements = [], [], []
 
+        # One packed device-to-host transfer per batch; no scalar extraction in
+        # the frame loop. Detached accumulators never retain training graphs.
+        keys = list(loss_dict_seq)
+        values = [loss_dict_seq[k] for k in keys]
+        if self.accumulate_trajectory_loss:
+            keys.append('trajectory')
+            values.append(trajectory_loss_sum)
+        if opt.predict_phase:
+            values.extend([phase_error_sum, phase_angle_sum, phase_count])
+        scalars = torch.stack(values).detach().cpu().tolist()
+        loss_dict_seq = dict(zip(keys, scalars[:len(keys)]))
+        if opt.predict_phase:
+            phase_error_sum, phase_angle_sum, phase_count = scalars[len(keys):]
+            phase_count = int(phase_count)
         for k, v in loss_dict_seq.items():
             loss_dict_seq[k] = v / predicted_steps
-        if self.accumulate_trajectory_loss:
-            loss_dict_seq['trajectory'] = trajectory_loss_sum / predicted_steps
         if opt.predict_phase:
             loss_dict_seq['_phase_labelled_frames'] = phase_count
             loss_dict_seq['phase_label_fraction'] = phase_count / max(1, phase_total)

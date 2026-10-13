@@ -20,6 +20,7 @@ class ControllerInitTests(unittest.TestCase):
             frame_size=288, condition_root_x_only=False, no_condition_root_y=False,
             predict_phase=False)
         self.dataset.std = self.dataset.avg = None
+        self.dataset.normalized_features = None
         positions = np.zeros((8, 72), dtype=np.float32)
         positions[:, 1] = -12
         positions[:, 2] = .9

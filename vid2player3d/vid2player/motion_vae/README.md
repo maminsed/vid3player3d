@@ -594,3 +594,16 @@ Unit-action probes are off by default. Named `--test-only` recordings automatica
 use CPU when CUDA is unavailable or hidden. To run while someone else uses the GPU,
 prefix the command with `CUDA_VISIBLE_DEVICES=""`; add `--unit-actions` only when
 you want the extra action-rollout outputs.
+
+Training caches normalized float32 frame features in CPU RAM by default.
+Set `precompute_normalized_features: False` in an experiment config to build
+features per sampled window instead. The cache uses approximately
+`total_dataset_frames * frame_size * 4` bytes, is rebuilt when normalization
+changes, and is reused across sequence-length changes. CUDA training uses pinned
+DataLoader memory and nonblocking device transfers with either setting.
+
+`train/predicted_frames_per_second` is the only performance scalar. It counts
+predicted frames across all examples over each logging interval and includes
+DataLoader wait, transfers, and training; validation and checkpoint saving are
+excluded. It uses wall-clock timing without adding CUDA synchronization, so
+compare sustained intervals at the same batch size and sequence length.

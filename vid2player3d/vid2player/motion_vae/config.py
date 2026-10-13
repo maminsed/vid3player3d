@@ -30,6 +30,8 @@ class MotionVAEOption(object):
     base_opt_ver = None
     model_base_ver = None
     nframes_seq = 10
+    # Piecewise linear [(fraction of total epochs, frames), ...]; None is fixed.
+    nframes_seq_schedule = None
     nseqs = 50000
     curriculum_schedule = None
     # [(epoch_fraction, probability), ...]: enable phase loss per batch.
@@ -52,6 +54,7 @@ class MotionVAEOption(object):
 
     batch_size = 64
     num_threads = 8
+    precompute_normalized_features = True  # Cache float32 features in CPU RAM.
     n_epochs = 500
     n_epochs_decay = 500
     log_freq = 2000
@@ -194,6 +197,14 @@ motion_vae_opt_dict = {
 'usopen_6_1': {
     'model_ver'                             : 'usopen_6_1',
     'base_opt_ver'                          : 'usopen_6',
+    # Start after sampling/phase curricula finish; leave 30% at full length.
+    'nframes_seq_schedule'                  : [(0.3, 10), (0.5, 30), (0.7, 60)],
+},
+
+'usopen_6_2': {
+    'model_ver'                             : 'usopen_6_2',
+    'base_opt_ver'                          : 'usopen_6_1',
+    'weights'                               : {'kl': 0.2},
 },
 
 'usopen_7': {

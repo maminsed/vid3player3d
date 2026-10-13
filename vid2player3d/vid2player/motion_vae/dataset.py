@@ -140,6 +140,7 @@ class Video3DPoseDataset(Dataset):
             print('Phase labels: {} selected frames'.format(int((self.phase_mask_arr & self.selected_arr.astype(bool)).sum())))
 
         self.std, self.avg = None, None
+        self.normalized_features = None
 
         if not self.sequences:
             raise ValueError('No motion sequences pass the {} dataset filters.'.format(split))
@@ -214,11 +215,13 @@ class Video3DPoseDataset(Dataset):
         avg = np.average(feature_all, axis=0)
         self.std = std
         self.avg = avg
+        self._precompute_normalized_features()
     
     
     def set_normalization_stats(self, avg, std):
         self.avg = avg
         self.std = std
+        self._precompute_normalized_features()
 
 
     def __len__(self):
@@ -245,6 +248,26 @@ class Video3DPoseDataset(Dataset):
 
     def get_window(self, start, nframes):
         """Read frames start+1..start+nframes, using start for velocities."""
+        if self.normalized_features is not None:
+            feature = self.normalized_features[start+1:start+nframes+1]
+        else:
+            feature = self._raw_features(start, nframes)
+            if self.std is not None:
+                feature = ((feature - self.avg) / self.std).astype(np.float32, copy=False)
+        end = start + nframes + 1
+        opt = self.opt
+        data_dict = {
+            'feature': feature,
+            'start': start,
+        }
+        if opt.predict_phase:
+            data_dict['phase'] = self.phase_arr[start+1:end]
+            data_dict['phase_mask'] = self.phase_mask_arr[start+1:end]
+        return data_dict
+
+
+    def _raw_features(self, start, nframes):
+        """Build features with exactly the same velocity/rotation layout as windows."""
         opt = self.opt
         end = start + nframes + 1
         L = nframes
@@ -275,17 +298,25 @@ class Video3DPoseDataset(Dataset):
             joint_quat = self.joint_quat_arr[start+1:end].reshape(-1, 24*4)
             feature = concat(feature, joint_quat, axis=1)
 
-        if self.std is not None:
-            feature = (feature - self.avg) / self.std
-        data_dict = {
-            'feature': feature,
-            'start': start,
-        }
-        if opt.predict_phase:
-            data_dict['phase'] = self.phase_arr[start+1:end]
-            data_dict['phase_mask'] = self.phase_mask_arr[start+1:end]
-        return data_dict
-    
+        return feature
+
+    def _precompute_normalized_features(self):
+        """Refresh after normalization changes; independent of rollout length.
+
+        Build in bounded chunks to avoid a full-sized float64 temporary. Frame
+        zero is never returned: each window needs a preceding velocity frame.
+        Cross-sequence transitions remain excluded by the existing window pool.
+        """
+        self.normalized_features = None
+        if not getattr(self.opt, 'precompute_normalized_features', True):
+            return
+        count = len(self.valid_arr)
+        features = np.zeros((count, len(self.avg)), dtype=np.float32)
+        for begin in range(1, count, 65536):
+            end = min(count, begin + 65536)
+            features[begin:end] = (self._raw_features(begin - 1, end - begin) - self.avg) / self.std
+        self.normalized_features = features
+
 
     def sample_first_frame(self):
         opt = self.opt
