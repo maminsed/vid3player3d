@@ -6,6 +6,7 @@ from vid2player.motion_vae.scheduling import sequence_length
 from vid2player.motion_vae.loss import (
     build_recon_feature_weights, feature_squared_error,
     trajectory_loss_settings, accumulated_root_trajectory_loss, masked_phase_loss,
+    kl_free_bits_settings, diagonal_gaussian_kl,
 )
 from vid2player.utils.konia_transform import quaternion_to_angle_axis
 from vid2player.utils.torch_transform import rot6d_to_angle_axis
@@ -31,6 +32,7 @@ class MotionVAEModel(object):
 
     def __init__(self, opt, device=None):
         self.opt = opt
+        kl_free_bits_settings(opt)  # Fail before allocating/loading data.
         sequence_length(opt, 0)  # Validate before allocating/loading data.
         if opt.train_root_feedback not in ('predicted', 'integrated'):
             raise ValueError("train_root_feedback must be 'predicted' or 'integrated'.")
@@ -306,6 +308,8 @@ class MotionVAEModel(object):
             if not train_phase:
                 loss_dict.pop('recon_phase', None)
             with torch.no_grad():
+                # Diagnostic only: excluded from the optimized loss dictionary.
+                loss_dict_seq['kl_raw'] += diagonal_gaussian_kl(mu.float(), logvar.float()).detach().double()
                 loss_dict_seq['latent_mu_rms'] += mu.square().mean().sqrt().detach().double()
                 loss_dict_seq['latent_posterior_std_mean'] += (.5 * logvar).exp().mean().detach().double()
                 loss_dict_seq['latent_z_rms'] += (mu.square() + logvar.exp()).mean().sqrt().detach().double()
@@ -433,8 +437,7 @@ class MotionVAEModel(object):
             output_phase = output[:, :, -2:]
             output = output[:, :, :-2]
 
-        kl_loss = -0.5 * (1 + logvar - mu.pow(2) - logvar.exp()).sum().clamp(max=0)
-        kl_loss /= logvar.numel()
+        kl_loss = diagonal_gaussian_kl(mu, logvar, getattr(opt, 'kl_free_bits', 0.0))
 
         recon_feature_loss = feature_squared_error(
             output, ground_truth, self.recon_feature_weights).mean(dim=(0, -1))

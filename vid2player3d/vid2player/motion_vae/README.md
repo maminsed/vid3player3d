@@ -556,6 +556,23 @@ comparable after correcting statistics, and the old run trained on the new
 holdout videos. Use physical metrics and the new run's fixed validation curves as
 the baseline for subsequent window-length or KL experiments.
 
+`kl_free_bits` configures a free KL allowance in **nats per latent dimension**
+(despite the technique's name). Its default, `0.0`, preserves the original KL
+loss and gradients. With a positive allowance, training computes the diagonal
+Gaussian KL per dimension, averages over the batch, floors each dimension at
+`kl_free_bits`, then averages over dimensions and applies `weights['kl']`.
+Dimensions below the floor receive no KL gradient, allowing reconstruction to
+encourage latent use without a competing KL penalty in that range. This does
+not force the actual posterior KL to reach the allowance.
+
+`usopen_6_3` inherits `usopen_6_1` and enables `kl_free_bits=0.1`, an initial
+tunable allowance. With 32 latent dimensions this corresponds to 3.2 nats total;
+the existing per-dimension mean reduction and KL coefficient of 0.5 remain in
+place. Train with `python vid2player/motion_vae/train.py -e usopen_6_3` from
+`vid2player3d`. TensorBoard `train/kl_loss` shows the weighted, floored objective;
+`train/kl_raw` shows the unfloored, unweighted KL mean to monitor collapse.
+Validation/reconstruction KL metrics remain unfloored posterior diagnostics.
+
 Named MVAE `--test_only` recordings save an independent **always-zero-latent
 rollout** exactly once under `zero/`: `z=0` at every step, with its own predicted
 history and integrated root. This baseline always uses GT initialization only,

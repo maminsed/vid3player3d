@@ -11,6 +11,29 @@ FEATURE_DIMS = (
 )
 
 
+def kl_free_bits_settings(opt):
+    """Validate the free allowance in nats per latent dimension (not bits)."""
+    value = getattr(opt, 'kl_free_bits', 0.0)
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
+        raise ValueError('kl_free_bits must be finite and nonnegative (nats per latent dimension).')
+    return float(value)
+
+
+def diagonal_gaussian_kl(mu, logvar, free_bits=0.0):
+    """KL(q || N(0,I)), averaged over latent dimensions.
+
+    Free bits floor each dimension's batch-mean KL before averaging dimensions.
+    Below the floor, that dimension has no KL gradient. Apply the outer KL
+    coefficient afterwards. Keep the exact legacy reduction when disabled.
+    """
+    if free_bits == 0:
+        return -0.5 * (1 + logvar - mu.pow(2) - logvar.exp()).sum().clamp(max=0) / logvar.numel()
+    # Avoid half-precision cancellation/overflow in the posterior KL under AMP.
+    mu, logvar = mu.float(), logvar.float()
+    per_dimension = -0.5 * (1 + logvar - mu.square() - logvar.exp())
+    return per_dimension.mean(dim=0).clamp_min(free_bits).mean()
+
+
 def build_recon_feature_weights(opt, device):
     """Return per-coordinate weights, or None for the exact legacy MSE path.
 

@@ -42,6 +42,8 @@ class MotionVAEOption(object):
     # matching MVAEPlayer/reconstruction. Teacher forcing always uses GT.
     train_root_feedback = 'predicted'
     weights = {'recon': 1, 'kl': 1, 'recon_phase': 10, 'trajectory': 0}
+    # Nats per latent dimension, before weights['kl']; 0 preserves legacy KL.
+    kl_free_bits = 0.0
     # Multipliers on normalized squared error per coordinate; omitted groups = 1.
     # {} (or all ones) preserves the original loss, including its denominator.
     # Keys: root_pos, root_velo, joint_pos, joint_velo, joint_rotmat, joint_quat.
@@ -205,6 +207,18 @@ motion_vae_opt_dict = {
     'model_ver'                             : 'usopen_6_2',
     'base_opt_ver'                          : 'usopen_6_1',
     'weights'                               : {'kl': 0.2},
+},
+
+'usopen_6_3': {
+    'model_ver'                             : 'usopen_6_3',
+    'base_opt_ver'                          : 'usopen_6_1',
+    'kl_free_bits'                          : 0.1,
+},
+
+'usopen_6_4': {
+    'model_ver'                             : 'usopen_6_4',
+    'base_opt_ver'                          : 'usopen_6_1',
+    'kl_free_bits'                          : 0.01,
 },
 
 'usopen_7': {
