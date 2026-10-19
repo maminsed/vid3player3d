@@ -1,7 +1,7 @@
 name: PhysicsMVAEController
 test_name: MVAEControllerVis
 env: 
-  numEnvs: 10240
+  numEnvs: 2048  # Conservative starting point for a 16 GiB GPU.
   episodeLength: 600
   envSpacing: 5
   isFlagrun: False
@@ -21,8 +21,9 @@ env:
     plane_restitution: 0.5
 
   vid2player:
-    mvae_ver: usopen
-    predict_phase: False
+    mvae_ver: usopen_6_4
+    mvae_inference_batch_size: 512  # Bound per-environment mixed decoder weights.
+    predict_phase: True
     righthand: True
     player: djokovic
     grip: semi_western  # Matches the Djokovic asset's physical racket head.
@@ -35,7 +36,17 @@ env:
     spin_scale: 5
 
     reward_weights: {'pos': 1}
-    reward_scales: {'pos': 5, 'phase': 0}
+    reward_scales: {'pos': 5, 'phase': 5}
+    # Broad reaching feedback first, then precise racket positioning.
+    # Frames are total environment transitions, not physics steps or epochs.
+    # At 2048 envs x 64 steps: hold for 200 iterations, ramp until 800.
+    # Evaluation always uses the fixed pos scale above (5).
+    pos_reward_schedule:
+      type: linear
+      start: 1.0
+      end: 5.0
+      start_frame: 26214400
+      end_frame: 104857600
     reward_type: reach
     ball_traj_out_x_file: data/ball_traj/ball_traj_out_x.npy
     ball_traj_out_y_file: data/ball_traj/ball_traj_out_y.npy
@@ -51,7 +62,7 @@ env:
     aux_loss_specs: {'dof_res': 0.01}
     fix_head_orientation: True
 
-    vae_init_conditions: data/vae/vae_init_condition_usopen_ready.pt
+    vae_init_conditions: data/vae/vae_init_condition_usopen_2.pt
     reset_reaction_nframes: 70
     random_walk_in_recovery: True
     
@@ -112,7 +123,7 @@ params:
   load_checkpoint: False
 
   config:
-    name: usopen_no_phase
+    name: usopen_6_4
     protect_existing_checkpoints: True
     env_name: rlgpu
     multi_gpu: False
@@ -137,7 +148,7 @@ params:
     grad_norm: 50.0
     e_clip: 0.2
     horizon_length: 64
-    minibatch_size: 16384
+    minibatch_size: 4096
     mini_epochs: 3
     critic_coef: 5
     clip_value: False

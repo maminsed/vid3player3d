@@ -1,7 +1,7 @@
 name: PhysicsMVAEController
 test_name: MVAEControllerVis
 env: 
-  numEnvs: 15360
+  numEnvs: 2048  # Conservative starting point for a 16 GiB GPU.
   episodeLength: 300
   envSpacing: 5
   isFlagrun: False
@@ -17,13 +17,14 @@ env:
     name: HumanoidSMPLIMMVAE
     test_name: HumanoidSMPLIMMVAE
     assetFileName: smpl_mesh_humanoid_djokovic.xml
-    substeps: 6
+    substeps: 2
     num_position_iterations: 2
     residual_force_scale: 31.85
     plane_restitution: 0.5
 
   vid2player:
     mvae_ver: usopen
+    mvae_inference_batch_size: 512  # Bound per-environment mixed decoder weights.
     predict_phase: False
     righthand: True
     player: djokovic
@@ -53,7 +54,7 @@ env:
     aux_loss_specs: {'dof_res': 0.01}
     fix_head_orientation: True
 
-    vae_init_conditions: data/vae/vae_init_condition_usopen_ready.pt
+    vae_init_conditions: data/vae/vae_init_condition_usopen_2.pt
     reset_reaction_nframes: 70
     random_walk_in_recovery: True
     
@@ -139,7 +140,7 @@ params:
     grad_norm: 50.0
     e_clip: 0.2
     horizon_length: 32
-    minibatch_size: 16384
+    minibatch_size: 4096
     mini_epochs: 3
     critic_coef: 5
     clip_value: False
