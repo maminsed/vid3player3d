@@ -13,6 +13,8 @@ SCRIPT = Path(__file__).resolve()
 PROJECT = SCRIPT.parents[2]
 sys.path.insert(0, str(PROJECT))
 
+from vid2player.utils.config_paths import resolve_config, config_output_name
+
 
 def sha256(path):
     digest = hashlib.sha256()
@@ -31,9 +33,7 @@ def resolve_path(value, base=PROJECT):
 
 def load_config(value):
     import yaml
-    path = resolve_path(value)
-    if not path.is_file():
-        path = PROJECT / 'vid2player/cfg/controller' / (Path(value).stem + '.yaml')
+    path = resolve_config(value)
     with path.open() as stream:
         cfg = yaml.safe_load(stream)
     if not isinstance(cfg.get('env', {}).get('physics'), dict):
@@ -103,7 +103,7 @@ def render_video(path, trajectory, launch, seed, row, radius):
 
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--cfg', required=True, help='Controller name or YAML path')
+    parser.add_argument('--cfg', required=True, help='Controller name, folder/name, or YAML path')
     parser.add_argument('--artifacts', choices=('all', 'incoming', 'outgoing'), default='all',
                         help='Generate incoming previews, outgoing x/y tables, or both (default: all)')
     parser.add_argument('--output-dir', help='NEW directory; never append to or replace an existing one')
@@ -169,7 +169,8 @@ def main(argv=None):
     else:
         total, indices = 0, None
     stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
-    out = resolve_path(args.output_dir) if args.output_dir else PROJECT / 'data/ball_traj/generated' / f'{cfg_path.stem}_{stamp}_{uuid.uuid4().hex[:8]}'
+    cfg_name = config_output_name(cfg_path)
+    out = resolve_path(args.output_dir) if args.output_dir else PROJECT / 'data/ball_traj/generated' / f'{cfg_name}_{stamp}_{uuid.uuid4().hex[:8]}'
     reserve_output(out)
     manifest = dict(status='running', created_utc=stamp, arguments=vars(args), cfg_path=str(cfg_path),
                     cfg_sha256=sha256(cfg_path), mode='outgoing' if not incoming else ('resample' if args.resample else 'replay'),

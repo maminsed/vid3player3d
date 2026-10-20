@@ -239,12 +239,12 @@ class MVAEControllerVis(PhysicsMVAEController):
             }
             os.makedirs('out/html', exist_ok=True)
             self.html_visualizer.save_animation_as_html(init_args, 
-                html_path=self.cfg['env'].get('rec_fname', f"out/html/{self.cfg['args'].cfg}_{eg_id:03}.html"))
+                html_path=self.cfg['env'].get('rec_fname', f"out/html/{self.cfg['args'].cfg_name}_{eg_id:03}.html"))
     
     def start_recording(self, eg_id=1):
         camera = self.cfg['env'].get('camera', 'front')
         self.record_path = self.cfg['env'].get('rec_fname', 
-            f"out/video/{self.cfg['args'].cfg}_{eg_id:03d}_{camera}.mp4")
+            f"out/video/{self.cfg['args'].cfg_name}_{eg_id:03d}_{camera}.mp4")
         os.makedirs(os.path.dirname(self.record_path), exist_ok=True)
 
         self.frame_index = 0

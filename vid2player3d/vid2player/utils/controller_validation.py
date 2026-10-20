@@ -73,7 +73,7 @@ def prepare_validation(args, cfg, cfg_train):
     task = cfg['env']['vid2player']
     source = str(Path(task['ball_traj_file']).resolve())
     rows, balls = select_validation_balls(source, args.validation_shots_per_preset)
-    output = Path(args.eval_output or ('out/controller_validation/' + args.cfg + '_' +
+    output = Path(args.eval_output or ('out/controller_validation/' + getattr(args, 'cfg_name', args.cfg) + '_' +
                   Path(args.eval_checkpoint).stem + '_' + datetime.now().strftime('%Y%m%d_%H%M%S_%f')))
     output.mkdir(parents=True, exist_ok=False)
     temporary = tempfile.TemporaryDirectory(prefix='controller_validation_')

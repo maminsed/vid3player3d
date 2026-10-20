@@ -13,6 +13,34 @@ The high-level agent learns from synthetic tennis balls, using the US Open motio
 decoder as its motion representation. It does not load video clips as supervised
 PPO targets.
 
+## Strategy config folders
+
+Controller YAMLs can be grouped in subfolders of `vid2player/cfg/controller/`.
+For example, copy a config to `vid2player/cfg/controller/strategy_a/stage_1.yaml`
+and select it with either command (from `vid2player3d`):
+
+```bash
+PYTHONPATH=. python vid2player/run.py --cfg strategy_a/stage_1 --headless
+PYTHONPATH=. python vid2player/tools/regenerate_ball_previews.py --cfg strategy_a/stage_1 --test-only
+```
+
+Both commands also accept the `.yaml` extension, a `controller/` prefix, or an
+existing YAML path. A bare name such as `stage_1` works only when unique; an
+ambiguous name reports the matching configs so you can qualify it.
+
+Generated names include the folders joined with `__`, regardless of which input
+spelling you use: training writes to `results/strategy_a__stage_1/`, previews to
+`data/ball_traj/generated/strategy_a__stage_1_<timestamp>_<id>/`, and evaluation,
+validation, video and HTML defaults use the same flat name. Deeper folders work
+the same way. Top-level config output names remain unchanged. Explicit output
+paths are used as supplied. YAMLs outside the config tree use their filename stem.
+Avoid `__` inside folder/config names when it would collide with a flattened path.
+
+Paths written inside the YAML (including stage-to-stage pretrained checkpoints
+and ball data paths) still use the usual project-relative or absolute paths.
+When copying a multi-stage strategy, update its pretrained checkpoint references
+to the desired `results/strategy_a__stage_1/models/...` paths.
+
 ## GPU memory settings
 
 The original stage-1 run in `logs/high_level.txt` failed during MVAE inference

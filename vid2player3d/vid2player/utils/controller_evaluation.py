@@ -77,7 +77,7 @@ def prepare_evaluation(args, cfg, cfg_train):
     rows,case = select_ball_case(cfg['env']['vid2player']['ball_traj_file'],args.eval_ball,
                                 args.eval_ball_x,args.eval_ball_height)
     stamp = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
-    output = Path(args.eval_output or ('out/controller_eval/'+args.cfg+'_'+
+    output = Path(args.eval_output or ('out/controller_eval/'+getattr(args, 'cfg_name', args.cfg)+'_'+
                                      Path(args.eval_checkpoint).stem+'_'+stamp))
     output.mkdir(parents=True,exist_ok=False)
     temporary = tempfile.TemporaryDirectory(prefix='controller_launch_')

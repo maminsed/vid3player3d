@@ -7,7 +7,6 @@
 
 import os
 import yaml
-import glob
 
 from isaacgym import gymapi
 from isaacgym import gymutil
@@ -16,6 +15,7 @@ import numpy as np
 import random
 import torch
 from vid2player.utils.training_io import check_training_output
+from vid2player.utils.config_paths import resolve_config, config_output_name
 
 SIM_TIMESTEP = 1.0 / 60.0
 
@@ -60,10 +60,9 @@ def set_seed(seed, torch_deterministic=False):
 
 def load_cfg(args):
 
-    cfg_path = f'vid2player/cfg/**/{args.cfg}.yaml'
-    files = glob.glob(cfg_path, recursive=True)
-    assert(len(files) == 1)
-    cfg_file = files[0]
+    cfg_file = resolve_config(args.cfg)
+    args.cfg_path = str(cfg_file)
+    args.cfg_name = config_output_name(cfg_file)
 
     with open(cfg_file, 'r') as f:
         cfg_all = yaml.load(f, Loader=yaml.SafeLoader)
@@ -91,7 +90,7 @@ def load_cfg(args):
     else:
         cfg["task"] = {"randomize": False}
 
-    cfg_dir = os.path.join('/tmp/embodied_pose' if args.tmp else args.results_dir, args.cfg)
+    cfg_dir = os.path.join('/tmp/embodied_pose' if args.tmp else args.results_dir, args.cfg_name)
     cfg['cfg_dir'] = cfg_dir
 
     # set deterministic mode
@@ -157,7 +156,7 @@ def load_cfg(args):
     os.makedirs(network_path, exist_ok=True)
     os.makedirs(log_path, exist_ok=True)
 
-    cfg['env']['controller_cfg_name'] = args.cfg
+    cfg['env']['controller_cfg_name'] = args.cfg_name
     is_eval = args.test or args.play
     if is_eval:
         cfg['name'] = cfg['test_name']
@@ -262,7 +261,7 @@ def get_args(benchmark=False):
             "help": "Experiment name. If used with --metadata flag an additional information about physics engine, sim device, pipeline and domain randomization will be added to the name"},
         {"name": "--metadata", "action": "store_true", "default": False,
             "help": "Requires --experiment flag, adds physics engine, sim device, pipeline info and if domain randomization is used to the experiment name provided by user"},
-        {"name": "--cfg", "type": str, "default": "Base", "help": "all-in-one configuration file (.yaml)"},
+        {"name": "--cfg", "type": str, "default": "Base", "help": "Config name, folder/name under cfg/controller, or YAML path; output folders use folder__name"},
         {"name": "--cfg_dir", "type": str, "default": "vid2player", "help": "cfg folder"},
         {"name": "--num_envs", "type": int, "default": 0,
             "help": "Number of environments to create - override config file"},
