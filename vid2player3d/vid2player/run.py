@@ -168,10 +168,16 @@ def main():
 
     set_np_formatting()
     args = get_args()
+    if args.validation:
+        from vid2player.utils.controller_validation import configure_validation_args
+        configure_validation_args(args)
     if args.eval_controller:
         from vid2player.utils.controller_evaluation import configure_eval_args
         configure_eval_args(args)
     cfg, cfg_train = load_cfg(args)
+    if args.validation:
+        from vid2player.utils.controller_validation import prepare_validation, validate_controller
+        validation = prepare_validation(args, cfg, cfg_train)
     if args.eval_controller:
         from vid2player.utils.controller_evaluation import prepare_evaluation, evaluate_controller
         evaluation = prepare_evaluation(args, cfg, cfg_train)
@@ -181,6 +187,14 @@ def main():
     algo_observer = RLGPUAlgoObserver()
 
     runner = build_alg_runner(algo_observer)
+    if args.validation:
+        try:
+            runner.load(cfg_train)
+            runner.reset()
+            validate_controller(runner.create_player(), args, validation)
+        finally:
+            validation[3].cleanup()
+        return
     runner.load(cfg_train)
     runner.reset()
     if args.eval_controller:

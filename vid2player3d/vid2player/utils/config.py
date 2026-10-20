@@ -297,8 +297,14 @@ def get_args(benchmark=False):
         {"name": "--max_test_steps", "type": int, "default": 27000},
         {"name": "--eval_controller", "action": "store_true", "default": False,
             "help": "Evaluate the physics controller headlessly and save court videos/reports."},
+        {"name": "--validation", "action": "store_true", "default": False,
+            "help": "Run a fixed multi-shot high-level benchmark; save config JSON, metrics.png and values.json."},
+        {"name": "--validation_shots_per_preset", "type": int, "default": 5,
+            "help": "Distinct incoming trajectories per preset, each tested against 3 targets (default: 90 shots)."},
+        {"name": "--validation_num_envs", "type": int, "default": 0,
+            "help": "Concurrent validation environments; 0 selects up to 90 on CUDA or 8 on CPU, 1 runs sequentially."},
         {"name": "--eval_checkpoint", "type": str, "default": None,
-            "help": "Explicit .pth checkpoint path for --eval_controller (no fallback)."},
+            "help": "Explicit .pth checkpoint path for --eval_controller or --validation (no fallback)."},
         {"name": "--eval_output", "type": str, "default": None},
         {"name": "--eval_steps", "type": int, "default": 120},
         {"name": "--eval_ball", "type": str, "default": "center_low",
@@ -331,6 +337,11 @@ def get_args(benchmark=False):
     # allignment with examples
     if args.resume_id is not None:
         args.resume = True
+    if args.rl_device == 'cpu' and (args.validation or args.eval_controller):
+        args.sim_device_type = 'cpu'
+        args.compute_device_id = 0
+        args.use_gpu = args.use_gpu_pipeline = False
+        args.pipeline = 'cpu'
     args.sim_device = args.rl_device
     if args.use_gpu_pipeline:
         args.compute_device_id = int(args.rl_device[-1])

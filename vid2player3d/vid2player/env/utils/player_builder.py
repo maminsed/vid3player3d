@@ -131,14 +131,19 @@ class PlayerBuilder():
 
     def build_player_cfg(self):
         args = get_args()
-        if getattr(self.config.get('args'), 'eval_controller', False):
+        evaluation = (getattr(self.config.get('args'), 'eval_controller', False)
+                      or getattr(self.config.get('args'), 'validation', False))
+        if evaluation:
             # get_args reparses CLI here; retain the evaluator's forced display
             # settings even if --headless was omitted from the user's command.
             args.headless = True
             args.graphics_device_id = -1
             args.record = args.record_scenepic = False
+            if args.rl_device == 'cpu':
+                args.use_gpu = args.use_gpu_pipeline = False
+                args.device = args.sim_device_type = args.sim_device = 'cpu'
         test_controller = args.test or args.play
-        if getattr(self.config.get('args'), 'eval_controller', False):
+        if evaluation:
             test_controller = True
         args.tmp = False
         args.test = True
@@ -158,6 +163,8 @@ class PlayerBuilder():
         args.num_envs = self.config['env']['numEnvs']
         args.compute_device_id = self.task.device_id
         cfg, cfg_train = load_cfg(args)
+        if evaluation:
+            cfg_train['params']['config']['device_name'] = args.rl_device
         if not test_controller:
             cfg['name'] = self.physics_config['name']
         else:

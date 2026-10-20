@@ -661,7 +661,7 @@ class MotionVAEModel(object):
         c = condition.float() # normalized already
 
         # use amp to speed up inference
-        with torch.cuda.amp.autocast():
+        with torch.cuda.amp.autocast(enabled=torch.device(self.device).type == 'cuda'):
             output = self.model.sample(z, c)
         output = output.float()
 
