@@ -12,10 +12,14 @@ import torch.nn.functional as F
 from tqdm import tqdm
 import os
 from vid2player.utils.tennis_materials import configure_ball_asset
+from vid2player.utils.tennis_contacts import contact_materials, ground_impact, apply_solver_config, preview_timing
+from vid2player.utils.ball_physics import (
+    resolve_ball_physics, configure_ball_options, resolve_ball_asset,
+    ball_aerodynamic_force, get_cl, get_cd, BASE_CD, BALL_MASS_KG, AIR_DENSITY_KG_M3)
 
-m   = 0.057 # kg, weight of ball
-R   = 0.032 # m, radius of ball
-rho = 1.21  # kg/m^3, density of air
+m   = BALL_MASS_KG
+R   = 0.032 # Legacy export; active dynamics use BallPhysics.radius.
+rho = AIR_DENSITY_KG_M3
 g   = 9.81  # m/s^2, gravitational field
 fps = 30
 NET_HEIGHT = 1.07 # m
@@ -23,26 +27,15 @@ kv   = (rho * pi * R * R) / (2 * m)
 kf   = (rho * pi * R * R) / 2
 
 DT  = 1 / 1000
-BASE_CD = 0.55 # physics.usyd.edu.au/~cross/TRAJECTORIES/42.%20Ball%20Trajectories.pdf
 BASE_COR = 0.75 # tennisindustrymag.com/articles/2004/04/follow_the_bouncing_ball.html
 BASE_COF = 0.6
-
-
-def get_cl(v, vs):
-    """ Coefficient of lift, magnus effect """
-    return 1 / (2 + abs(v/(vs + 1e-6)))
-
-
-def get_cd(v, vs):
-    """ Coefficient of drag, affected by magnus. """
-    return BASE_CD
 
 
 def torch_sample_range(size, min, max):
     return torch.rand(size) * (max - min) + min
 
 
-def get_sim_params(substeps=2):
+def get_sim_params(substeps=2, physics=None):
     # parse arguments
     args = gymutil.parse_arguments(
         description="Collision Filtering: Demonstrates filtering of collisions within and between environments", 
@@ -79,10 +72,12 @@ def get_sim_params(substeps=2):
     sim_params.gravity.y = 0
     sim_params.gravity.z = -9.81
 
+    apply_solver_config(sim_params, physics or {})
+    preview_timing(sim_params)
     return sim_params, args
 
 
-def create_sim(sim_params, compute_device_id, graphics_device_id, physics_engine):
+def create_sim(sim_params, compute_device_id, graphics_device_id, physics_engine, contacts=None):
     # initialize gym
     gym = gymapi.acquire_gym()
 
@@ -96,6 +91,9 @@ def create_sim(sim_params, compute_device_id, graphics_device_id, physics_engine
     plane_params.static_friction = 1.0
     plane_params.dynamic_friction = 1.0
     plane_params.restitution = 0.5
+    if contacts is not None and contacts.enabled:
+        plane_params.static_friction = plane_params.dynamic_friction = contacts.court_friction
+        plane_params.restitution = contacts.court_restitution
     plane_params.normal = gymapi.Vec3(0.0, 0.0, 1.0)
     gym.add_ground(sim, plane_params)
 
@@ -112,8 +110,17 @@ def create_sim(sim_params, compute_device_id, graphics_device_id, physics_engine
 
 
 def simulate(gym, sim, launch_pos, launch_vel, launch_vspin, 
-    control_freq_inv=2, num_frames=100, substeps=6, spin_scale=5,
-    enable_gym_viewer=False, device=torch.device('cpu')):
+    control_freq_inv=None, num_frames=100, substeps=6, spin_scale=5,
+    enable_gym_viewer=False, device=torch.device('cpu'), ball_physics=None, tennis_contacts=None):
+
+    physics_dt, expected_inv = preview_timing(gym.get_sim_params(sim))
+    if control_freq_inv is None:
+        control_freq_inv = expected_inv
+    if control_freq_inv != expected_inv:
+        raise ValueError('Incoming recording frequency must remain 30 Hz')
+    ball_physics = resolve_ball_physics(ball_physics)
+    contacts = contact_materials({'tennis_contacts': tennis_contacts})
+    radius = ball_physics.radius
 
     if enable_gym_viewer:
         viewer = gym.create_viewer(sim, gymapi.CameraProperties())
@@ -158,42 +165,33 @@ def simulate(gym, sim, launch_pos, launch_vel, launch_vspin,
         for i in range(control_freq_inv):
             pos = root_state[:, 0:3]
             vel = root_state[:, 7:10]
-            vel_scalar = vel.norm(dim=1).view(-1, 1)
-            vel_norm = vel / vel_scalar
-            vel_tan = torch.cross(vel_norm, g_tensor)
-            vspin = root_state[:, 10:13].norm(dim=1) / (pi * 2)
-            vspin[:num_ball] = torch.where(launch_vspin > 0, vspin[:num_ball], vspin[:num_ball] * -1)
-            vspin = vspin.view(-1, 1)
-
             pass_net_now = (~has_pass_net) & (pos[:, 1] < 0)
             pass_net_success[pass_net_now] = (~has_bounce[pass_net_now]) & (pos[pass_net_now, 2] > NET_HEIGHT)
             has_pass_net = has_pass_net | pass_net_now
 
-            cd = get_cd(vel_scalar, vspin * spin_scale)
-            cl = get_cl(vel_scalar, vspin * spin_scale)
-            cl = cl * torch.where(vspin > 0, 
-                -1 * torch.ones_like(cl),
-                1 * torch.ones_like(cl)
-            )
+            legacy_spin_sign = torch.ones(root_state.shape[0], device=device)
+            legacy_spin_sign[:num_ball] = torch.where(launch_vspin > 0, 1., -1.)
+            forces = ball_aerodynamic_force(
+                vel, root_state[:, 10:13], ball_physics, spin_scale=spin_scale,
+                legacy_spin_sign=legacy_spin_sign)
 
-            force_drag = - kf * cd * vel_scalar * vel
-            force_lift = - kf * cl * vel_scalar ** 2 * torch.cross(vel_tan, vel_norm) 
-            
-            if substeps > 2:
-                has_bounce_now = ~has_bounce & (pos[:, 2] <= R * 6)
+            if contacts.enabled:
+                previous_ball = root_state.clone()
+                has_bounce_now = torch.zeros_like(has_bounce)
             else:
-                has_bounce_now = ~has_bounce & (pos[:, 2] <= R * 4)
-            bounce_pos[has_bounce_now] = pos[has_bounce_now].clone()
-            bounce_idx[has_bounce_now] = t
-            has_bounce = has_bounce | has_bounce_now
-            forces = force_drag + force_lift
+                threshold = radius * (6 if substeps > 2 else 4)
+                has_bounce_now = ~has_bounce & (pos[:, 2] <= threshold)
+                bounce_pos[has_bounce_now] = pos[has_bounce_now].clone()
+                bounce_idx[has_bounce_now] = t
+                has_bounce |= has_bounce_now
            
-            # Hack: backspin ball changes to topspin after bounce
-            launch_vspin[has_bounce_now[:num_ball]] = torch.where(
-                launch_vspin[has_bounce_now[:num_ball]] > 0,
-                launch_vspin[has_bounce_now[:num_ball]],
-                launch_vspin[has_bounce_now[:num_ball]] * -1,
-            )
+            # Preserve historical sign bookkeeping only in legacy mode.
+            if not ball_physics.corrected:
+                launch_vspin[has_bounce_now[:num_ball]] = torch.where(
+                    launch_vspin[has_bounce_now[:num_ball]] > 0,
+                    launch_vspin[has_bounce_now[:num_ball]],
+                    launch_vspin[has_bounce_now[:num_ball]] * -1,
+                )
 
             forces[num_ball:, :] = 0
             gym.apply_rigid_body_force_tensors(sim, gymtorch.unwrap_tensor(forces), 
@@ -206,7 +204,13 @@ def simulate(gym, sim, launch_pos, launch_vel, launch_vspin,
             gym.simulate(sim)
             gym.fetch_results(sim, True)
             gym.refresh_actor_root_state_tensor(sim)
-            
+            if contacts.enabled:
+                impact, impact_position = ground_impact(previous_ball, root_state, radius, physics_dt)
+                impact &= ~has_bounce
+                bounce_pos[impact] = impact_position[impact]
+                bounce_idx[impact] = t
+                has_bounce |= impact
+
             # Wait for dt to elapse in real time.
             # This synchronizes the physics simulation with the rendering rate.
             if enable_gym_viewer:
@@ -220,16 +224,26 @@ def simulate(gym, sim, launch_pos, launch_vel, launch_vspin,
 
 
 class TennisBallGeneratorIsaac():
-    def __init__(self, cfg, is_train=True, need_traj=True, need_reset=True, substeps=6, spin_scale=5):
+    def __init__(self, cfg, is_train=True, need_traj=True, need_reset=True, substeps=6, spin_scale=5, physics=None):
         
+        # Accept a full controller YAML so materials AND solver reach generation.
+        if 'env' in cfg:
+            physics = cfg['env']['physics'] if physics is None else physics
+            cfg = cfg['env']['vid2player']
+        self.contacts = contact_materials(cfg)
+        if self.contacts.enabled and physics is None:
+            raise ValueError('hardcourt_v1 generation requires the full controller cfg or physics=env.physics')
         self.is_train = is_train
         self.need_traj = need_traj
         self.substeps = substeps
-        self.spin_scale = spin_scale
+        self.spin_scale = cfg.get('spin_scale', spin_scale)
+        self.ball_physics = resolve_ball_physics(cfg.get('ball_physics'))
         self.traj_pool = None
 
-        sim_params, args = get_sim_params(substeps)
-        gym, sim = create_sim(sim_params, args.compute_device_id, args.graphics_device_id, args.physics_engine)
+        sim_params, args = get_sim_params(substeps, physics)
+        self.substeps = sim_params.substeps
+        self.physics_dt, self.control_freq_inv = preview_timing(sim_params)
+        gym, sim = create_sim(sim_params, args.compute_device_id, args.graphics_device_id, args.physics_engine, self.contacts)
 
         self.sim_params = sim_params
         self.args = args
@@ -239,10 +253,14 @@ class TennisBallGeneratorIsaac():
 
         # load ball asset
         asset_root = "vid2player/data/assets"
-        asset_file = "tennis_ball.urdf"
-        asset_options = gymapi.AssetOptions()
+        asset_root, asset_file = resolve_ball_asset(asset_root, self.ball_physics)
+        asset_options = configure_ball_options(gymapi.AssetOptions(), self.ball_physics)
         asset = gym.load_asset(sim, asset_root, asset_file, asset_options)
-        configure_ball_asset(gym, asset)
+        if self.contacts.enabled:
+            configure_ball_asset(gym, asset, self.contacts.ball_restitution,
+                                 self.contacts.ball_friction, self.contacts.ball_contact_offset)
+        else:
+            configure_ball_asset(gym, asset)
 
         self.num_env = 10000 if is_train else 1000
         num_per_row = int(np.sqrt(self.num_env))
@@ -267,8 +285,8 @@ class TennisBallGeneratorIsaac():
             ahandle = gym.create_actor(env, asset, pose, None, collision_group, collision_filter)
 
             props = gym.get_actor_rigid_shape_properties(env, ahandle)
-            props[0].restitution = 0.9
-            props[0].friction = 0.2
+            props[0].restitution = self.contacts.ball_restitution if self.contacts.enabled else 0.9
+            props[0].friction = self.contacts.ball_friction if self.contacts.enabled else 0.2
             props[0].compliance = 0.5
             gym.set_actor_rigid_shape_properties(env, ahandle, props)
             
@@ -310,7 +328,7 @@ class TennisBallGeneratorIsaac():
         traj, bounce_pos, bounce_idx, pass_net = simulate(
             self.gym, self.sim, launch_pos, launch_vel, launch_vspin, 
             substeps=self.substeps, spin_scale=self.spin_scale,
-            device=self.device)
+            device=self.device, ball_physics=self.ball_physics, tennis_contacts=self.contacts)
         
         # good trajectory has to
         # 1. pass net
@@ -358,7 +376,8 @@ class TennisBallGeneratorIsaac():
         return self.traj_pool, self.launch_pos, self.launch_vel, self.launch_vspin
     
 
-def generate_incoming_trajectory(traj_path, substeps, vis=False, append=True):
+def generate_incoming_trajectory(traj_path, substeps, vis=False, append=True, cfg=None, physics=None):
+    """Pass the full controller YAML as cfg to share contacts and solver; omission is legacy."""
     if vis:
         visualizer = SportVisualizer(verbose=False, 
             show_smpl=False, show_skeleton=False, show_racket=False,
@@ -370,7 +389,7 @@ def generate_incoming_trajectory(traj_path, substeps, vis=False, append=True):
         print(traj_data_all.shape)
     else:
         traj_data_all = None
-    isaac_ball_gen = TennisBallGeneratorIsaac({}, is_train=True, need_reset=False, substeps=substeps)
+    isaac_ball_gen = TennisBallGeneratorIsaac(cfg or {}, is_train=True, need_reset=False, substeps=substeps, physics=physics)
     for i in tqdm(range(100)):
         isaac_ball_gen.reset()
         try:

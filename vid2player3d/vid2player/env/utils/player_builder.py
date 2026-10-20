@@ -10,6 +10,8 @@ from vid2player.env.tasks.vec_task_wrappers import VecTaskPythonWrapper
 from vid2player.env.tasks.humanoid_smpl_im_mvae import HumanoidSMPLIMMVAE
 from vid2player.env.tasks.humanoid_smpl_im_mvae_dual import HumanoidSMPLIMMVAEDual
 
+from vid2player.utils.tennis_contacts import resolve_tennis_contacts
+
 import numpy as np
 
 args = None
@@ -187,6 +189,9 @@ class PlayerBuilder():
             cfg['sim']['dt'] = self.physics_config['dt']
         if self.physics_config.get('substeps'):
             cfg['sim']['substeps'] = self.physics_config['substeps']
+        for key in ('solver_type', 'max_depenetration_velocity', 'friction_offset_threshold', 'friction_correlation_distance'):
+            if self.physics_config.get(key) is not None:
+                cfg['sim']['physx'][key] = self.physics_config[key]
         if self.physics_config.get('num_position_iterations'):
             cfg['sim']['physx']['num_position_iterations'] = self.physics_config['num_position_iterations']
         if self.physics_config.get('num_velocity_iterations') is not None:
@@ -198,6 +203,12 @@ class PlayerBuilder():
         if self.physics_config.get('bounce_threshold_velocity') is not None:
             cfg['sim']['physx']['bounce_threshold_velocity'] = self.physics_config['bounce_threshold_velocity']
 
+        # The contact profile owns the court material in both live and generation.
+        contacts = resolve_tennis_contacts(self.config['env']['vid2player'].get('tennis_contacts'))
+        if contacts.enabled:
+            cfg['env']['plane'].update(staticFriction=contacts.court_friction,
+                                       dynamicFriction=contacts.court_friction,
+                                       restitution=contacts.court_restitution)
         return args, cfg, cfg_train
 
     def build_player(self):

@@ -3,6 +3,7 @@ import unittest
 import ast
 from pathlib import Path
 from types import SimpleNamespace
+from vid2player.utils.tennis_contacts import resolve_tennis_contacts
 
 from vid2player.utils.tennis_materials import configure_ball_asset, configure_racket_asset
 
@@ -45,7 +46,7 @@ class TestTennisMaterials(unittest.TestCase):
         low_cfg = {'env': {'plane': {'restitution': .5}},
                    'sim': {'physx': {'contact_offset': .02}}}
         train = {'params': {'config': {}}}
-        ns = {'get_args': lambda: SimpleNamespace(test=False, play=False),
+        ns = {'resolve_tennis_contacts': resolve_tennis_contacts, 'get_args': lambda: SimpleNamespace(test=False, play=False),
               'load_cfg': lambda args: (low_cfg, train)}
         exec(compile(ast.Module(body=[definition], type_ignores=[]), str(path), 'exec'), ns)
         cfg = {'env': {'numEnvs': 1, 'vid2player': {}, 'controller_cfg_name': 'test',

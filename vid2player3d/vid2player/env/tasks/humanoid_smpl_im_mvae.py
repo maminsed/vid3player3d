@@ -16,7 +16,10 @@ from vid2player.utils.hybrik import batch_rigid_transform
 from vid2player.utils.pose import SMPLPose
 from vid2player.utils.racket import Racket
 from vid2player.utils.tennis_ball import *
+from vid2player.utils.racket_dynamics import resolve_racket_dynamics, configure_racket_body
+from vid2player.utils.tennis_contacts import contact_materials, ground_impact, racket_impact
 from vid2player.utils.tennis_materials import configure_ball_asset, configure_racket_asset
+from vid2player.utils.ball_physics import resolve_ball_physics, configure_ball_options, resolve_ball_asset, ball_aerodynamic_force
 from vid2player.utils.ground_alignment import reset_height_offset
 
 import torch
@@ -33,6 +36,9 @@ class HumanoidSMPLIMMVAE(HumanoidSMPL):
 
         self.cfg = cfg
         self.cfg_v2p = cfg['env']['vid2player']
+        self._ball_physics = resolve_ball_physics(self.cfg_v2p.get('ball_physics'))
+        self._tennis_contacts = contact_materials(self.cfg_v2p)
+        self._racket_dynamics = resolve_racket_dynamics(self.cfg_v2p.get('racket_dynamics'))
         self._is_train = self.cfg['env']['is_train']
         self.device = "cpu"
         self.args = args = cfg['args']
@@ -91,6 +97,11 @@ class HumanoidSMPLIMMVAE(HumanoidSMPL):
                          device_type=device_type,
                          device_id=device_id,
                          headless=True)
+
+        self._contact_env_ids = torch.arange(self.num_envs, device=self.device)
+        self._contact_racket_ids = torch.as_tensor(self._racket_body_id_true, device=self.device)
+        if self._contact_racket_ids.ndim:
+            self._contact_racket_ids = self._contact_racket_ids.repeat(self.num_envs // 2)
 
         self._hack_motion_time = torch.zeros(self.num_envs, dtype=torch.float32, device=self.device)
         self._build_mujoco_smpl_transform()
@@ -254,7 +265,8 @@ class HumanoidSMPLIMMVAE(HumanoidSMPL):
 
         asset_options = gymapi.AssetOptions()
         asset_options.angular_damping = 0.01
-        asset_options.max_angular_velocity = 100.0
+        asset_options.max_angular_velocity = (self._racket_dynamics.max_angular_velocity
+                                              if self._racket_dynamics.enabled else 100.0)
         asset_options.default_dof_drive_mode = gymapi.DOF_MODE_NONE
 
         self._reset_ref_motion_bodies = torch.zeros((self.num_envs, self.cfg['env'].get('gender_beta_dim', 11)), device=self.device)
@@ -288,8 +300,8 @@ class HumanoidSMPLIMMVAE(HumanoidSMPL):
             if 'Racket' in body_names:
                 configure_racket_asset(
                     self.gym, asset, body_names.index('Racket'),
-                    self.cfg_v2p.get('racket_restitution', self.cfg_v2p.get('restitution', 1.0)),
-                    self.cfg_v2p.get('racket_friction', 0.8))
+                    self._tennis_contacts.racket_restitution, self._tennis_contacts.racket_friction,
+                    self._tennis_contacts.racket_contact_offset if self._tennis_contacts.enabled else None)
 
         self.humanoid_asset = humanoid_asset
         self._setup_character_props(self.cfg["env"]["keyBodies"])
@@ -305,13 +317,14 @@ class HumanoidSMPLIMMVAE(HumanoidSMPL):
         self.num_joints = self.gym.get_asset_joint_count(humanoid_asset)
 
         # load tennis ball asset
-        ball_asset_options = gymapi.AssetOptions()
-        asset_file = self.cfg["env"]["asset"].get("assetFileNameBall", 'tennis_ball.urdf')
-        self.ball_asset = self.gym.load_asset(self.sim, asset_root, asset_file, ball_asset_options)
+        ball_asset_options = configure_ball_options(gymapi.AssetOptions(), self._ball_physics)
+        ball_asset_root, asset_file = resolve_ball_asset(
+            asset_root, self._ball_physics, self.cfg["env"]["asset"].get("assetFileNameBall"))
+        self.ball_asset = self.gym.load_asset(self.sim, ball_asset_root, asset_file, ball_asset_options)
         configure_ball_asset(
             self.gym, self.ball_asset,
-            self.cfg_v2p.get('ball_restitution', self.cfg_v2p.get('restitution', 1.0)),
-            self.cfg_v2p.get('ball_friction', 0.8))
+            self._tennis_contacts.ball_restitution, self._tennis_contacts.ball_friction,
+            self._tennis_contacts.ball_contact_offset if self._tennis_contacts.enabled else None)
 
         self.envs = []
         self.humanoid_handles = []
@@ -395,6 +408,10 @@ class HumanoidSMPLIMMVAE(HumanoidSMPL):
 
         humanoid_handle = self.gym.create_actor(env_ptr, humanoid_asset, start_pose, "humanoid", col_group, col_filter)
 
+        racket_body = self._racket_body_id_true
+        if not isinstance(racket_body, int):
+            racket_body = racket_body[env_id % 2]
+        configure_racket_body(self.gym, env_ptr, humanoid_handle, racket_body, self._racket_dynamics)
         self.gym.enable_actor_dof_force_sensors(env_ptr, humanoid_handle)
         humanoid_mass = np.sum(
             [prop.mass for prop in self.gym.get_actor_rigid_body_properties(env_ptr, humanoid_handle)])
@@ -428,9 +445,11 @@ class HumanoidSMPLIMMVAE(HumanoidSMPL):
             if not isinstance(racket_body_id, int):
                 racket_body_id = racket_body_id[env_id % 2]
 
-            props[racket_body_id+1].restitution = self.cfg_v2p.get('racket_restitution', self.cfg_v2p.get('restitution', 1.0))
-            props[racket_body_id+1].compliance = 0.5
-            props[racket_body_id+1].friction = self.cfg_v2p.get('racket_friction', 0.8)
+            racket_shapes = self.gym.get_asset_rigid_body_shape_indices(humanoid_asset)[racket_body_id]
+            racket_head = racket_shapes.start + 1
+            props[racket_head].restitution = self._tennis_contacts.racket_restitution
+            props[racket_head].compliance = 0.5
+            props[racket_head].friction = self._tennis_contacts.racket_friction
         self.gym.set_actor_rigid_shape_properties(env_ptr, humanoid_handle, props)
 
         if (self._pd_control):
@@ -450,9 +469,9 @@ class HumanoidSMPLIMMVAE(HumanoidSMPL):
         self.gym.set_rigid_body_color(env_ptr, ball_handle, 0, gymapi.MESH_VISUAL, gymapi.Vec3(0.8, 1.0, 0.0))
     
         props = self.gym.get_actor_rigid_shape_properties(env_ptr, ball_handle)
-        props[0].restitution = self.cfg_v2p.get('ball_restitution', self.cfg_v2p.get('restitution', 1.0))
+        props[0].restitution = self._tennis_contacts.ball_restitution
         props[0].compliance = 0.5
-        props[0].friction = self.cfg_v2p.get('ball_friction', 0.8)
+        props[0].friction = self._tennis_contacts.ball_friction
         self.gym.set_actor_rigid_shape_properties(env_ptr, ball_handle, props)
 
         self.humanoid_handles.append(humanoid_handle)
@@ -581,7 +600,7 @@ class HumanoidSMPLIMMVAE(HumanoidSMPL):
                 vel_y = root_vel[:, 2]
             else:
                 vel_y_prev = vel_y
-                vel_y = vel_y - g*t0 - kf/m * BASE_CD * vel_y ** 2 * t0
+                vel_y = vel_y - g*t0 - self._ball_physics.force_factor/m * BASE_CD * vel_y ** 2 * t0
                 traj[:, i, 2] = traj[:, i-1, 2] + 0.5 * (vel_y_prev + vel_y) * t0 
         
         return traj, root_pos, root_vel, root_ang_vel
@@ -741,31 +760,17 @@ class HumanoidSMPLIMMVAE(HumanoidSMPL):
     def apply_external_force_to_ball(self, ball_root_states):
         pos = ball_root_states[:, 0:3]
         vel = ball_root_states[:, 7:10]
-        vel_scalar = vel.norm(dim=1).view(-1, 1)
-        vel_scalar[vel_scalar == 0] += 1 # Avoid divide by 0
-        vel_norm = vel / vel_scalar
-        g_tensor = torch.FloatTensor([[0, 0, -1]]).repeat(self.num_envs, 1).to(self.device)
-        vel_tan = torch.cross(vel_norm, g_tensor)
-        vspin = ball_root_states[:, 10:13].norm(dim=1).view(-1, 1) / (math.pi * 2)
-        spin_scale = self.cfg_v2p.get('spin_scale', 1.0)
+        ball_forces = ball_aerodynamic_force(
+            vel, ball_root_states[:, 10:13], self._ball_physics,
+            spin_scale=self.cfg_v2p.get('spin_scale', 1.0))
+        radius = self._ball_physics.radius
 
-        cd = get_cd(vel_scalar, vspin * spin_scale)
-        cl = get_cl(vel_scalar, vspin * spin_scale)
-        cl = cl * torch.where(vspin > 0, 
-            -1 * torch.ones_like(cl),
-            1 * torch.ones_like(cl)
-        )
-        force_drag = - kf * cd * vel_scalar * vel
-        force_lift = - kf * cl * vel_scalar ** 2 * torch.cross(vel_tan, vel_norm) 
-        
-        if self.cfg['sim'].get('substeps', 2) > 2:
-            has_bounce_now = ~self._has_bounce & (pos[:, 2] <= R * 6)
-        else:
-            has_bounce_now = ~self._has_bounce & (pos[:, 2] <= R * 4)
-        self._has_bounce_now |= has_bounce_now
-        self._has_bounce |= has_bounce_now
-        self._bounce_pos[has_bounce_now] = pos[has_bounce_now]
-        ball_forces = force_drag + force_lift
+        if not self._tennis_contacts.enabled:
+            threshold = radius * (6 if self.cfg['sim'].get('substeps', 2) > 2 else 4)
+            has_bounce_now = ~self._has_bounce & (pos[:, 2] <= threshold)
+            self._has_bounce_now |= has_bounce_now
+            self._has_bounce |= has_bounce_now
+            self._bounce_pos[has_bounce_now] = pos[has_bounce_now]
         self.forces[:, -1, :] = ball_forces 
     
     def _save_prev_target_motion_state(self):
@@ -781,6 +786,10 @@ class HumanoidSMPLIMMVAE(HumanoidSMPL):
     
     def _physics_step(self):
         for i in range(self.control_freq_inv):
+            if self._tennis_contacts.enabled:
+                previous_ball = self._ball_root_states.clone()
+                previous_racket = self._rigid_body_pos_origin[
+                    self._contact_env_ids, self._contact_racket_ids].clone()
             self.apply_external_force_to_ball(self._ball_root_states)
 
             self.gym.apply_rigid_body_force_tensors(self.sim, gymtorch.unwrap_tensor(self.forces), 
@@ -789,16 +798,39 @@ class HumanoidSMPLIMMVAE(HumanoidSMPL):
             self.gym.simulate(self.sim)
             self.gym.fetch_results(self.sim, True)
             self.gym.refresh_actor_root_state_tensor(self.sim)
+            if self._tennis_contacts.enabled:
+                ground_hit, impact_position = ground_impact(
+                    previous_ball, self._ball_root_states, self._ball_physics.radius,
+                    self.sim_params.dt)
+                impact = ground_hit & ~self._has_bounce
+                self._has_bounce_now |= impact
+                self._has_bounce |= impact
+                self._bounce_pos[impact] = impact_position[impact]
             if not self._is_train:
                 self.gym.refresh_rigid_body_state_tensor(self.sim)
                 self._update_rigid_body_state()
                 self.gym.refresh_dof_state_tensor(self.sim)
             self.gym.refresh_net_contact_force_tensor(self.sim)
+            if self._tennis_contacts.enabled:
+                self.gym.refresh_rigid_body_state_tensor(self.sim)
+                racket_position = self._rigid_body_pos_origin[
+                    self._contact_env_ids, self._contact_racket_ids]
+                expected_change = self.forces[:, -1] / .057 * self.sim_params.dt
+                expected_change[:, 2] -= 9.81 * self.sim_params.dt
+                hit = racket_impact(
+                    previous_ball, self._ball_root_states, previous_racket, racket_position,
+                    self._contact_forces[:, -1], self._contact_forces[
+                        self._contact_env_ids, self._contact_racket_ids], expected_change,
+                    self._ball_physics.radius, self._tennis_contacts.racket_contact_offset,
+                    self.sim_params.dt)
+                hit &= ~ground_hit & ~self._has_racket_ball_contact
+                self._has_racket_ball_contact_now |= hit
+                self._has_racket_ball_contact |= hit
 
             self.forces[:] = 0
             self.torques[:] = 0
 
-            if self.cfg['sim'].get('substeps', 2) <= 2:
+            if not self._tennis_contacts.enabled and self.cfg['sim'].get('substeps', 2) <= 2:
                 assert self._lefthand not in [0, 1]
                 
                 # contact force sensor are good when using small substeps
@@ -827,7 +859,7 @@ class HumanoidSMPLIMMVAE(HumanoidSMPL):
             self._update_debug_viz()
 
     def _update_state_from_sim(self):
-        if self.cfg['sim'].get('substeps', 2) > 2:
+        if not self._tennis_contacts.enabled and self.cfg['sim'].get('substeps', 2) > 2:
             # contact force sensor are bad when using large substeps
             # instead detect whether contact happens given ball velocity direction change
             # this may also detect contact with body or racket handle

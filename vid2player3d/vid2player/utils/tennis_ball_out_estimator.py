@@ -7,6 +7,7 @@ import torch
 import torch.nn.functional as F
 from tqdm import tqdm
 
+from vid2player.utils.tennis_contacts import preview_timing
 from vid2player.utils.tennis_ball import * 
 
 
@@ -19,7 +20,14 @@ class traj_out_params:
 
 
 def simulate_without_bounce(gym, sim, launch_pos, launch_vel, launch_vspin, params,
-    control_freq_inv=2, num_frames=60, spin_scale=5, device=torch.device('cpu')):
+    control_freq_inv=None, num_frames=60, spin_scale=5, device=torch.device('cpu'), ball_physics=None):
+
+    physics_dt, expected_inv = preview_timing(gym.get_sim_params(sim))
+    if control_freq_inv is None:
+        control_freq_inv = expected_inv
+    if control_freq_inv != expected_inv:
+        raise ValueError('Outgoing recording frequency must remain 30 Hz')
+    ball_physics = resolve_ball_physics(ball_physics)
 
     TRAJ_X_RANGE, TRAJ_Y_RANGE = params.TRAJ_X_RANGE, params.TRAJ_Y_RANGE
 
@@ -65,23 +73,9 @@ def simulate_without_bounce(gym, sim, launch_pos, launch_vel, launch_vspin, para
                 traj = torch.cat((traj, pos.view(-1, 1, 3)), dim=1)
 
             vel = root_state[:, 7:10]
-            vel_scalar = vel.norm(dim=1).view(-1, 1)
-            vel_norm = vel / vel_scalar
-            vel_tan = torch.cross(vel_norm, g_tensor)
-            vspin = root_state[:, 10:13].norm(dim=1) / (pi * 2)
-            vspin = torch.where(launch_vspin > 0, vspin, vspin * -1).view(-1, 1)
-
-            cd = get_cd(vel_scalar, vspin * spin_scale)
-            cl = get_cl(vel_scalar, vspin * spin_scale)
-            cl = cl * torch.where(vspin > 0, 
-                -1 * torch.ones_like(cl),
-                1 * torch.ones_like(cl)
-            )
-
-            force_drag = - kf * cd * vel_scalar * vel
-            force_lift = - kf * cl * vel_scalar ** 2 * torch.cross(vel_tan, vel_norm) 
-            
-            forces = force_drag + force_lift
+            forces = ball_aerodynamic_force(
+                vel, root_state[:, 10:13], ball_physics, spin_scale=spin_scale,
+                legacy_spin_sign=torch.where(launch_vspin > 0, 1., -1.))
             forces[num_ball:, :] = 0
             gym.apply_rigid_body_force_tensors(sim, gymtorch.unwrap_tensor(forces), 
                 None, gymapi.ENV_SPACE)
@@ -91,7 +85,13 @@ def simulate_without_bounce(gym, sim, launch_pos, launch_vel, launch_vspin, para
             gym.refresh_actor_root_state_tensor(sim)
             
     traj_all = traj[:, :, 1:]
-    traj_all[:, :, 1] -= traj_all[0, 0, 1]
+    if ball_physics.corrected:
+        # The reference must not alias an element being changed by the CUDA
+        # subtraction kernel. Normalize each trajectory to its own launch.
+        initial_height = traj_all[:, :1, 1].clone()
+        traj_all[:, :, 1] -= initial_height
+    else:
+        traj_all[:, :, 1] -= traj_all[0, 0, 1]
     traj_x = torch.zeros((num_ball, int((TRAJ_X_RANGE[1] - TRAJ_X_RANGE[0]) / TRAJ_X_RANGE[2])), dtype=torch.float32, device=device)
     traj_y = torch.zeros((num_ball, int((TRAJ_Y_RANGE[1] - TRAJ_Y_RANGE[0]) / TRAJ_Y_RANGE[2]), 2), dtype=torch.float32, device=device)
 
@@ -205,11 +205,16 @@ class TennisBallOutEstimator():
             return has_valid_contact, None, None, None
 
 
-def generate_outgoing_trajectory(traj_path, params):
+def generate_outgoing_trajectory(traj_path, params, cfg=None, substeps=6, physics=None):
+    """Generate scalar-spin tables with cfg=the full controller YAML.
+
+    This selects the shared force model, not a vector-aware runtime estimator.
+    Existing tables/estimator dimensions still require the later prediction work.
+    """
     VEL_X_RANGE, VEL_Y_RANGE, VSPIN_RANGE = \
         params.VEL_X_RANGE, params.VEL_Y_RANGE, params.VSPIN_RANGE
 
-    isaac_ball_gen = TennisBallGeneratorIsaac({}, is_train=True, need_reset=False)
+    isaac_ball_gen = TennisBallGeneratorIsaac(cfg or {}, is_train=True, need_reset=False, substeps=substeps, physics=physics)
     device = torch.device('cuda:0') if isaac_ball_gen.args.use_gpu_pipeline else torch.device('cpu')
 
     vel_y_range = np.arange(*VEL_X_RANGE)
@@ -246,7 +251,8 @@ def generate_outgoing_trajectory(traj_path, params):
 
         traj_x, traj_y = simulate_without_bounce(
             isaac_ball_gen.gym, isaac_ball_gen.sim, launch_pos.clone(), launch_vel, launch_vspin, 
-            params, device=device)
+            params, device=device, spin_scale=isaac_ball_gen.spin_scale,
+            ball_physics=isaac_ball_gen.ball_physics)
 
         if num_iter == 0:
             traj_x_all = traj_x

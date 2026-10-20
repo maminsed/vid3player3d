@@ -1,0 +1,19 @@
+<?xml version="1.0"?>
+<!-- 67 mm nominal diameter, 57 g, thin-shell inertia (2/3)mR^2.
+     Contact response still requires independent court/racket calibration. -->
+<robot name="ball">
+  <link name="ball">
+    <visual>
+      <origin xyz="0 0 0"/>
+      <geometry><sphere radius="0.0335"/></geometry>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0"/>
+      <geometry><sphere radius="0.0335"/></geometry>
+    </collision>
+    <inertial>
+      <mass value="0.057"/>
+      <inertia ixx="0.0000426455" ixy="0.0" ixz="0.0" iyy="0.0000426455" iyz="0.0" izz="0.0000426455"/>
+    </inertial>
+  </link>
+</robot>

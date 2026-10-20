@@ -18,6 +18,21 @@ env:
     test_name: HumanoidSMPLIMMVAE
     assetFileName: smpl_mesh_humanoid_djokovic.xml
     residual_force_scale: 31.85
+    # Training baseline: 60 Hz physics calls, 30 Hz policy; original humanoid solver.
+    # Optional expensive preset: general_calibration_experimental_overrides.yaml.
+    dt: 0.016666666666666666
+    controlFrequencyInv: 2
+    substeps: 12  # Retain tested head-hit coverage; 2 restores original low-level substeps.
+    solver_type: 1  # TGS, as used by the pretrained low-level policy.
+    num_position_iterations: 4
+    num_velocity_iterations: 0
+    contact_offset: 0.02  # Restore the normal humanoid/ground contact neighborhood.
+    rest_offset: 0.0
+    bounce_threshold_velocity: 0.2
+    max_depenetration_velocity: 10.0
+    friction_offset_threshold: 0.02
+    friction_correlation_distance: 0.025
+    # Shared ground plane also affects the feet; keep the pre-calibration value.
     plane_restitution: 0.5
 
   vid2player:
@@ -30,10 +45,43 @@ env:
     # Allowed root XY (meters); crossing a bound ends the episode.
     court_min: [-5, -16]
     court_max: [5, -10]
+    # Legacy material values; the enabled contact profile overrides these.
     racket_friction: 0.8
     ball_friction: 0.2
     restitution: 0.9
-    spin_scale: 5
+    spin_scale: 5  # Used only when ball_physics.model is legacy.
+    ball_physics:
+      # Set model: legacy to restore the old forces, radius, and asset defaults.
+      # Regenerate incoming previews AND outgoing reward data before training.
+      model: aerodynamic_v2
+      angular_damping: 0.0  # Explicit provisional baseline; decay needs calibration.
+      max_angular_velocity: 1000.0  # rad/s; ball only, supports the intended spin range.
+
+    tennis_contacts:
+      # Set legacy to restore old materials and proximity-based bounce events.
+      # Practical rigid baseline; keeps shared rebound/contact event fixes.
+      # Court material is shared with the feet: preserve restitution 0.5 / friction 1.
+      # hardcourt_v2 plus tiny explicit offsets is available in the experimental preset.
+      model: hardcourt_v1
+      ball_restitution: 1.0
+      court_restitution: 0.5  # Ball/court pair average 0.75; original foot material.
+      racket_restitution: 0.7  # Ball/string-bed pair average remains 0.85.
+      ball_friction: 0.4
+      court_friction: 1.0     # Ball/court pair average 0.7; foot friction retained.
+      racket_friction: 0.6   # Ball/string-bed pair average 0.5.
+      ball_contact_offset: 0.02
+      racket_contact_offset: 0.05  # Earlier tested head-hit coverage at 12 substeps.
+
+    # Preserve the mass/COM/inertia and body angular cap used by the frozen player.
+    # Set published_reference_v1 to opt into the reference inertia values below.
+    racket_dynamics:
+      model: legacy
+      max_angular_velocity: 1000.0  # Ignored in legacy mode; original body cap is 100 rad/s.
+      mass: 0.270
+      com_x: 0.180
+      long_axis_inertia: 0.0012
+      transverse_inertia: 0.0123
+      normal_inertia: 0.01349
 
     reward_weights: {'pos': 1}
     reward_scales: {'pos': 5, 'phase': 5}

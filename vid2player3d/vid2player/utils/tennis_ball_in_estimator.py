@@ -79,11 +79,12 @@ class TennisBallInEstimator():
         return traj_trans, ball_states_in, ball_states_out
 
 
-def generate_incoming_trajectory(traj_path, params):
+def generate_incoming_trajectory(traj_path, params, cfg=None, substeps=6, physics=None):
+    """Pass the full controller YAML as cfg to share contacts and solver; omission is legacy."""
     VEL_X_RANGE, VEL_Y_RANGE, VSPIN_RANGE, HEIGHT_RANGE = \
         params.VEL_X_RANGE, params.VEL_Y_RANGE, params.VSPIN_RANGE, params.HEIGHT_RANGE
 
-    ball_gen = TennisBallGeneratorIsaac({}, is_train=True, need_reset=False)
+    ball_gen = TennisBallGeneratorIsaac(cfg or {}, is_train=True, need_reset=False, substeps=substeps, physics=physics)
     device = torch.device('cuda:0') if ball_gen.args.use_gpu_pipeline else torch.device('cpu')
 
     height_range = np.arange(*HEIGHT_RANGE)
@@ -127,7 +128,9 @@ def generate_incoming_trajectory(traj_path, params):
 
         traj, bounce_pos, bounce_idx, pass_net = simulate(
             ball_gen.gym, ball_gen.sim, launch_pos, launch_vel, launch_vspin, 
-            num_frames=50, device=device)
+            num_frames=50, device=device, substeps=ball_gen.substeps,
+            spin_scale=ball_gen.spin_scale, ball_physics=ball_gen.ball_physics,
+            tennis_contacts=ball_gen.contacts)
 
         # all trajs are straight out
         traj = traj[:, :, 1:]
