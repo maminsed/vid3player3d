@@ -35,9 +35,9 @@ def torch_sample_range(size, min, max):
     return torch.rand(size) * (max - min) + min
 
 
-def get_sim_params(substeps=2, physics=None):
+def get_sim_params(substeps=2, physics=None, args=None):
     # parse arguments
-    args = gymutil.parse_arguments(
+    args = args or gymutil.parse_arguments(
         description="Collision Filtering: Demonstrates filtering of collisions within and between environments", 
         custom_parameters=[
         {"name": "--enable_gym_viewer", "action": "store_true", "help": "enable gym viewer"},
@@ -141,7 +141,7 @@ def simulate(gym, sim, launch_pos, launch_vel, launch_vspin,
     num_env = root_state.shape[0]
     g_tensor = torch.FloatTensor([[0, 0, -1]]).repeat(num_env, 1).to(device)
     launch_ang_vel = launch_vspin.view(-1, 1) * pi * 2 * F.normalize(
-        torch.cross(launch_vel, g_tensor[:num_ball]), dim=1)
+        torch.cross(launch_vel, g_tensor[:num_ball], dim=-1), dim=1)
     root_state[:num_ball, 0:3] = launch_pos
     root_state[:num_ball, 7:10] = launch_vel
     root_state[:num_ball, 10:13] = launch_ang_vel
@@ -224,7 +224,8 @@ def simulate(gym, sim, launch_pos, launch_vel, launch_vspin,
 
 
 class TennisBallGeneratorIsaac():
-    def __init__(self, cfg, is_train=True, need_traj=True, need_reset=True, substeps=6, spin_scale=5, physics=None):
+    def __init__(self, cfg, is_train=True, need_traj=True, need_reset=True, substeps=6, spin_scale=5, physics=None,
+                 num_envs=None, sim_args=None):
         
         # Accept a full controller YAML so materials AND solver reach generation.
         if 'env' in cfg:
@@ -240,7 +241,7 @@ class TennisBallGeneratorIsaac():
         self.ball_physics = resolve_ball_physics(cfg.get('ball_physics'))
         self.traj_pool = None
 
-        sim_params, args = get_sim_params(substeps, physics)
+        sim_params, args = get_sim_params(substeps, physics, args=sim_args)
         self.substeps = sim_params.substeps
         self.physics_dt, self.control_freq_inv = preview_timing(sim_params)
         gym, sim = create_sim(sim_params, args.compute_device_id, args.graphics_device_id, args.physics_engine, self.contacts)
@@ -249,7 +250,7 @@ class TennisBallGeneratorIsaac():
         self.args = args
         self.gym = gym
         self.sim = sim
-        self.device = torch.device('cuda:0') if args.use_gpu_pipeline else torch.device('cpu')
+        self.device = torch.device('cuda:{}'.format(args.compute_device_id)) if args.use_gpu_pipeline else torch.device('cpu')
 
         # load ball asset
         asset_root = "vid2player/data/assets"
@@ -262,7 +263,9 @@ class TennisBallGeneratorIsaac():
         else:
             configure_ball_asset(gym, asset)
 
-        self.num_env = 10000 if is_train else 1000
+        self.num_env = num_envs if num_envs is not None else (10000 if is_train else 1000)
+        if self.num_env < 1:
+            raise ValueError('num_envs must be positive')
         num_per_row = int(np.sqrt(self.num_env))
         env_spacing = 2.0
         env_lower = gymapi.Vec3(-env_spacing, -env_spacing, 0.0)
@@ -337,14 +340,14 @@ class TennisBallGeneratorIsaac():
         # 4. bounce higher than 1m
 
         valid = pass_net.bool() & \
-            (bounce_pos.sum() != 0) & \
+            (bounce_pos.abs().sum(dim=1) != 0) & \
             (bounce_pos[:, 0] > self.bounce_min[0]) & \
             (bounce_pos[:, 0] < self.bounce_max[0]) & \
             (bounce_pos[:, 1] > self.bounce_min[1]) & \
             (bounce_pos[:, 1] < self.bounce_max[1])
         
-        for i in range(self.num_env):
-            valid[i] &= traj[i, bounce_idx[i]:, 2].max() > 1.0
+        after_bounce = torch.arange(traj.shape[1], device=self.device)[None, :] >= bounce_idx[:, None]
+        valid &= traj[:, :, 2].masked_fill(~after_bounce, -float('inf')).amax(dim=1) > 1.0
 
         print("Generated {}/{} valid ball trajectories".format(valid.sum(), num_samples))
         assert valid.sum() > 0

@@ -56,7 +56,7 @@ def simulate_without_bounce(gym, sim, launch_pos, launch_vel, launch_vspin, para
     g_tensor = torch.FloatTensor([[0, 0, -1]]).repeat(num_env, 1).to(device)
 
     launch_ang_vel = launch_vspin.view(-1, 1) * pi * 2 * F.normalize(
-        torch.cross(launch_vel, g_tensor[:num_ball]), dim=1)
+        torch.cross(launch_vel, g_tensor[:num_ball], dim=-1), dim=1)
     root_state[:, 0:3] = launch_pos
     root_state[:, 7:10] = launch_vel
     root_state[:, 10:13] = launch_ang_vel

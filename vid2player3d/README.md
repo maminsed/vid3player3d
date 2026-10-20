@@ -80,6 +80,10 @@ python vid2player/run.py --cfg federer_djokovic --rl_device cuda:0 --test --num_
 
 # Training
 
+Incoming ball pools and outgoing reward tables can be regenerated under a controller
+YAML without overwriting existing data. See [ball preview regeneration](doc/ball_preview_regeneration.md)
+for artifact selection, filtered incoming resampling, and `--test-only` MP4 mode.
+
 ### Low-level policy
 We provide the code for training the low-level policy in [embodied_pose](embodied_pose). As described in the paper, the low-level policy is trained in two stages using AMASS motions and tennis motions. You can run the following script to execute the two-stage training (assuming the motion data are available).
 ```bash

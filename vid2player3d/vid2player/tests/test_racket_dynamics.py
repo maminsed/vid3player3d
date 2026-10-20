@@ -28,6 +28,11 @@ class TestRacketDynamics(unittest.TestCase):
         self.assertAlmostEqual(body.inertia.y.y+body.inertia.y.z,.01349)
         self.assertFalse(calls[0][-1])
 
+    def test_legacy_does_not_read_or_overwrite_actor_properties(self):
+        # Rollback must preserve the complete collision-derived plant, including
+        # its inertia and COM, rather than only restoring the displayed mass.
+        configure_racket_body(object(), 'env', 'actor', 0, {'model': 'legacy'})
+
     def test_invalid_inertial_properties_fail(self):
         for cfg in [{'model':'unknown'},{'mass':-1},{'com_x':float('nan')},
                     {'normal_inertia':1.},{'long_axis_inertia':0.},{'extra':True}]:

@@ -99,6 +99,17 @@ env:
     ball_traj_out_x_file: data/ball_traj/ball_traj_out_x.npy
     ball_traj_out_y_file: data/ball_traj/ball_traj_out_y.npy
 
+    # Offline --resample launch proposal; does not alter live dynamics or old pools.
+    # Retargeted for the current ball model; acceptance checks net, landing, rebound.
+    # See doc/ball_preview_regeneration.md. --test-only writes an MP4 without a pool.
+    origin_min: [-4, 12, 1]
+    origin_max: [4, 13, 1.5]
+    bounce_min: [-3, -10, 0]
+    bounce_max: [3, -7, 0]
+    vel_range: [24, 28]  # m/s
+    theta_range: [5, 12]  # degrees above horizontal
+    vspin_range: [5, 10]  # signed rev/s
+
     obs_ball_traj_length: 10
     use_history_ball_obs: False
     ball_traj_file: data/ball_traj/ball_traj_in_subs2.npy

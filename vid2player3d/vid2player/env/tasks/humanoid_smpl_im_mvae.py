@@ -552,7 +552,7 @@ class HumanoidSMPLIMMVAE(HumanoidSMPL):
             len(env_ids), need_init_state=True, start_pos=self._ball_pos[env_ids].cpu(), env_ids=env_ids)
 
         launch_ang_vel = launch_vspin.view(-1, 1) * math.pi * 2 * F.normalize(
-            torch.cross(launch_vel, torch.FloatTensor([0, 0, -1]).repeat(len(env_ids), 1)), dim=1)
+            torch.cross(launch_vel, torch.FloatTensor([0, 0, -1]).repeat(len(env_ids), 1), dim=-1), dim=1)
         
         if ball_root_states is not None:
             self._ball_root_states[env_ids] = ball_root_states
