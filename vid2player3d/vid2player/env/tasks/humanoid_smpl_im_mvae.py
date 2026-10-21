@@ -193,6 +193,7 @@ class HumanoidSMPLIMMVAE(HumanoidSMPL):
         self._rigid_body_vel_origin = rigid_body_state_reshaped[..., :self.num_bodies, 7:10]
         self._rigid_body_ang_vel_origin = rigid_body_state_reshaped[..., :self.num_bodies, 10:13]
         self._update_rigid_body_state()
+        self._cache_racket_attachment()
         self._prev_rigid_body_ang_vel = self._rigid_body_ang_vel.clone()
 
         contact_force_tensor = gymtorch.wrap_tensor(contact_force_tensor)
@@ -527,6 +528,7 @@ class HumanoidSMPLIMMVAE(HumanoidSMPL):
         self._humanoid_root_states[env_ids, 10:13] = root_ang_vel
         self._rigid_body_pos[env_ids, :self._num_humanoid_bodies] = rb_pos
         self._rigid_body_rot[env_ids, :self._num_humanoid_bodies] = rb_rot
+        self._reset_racket_state(env_ids)
       
         self._rigid_body_vel[env_ids] = 0
         self._rigid_body_ang_vel[env_ids] = 0
@@ -545,6 +547,29 @@ class HumanoidSMPLIMMVAE(HumanoidSMPL):
         # for rendering init frame
         self._pd_target_dof_pos[env_ids] = dof_pos
         self._target_root_pos[env_ids] = root_pos
+
+    def _cache_racket_attachment(self):
+        # Racket is a fixed child of the wrist, outside the 24 SMPL bodies.
+        # Retain its asset transform so resets can rebuild its pose before the
+        # next simulate(), when GPU rigid-body refresh would still be stale.
+        self._reset_racket_parent = torch.as_tensor(
+            self._racket_wrist_body_id, device=self.device).expand(self.num_envs)
+        ids = torch.arange(self.num_envs, device=self.device)
+        parent_rot = self._rigid_body_rot[ids, self._reset_racket_parent]
+        self._reset_racket_offset = quat_rotate_inverse(
+            parent_rot, self._rigid_body_pos[:, self._racket_body_id]
+            - self._rigid_body_pos[ids, self._reset_racket_parent])
+        self._reset_racket_rotation = quat_mul(
+            quat_conjugate(parent_rot), self._rigid_body_rot[:, self._racket_body_id])
+
+    def _reset_racket_state(self, env_ids):
+        parent = self._reset_racket_parent[env_ids]
+        rotation = self._rigid_body_rot[env_ids, parent]
+        self._rigid_body_pos[env_ids, self._racket_body_id] = (
+            self._rigid_body_pos[env_ids, parent]
+            + quat_rotate(rotation, self._reset_racket_offset[env_ids]))
+        self._rigid_body_rot[env_ids, self._racket_body_id] = quat_mul(
+            rotation, self._reset_racket_rotation[env_ids])
     
     def _reset_balls(self, env_ids, humanoid_env_ids=None):
         ball_root_states = None
@@ -562,8 +587,10 @@ class HumanoidSMPLIMMVAE(HumanoidSMPL):
             self._ball_root_states[env_ids, 10:13] = launch_ang_vel.to(self.device)
 
         self._has_bounce[env_ids] = 0
+        self._has_bounce_now[env_ids] = 0
         self._bounce_pos[env_ids] = 0
         self._has_racket_ball_contact[env_ids] = 0
+        self._has_racket_ball_contact_now[env_ids] = 0
         self._ball_pos[env_ids] = self._ball_root_states[env_ids, 0:3]
         self._ball_vel[env_ids] = self._ball_root_states[env_ids, 7:10]
 

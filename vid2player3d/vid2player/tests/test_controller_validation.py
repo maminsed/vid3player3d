@@ -280,6 +280,35 @@ class ValidationTests(unittest.TestCase):
             actual = rollout_batch(parallel, NS(eval_steps=4), cases)
         self.assertEqual(actual, expected)
 
+    def test_gpu_deferred_reset_updates_every_slot(self):
+        # Emulate GPU setters: each reset replaces the pending actor-index
+        # list, which is applied only on the next simulate call. A CPU fake
+        # applying resets immediately cannot catch repeated setter calls.
+        player, resets, launches, _ = fake_player(num_envs=4)
+        original_reset, original_step = player.env_reset, player.env_step
+        pending = []
+        simulated = False
+        def reset(ids):
+            if len(ids):
+                pending[:] = ids.tolist()
+            return original_reset(ids)
+        def step(env, action):
+            nonlocal simulated
+            if not simulated:
+                self.assertEqual(pending, [0, 1, 2, 3])
+                simulated = True
+            return original_step(env, action)
+        player.env_reset, player.env_step = reset, step
+        cases = [{'ball_index': i+1, 'seed': 123+i, 'target_xyz_m': [0., 10., 0.]}
+                 for i in range(3)]
+        with patch.dict(sys.modules, {'vid2player.utils.config': NS(set_seed=lambda *a: None)}):
+            shots = rollout_batch(player, NS(eval_steps=4), cases)
+        self.assertTrue(simulated)
+        self.assertEqual(resets[0], [0, 1, 2, 3])
+        self.assertEqual(launches, [1, 2, 3, 3])
+        self.assertEqual(len(shots), 3)
+        self.assertTrue(all(s['return_in'] for s in shots))
+
     def test_parking_reset_defers_other_slots_recovery(self):
         player, _, _, _ = fake_player(num_envs=3)
         player.task._reset_recovery_buf[:] = True

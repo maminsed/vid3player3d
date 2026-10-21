@@ -97,11 +97,13 @@ def prepare_validation(args, cfg, cfg_train):
              for i, ball in enumerate(balls) for target, xyz in RETURN_TARGETS.items()]
     metadata = {'checkpoint': str(Path(args.eval_checkpoint).resolve()), 'arguments': vars(args),
                 'source_file': source, 'suite': suite, 'config': cfg, 'training_config': cfg_train,
-                'execution': {'num_envs': args.num_envs, 'batches': (len(suite)+args.num_envs-1)//args.num_envs,
+                'execution': {'protocol_version': 3,
+                              'num_envs': args.num_envs, 'batches': (len(suite)+args.num_envs-1)//args.num_envs,
                               'method': 'Batched IsaacGym physics and policy inference; completed slots are excluded from metrics.'},
                 'protocol': 'Distinct nearest rows from a fixed evenly spaced sample of at most 8192 incoming rows; '
-                            'one full actor reset per shot, mean actions, paired reset seed across targets, '
-                            'common initial motion pose across slots, fixed batch order; stochastic recovery draws '
+                            'one combined actor reset per batch, mean actions, paired launch and initial pose across targets, '
+                            'common initial motion pose across slots, fixed batch order; '
+                            'batch RNG seeded by the last shot seed; stochastic recovery draws '
                             'depend on batch width (use the same concurrency when comparing checkpoints). '
                             'configured recovery, no timed relaunch. Early estimate/miss termination disabled; '
                             'physical and movement-boundary termination retained.',
@@ -165,12 +167,18 @@ def rollout_batch(player, args, cases):
     mvae._init_data[:width] = mvae._init_data[:1].clone().expand_as(mvae._init_data[:width])
     task._reset_reaction_buf[:] = False
     task._reset_recovery_buf[:] = False
-    for i in range(width):
-        case = cases[min(i, len(cases)-1)]
-        set_seed(case['seed'], False)
-        _reset_slots(player, torch.tensor([i], device=task.device), [case['ball_index']])
+    # GPU state setters are deferred until simulate() and must be called only
+    # once per step. Per-slot env_reset calls discard all but the final slot's
+    # pending actor/DOF reset on the GPU pipeline (CPU applies them immediately).
+    # Fixed-evaluation motion resets are deterministic; random targets/timers
+    # drawn during reset are replaced below. Seed subsequent stochastic recovery
+    # from the last real case, including when padding a short final batch.
+    set_seed(cases[-1]['seed'], False)
+    batch_cases = [cases[min(i, len(cases)-1)] for i in range(width)]
+    _reset_slots(player, torch.arange(width, device=task.device),
+                 [case['ball_index'] for case in batch_cases])
     task._tar_time_total[:] = args.eval_steps+1
-    targets = [cases[min(i, len(cases)-1)]['target_xyz_m'] for i in range(width)]
+    targets = [case['target_xyz_m'] for case in batch_cases]
     task._target_bounce_pos[:] = torch.tensor(targets, device=task.device)
     task._compute_observations()
     obs = player.obs_to_torch(task.obs_buf.to(player.device))
