@@ -2,6 +2,7 @@ from vid2player.motion_vae.config import MotionVAEOption
 from vid2player.motion_vae.dataset import Video3DPoseDataset
 from vid2player.motion_vae.base import MotionVAEModel
 from vid2player.utils.racket import Racket
+from vid2player.utils.racket_control import resolve_racket_control, corrected_racket_rotations
 from vid2player.utils.pose import SMPLPose
 from vid2player.utils.konia_transform import angle_axis_to_rotation_matrix, rotation_matrix_to_angle_axis
 from vid2player.utils.torch_transform import rot6d_to_angle_axis, rot6d_to_rotmat, rotmat_to_rot6d
@@ -21,6 +22,13 @@ class MVAEPlayer:
         self._enable_physics = enable_physics
         self.device = device
         self._is_dual = cfg.get('dual_mode') == 'different'
+        self._racket_control = resolve_racket_control(cfg.get('racket_phase_correction'))
+        if self._racket_control.mode != 'legacy':
+            if self._is_dual or cfg.get('player') != 'djokovic' or cfg.get('add_residual_dof') != 'euler':
+                raise ValueError('Optional racket corrections require single-player Djokovic with euler residuals')
+            self._racket_window_weight = torch.zeros(num_envs, device=device)
+            self._racket_delta = torch.eye(3, device=device).expand(num_envs, 2, 3, 3).clone()
+            self._racket_blend_alpha = 1.  # Physics controller supplies its actual control dt.
 
         if not self._is_dual:
             # load mvae option
@@ -164,6 +172,9 @@ class MVAEPlayer:
     def reset(self, env_ids):
         self._swing_type[env_ids] = -1
         self._swing_type_cycle[env_ids] = -1
+        if self._racket_control.mode != 'legacy':
+            self._racket_window_weight[env_ids] = 0
+            self._racket_delta[env_ids] = torch.eye(3, device=self.device)
 
         # assume VAE only conditioned on one frame
         self._update_mvae_state(self._init_data[env_ids, -1].clone(), phase=None, env_ids=env_ids, init=True)
@@ -332,6 +343,11 @@ class MVAEPlayer:
                 joint_rot[:, 0, 0] += offsets[:, 0]
                 joint_rot[:, 1, 1] += offsets[:, 1]
                 joint_rot[:, 1, 2] += offsets[:, 2]
+            elif self.cfg.get('racket_phase_correction', {}).get('mode', 'legacy') != 'legacy':
+                joint_rot, self._racket_delta = corrected_racket_rotations(
+                    self._joint_rotmat[:, residual_joint_inds], residual, self._phase_pred,
+                    self._swing_type, self._racket_control.mode, self._racket_window_weight,
+                    self._racket_delta, self._racket_blend_alpha)
             elif player == 'djokovic':
                 residual[:, 0] = torch.clamp(residual[:, 0] * 0.25, -0.25, 0.25)
                 residual[:, 1] = torch.clamp(residual[:, 1] * 0.25, -0.25, 0.25)

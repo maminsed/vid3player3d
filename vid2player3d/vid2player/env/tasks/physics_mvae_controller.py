@@ -3,6 +3,7 @@ from vid2player.env.utils.player_builder import PlayerBuilder
 from vid2player.utils.tennis_ball_out_estimator import TennisBallOutEstimator
 from vid2player.utils.common import AverageMeter
 from vid2player.utils.reward_schedule import LinearRewardSchedule
+from vid2player.utils.racket_control import resolve_racket_control, InterceptionWindow
 from vid2player.utils.torch_transform import quat_to_rot6d
 from utils import torch_utils
 
@@ -109,6 +110,16 @@ class PhysicsMVAEController():
         self._res_dof_actions = None
         if not self._is_train or self.cfg_v2p.get('random_walk_in_recovery', False):
             self._mvae_actions_random = torch.zeros((self.num_envs, self._num_mvae_action), device=self.device, dtype=torch.float32)
+        racket_control = resolve_racket_control(self.cfg_v2p.get('racket_phase_correction'))
+        self._interception_window = None
+        if racket_control.prediction.enabled:
+            if self.cfg_v2p.get('dual_mode') or not self.cfg_v2p.get('predict_phase', True):
+                raise ValueError('Interception windows require single-player phase-enabled control')
+            dt = self._physics_player.task.dt
+            self._interception_window = InterceptionWindow(
+                self.num_envs, self.device, dt, racket_control.prediction, racket_control.blend_s)
+        if racket_control.mode != 'legacy':
+            self._mvae_player._racket_blend_alpha = min(1., self._physics_player.task.dt / racket_control.blend_s)
         
         # optimization flags for pytorch JIT
         torch._C._jit_set_profiling_mode(False)
@@ -196,6 +207,8 @@ class PhysicsMVAEController():
             new_traj = self._physics_player.task.reset(reset_humanoid_env_ids, reset_reaction_env_ids)
             if not self.cfg_v2p.get('use_history_ball_obs', False):
                 self._ball_traj[reset_reaction_env_ids] = new_traj.to(self.device)
+            if self._interception_window is not None and len(reset_reaction_env_ids) > 0:
+                self._interception_window.reset(reset_reaction_env_ids, new_traj)
             if not self.headless and len(reset_humanoid_env_ids) == self.num_envs:
                 self._physics_player.task.render_vis(init=True)
         if (len(reset_humanoid_env_ids) > 0):
@@ -256,6 +269,12 @@ class PhysicsMVAEController():
         
     def pre_physics_step(self, actions):
         self._actions = actions.clone()
+        if self._interception_window is not None:
+            window = self._interception_window
+            weight = window.step(self._tar_time, self._root_pos, self._root_vel, self._ball_pos,
+                                 self._tar_action == 1, self._physics_player.task._has_racket_ball_contact,
+                                 self.cfg_v2p.get('righthand', True))
+            self._mvae_player._racket_window_weight = weight
         self._mvae_actions = actions[:, :self._num_mvae_action].clone() * \
             self.cfg_v2p.get('vae_action_scale', 1.0)
         

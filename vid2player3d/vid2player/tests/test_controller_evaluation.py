@@ -13,7 +13,8 @@ import torch
 import imageio.v2 as imageio
 
 from vid2player.utils.controller_evaluation import (
-    configure_eval_args, prepare_evaluation, select_ball_case, CourtRenderer, evaluate_controller, phase_metrics)
+    configure_eval_args, prepare_evaluation, select_ball_case, CourtRenderer, evaluate_controller, phase_metrics,
+    save_metrics_plot)
 
 
 def offline_generator_class():
@@ -27,6 +28,27 @@ def offline_generator_class():
 
 
 class ControllerEvaluationTests(unittest.TestCase):
+    def test_plot_marks_contact_or_explicitly_reports_none(self):
+        from matplotlib.figure import Figure
+        rows = [dict(time_s=(i+1)/30, reward=.1, cumulative_reward=.1*(i+1), phase_rad=3.,
+                     phase_target_rad=np.pi, phase_reward_factor=.9, is_reaction=True,
+                     ball_racket_distance_m=.2, has_contact=False) for i in range(3)]
+        for has_contact in [False, True]:
+            rows[-1]['has_contact'] = has_contact
+            with patch.object(Figure, 'savefig', autospec=True) as save:
+                save_metrics_plot('unused.png', rows, 30)
+            figure = save.call_args.args[0]
+            self.assertEqual(len(figure.axes), 4)
+            title = figure._suptitle.get_text()
+            if has_contact:
+                self.assertIn('First racket contact: 0.10s', title)
+                for axis in figure.axes:
+                    markers = [line for line in axis.lines if line.get_label().startswith('first racket contact')]
+                    self.assertEqual(len(markers), 1)
+                    self.assertEqual(markers[0].get_color(), 'crimson')
+            else:
+                self.assertIn('No racket contact detected', title)
+
     def test_offline_sampler_device_boundary(self):
         with tempfile.TemporaryDirectory() as directory:
             data=np.arange(6*307,dtype=np.float32).reshape(6,307)
@@ -195,7 +217,7 @@ class ControllerEvaluationTests(unittest.TestCase):
             reader.close()
             from PIL import Image
             with Image.open(output/'metrics.png') as plot:
-                self.assertEqual(plot.size,(1800,1800))
+                self.assertEqual(plot.size,(1800,1200))
 
     def test_phase_diagnostics_match_rewards(self):
         from vid2player.tests.test_controller_baseline import definitions, ROOT

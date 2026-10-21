@@ -219,42 +219,70 @@ def phase_metrics(task):
             'phase_enabled': bool(task.cfg_v2p.get('predict_phase', True))}
 
 
+def interception_metrics(task):
+    window = getattr(task, '_interception_window', None)
+    if window is None:
+        return {}
+    mode = task.cfg_v2p.get('racket_phase_correction', {}).get('mode', 'legacy')
+    phase = float(task._phase_pred[0].item())
+    swing = int(task._mvae_player._swing_type[0].item())
+    gate = float(window.weight[0].item()) if mode == 'interception_window' and 2. < phase < 3.2 and swing in (1, 2) else 0.
+    from vid2player.utils.konia_transform import rotation_matrix_to_angle_axis
+    delta = getattr(task._mvae_player, '_racket_delta', None)
+    angles = [0., 0.] if delta is None else _cpu(rotation_matrix_to_angle_axis(delta[:1]).norm(dim=-1))[0] * 180 / np.pi
+    return {'interception_valid': bool(window.valid[0].item()),
+            'interception_eta_at_action_s': _number(window.eta[0].item()) if window.valid[0] else None,
+            'interception_time_from_launch_s': _number(window.deadline[0].item()) if window.valid[0] else None,
+            'interception_x_m': _number(window.position[0, 0].item()) if window.valid[0] else None,
+            'interception_y_m': _number(window.position[0, 1].item()) if window.valid[0] else None,
+            'interception_z_m': _number(window.position[0, 2].item()) if window.valid[0] else None,
+            'interception_swing_type': int(window.side[0].item()) if window.valid[0] else -1,
+            'interception_window_active': bool(window.active[0].item()),
+            'interception_blend_weight': _number(window.weight[0].item()),
+            'racket_preset_gate': gate,
+            'racket_elbow_preset_rotation_deg': _number(angles[0]),
+            'racket_wrist_preset_rotation_deg': _number(angles[1]),
+            'interception_preview_error_m': _number(window.preview_error[0].item())}
+
+
 def save_metrics_plot(filename, metrics, fps):
-    """Save one static reward/loss figure for the complete evaluation flight."""
+    """Four focused panels; full components and losses remain in the rollout."""
     from matplotlib.figure import Figure
     from matplotlib.backends.backend_agg import FigureCanvasAgg
 
     times = np.asarray([row['time_s'] for row in metrics])
-    components = sorted({name for row in metrics for name in row['weighted_reward_components']})
     panels = [('Step reward', 'Reward', [('reward',[row['reward'] for row in metrics])]),
-              ('Cumulative reward', 'Total reward', [('total',[row['cumulative_reward'] for row in metrics])]),
-              ('Weighted reward components', 'Reward contribution',
-               [(name,[row['weighted_reward_components'].get(name) for row in metrics]) for name in components]),
-              ('Weighted regularization losses', 'Loss contribution',
-               [('auxiliary',[row['weighted_aux_dof_res_loss'] for row in metrics]),
-                ('bounds',[row['weighted_bounds_loss'] for row in metrics])]),
               ('Predicted and target phase', 'Phase (radians)',
                [('predicted',[row['phase_rad'] for row in metrics]),
                 ('target',[row['phase_target_rad'] for row in metrics])]),
               ('Phase reward factor: exp(-scale * error²)', 'Multiplier / reaction mask',
                [('phase factor',[row['phase_reward_factor'] for row in metrics]),
-                ('reaction',[float(row['is_reaction']) for row in metrics])])]
-    figure = Figure(figsize=(12,12), constrained_layout=True)
+                ('incoming-ball attempt active',[float(row['is_reaction']) for row in metrics])])]
+    if 'interception_window_active' in metrics[0]:
+        panels.append(('Interception window and racket preset gate', 'Activation / weight',
+                       [('interception window',[float(row['interception_window_active']) for row in metrics]),
+                        ('preset gate',[row['racket_preset_gate'] for row in metrics])]))
+    else:
+        panels.append(('Ball–racket distance', 'Distance (m)',
+                       [('distance',[row['ball_racket_distance_m'] for row in metrics])]))
+    figure = Figure(figsize=(12,8), constrained_layout=True)
     FigureCanvasAgg(figure)
     contact = next((row['time_s'] for row in metrics if row['has_contact']),None)
-    for axis,(title,label,curves) in zip(figure.subplots(3,2).ravel(),panels):
+    for axis,(title,label,curves) in zip(figure.subplots(2,2).ravel(),panels):
         for name,values in curves:
             values = np.asarray([np.nan if value is None else value for value in values])
             axis.plot(times,values,label=name,linewidth=1.8)
         if contact is not None:
-            axis.axvline(contact,color='gray',linestyle='--',label='first contact')
+            axis.axvline(contact,color='crimson',linewidth=2.2,linestyle='--',
+                         label=f'first racket contact: {contact:.2f}s',zorder=5)
         axis.set(title=title,xlabel='Time (s)',ylabel=label)
         axis.set_xlim(0,max(float(times[-1]),1/fps))
         axis.grid(True,alpha=.25)
         if curves or contact is not None:
             axis.legend(fontsize=8)
-    figure.suptitle('Evaluation rewards and regularization losses over time\n'
-                   'Auxiliary/bounds losses include configured weights; no PPO actor/critic update',fontsize=12)
+    contact_text = 'No racket contact detected' if contact is None else f'First racket contact: {contact:.2f}s'
+    figure.suptitle(f"Evaluation | total reward {metrics[-1]['cumulative_reward']:.3f} | {contact_text}\n"
+                   'Phase factor multiplies proximity reward; attempt mask is 0 during recovery',fontsize=12)
     figure.savefig(filename,dpi=150)
 
 
@@ -326,6 +354,7 @@ def evaluate_controller(player, args, evaluation):
                         for name,val in components.items()}
             row = {'step':step+1,'time_s':(step+1)/fps,'reward':value,'cumulative_reward':cumulative,
                    **phase_metrics(task),
+                   **interception_metrics(task),
                    'reward_components':components,'weighted_reward_components':weighted,
                    'aux_dof_res_loss':_number(aux_loss),'weighted_aux_dof_res_loss':_number(aux_weight*aux_loss),
                    'bounds_loss':_number(bounds_loss),'weighted_bounds_loss':_number(bounds_weight*bounds_loss),
@@ -334,6 +363,9 @@ def evaluate_controller(player, args, evaluation):
                    'estimated_in':bool(task._est_bounce_in[0].item()),
                    'root_xyz_m':[_number(x) for x in root], 'ball_xyz_m':[_number(x) for x in ball],
                    'terminated':ended}
+            if 'interception_valid' in row:
+                eta = row['interception_eta_at_action_s']
+                row['interception_contact_error_s'] = None if contact_step != step+1 or eta is None else 1/fps - eta
             metrics.append(row)
             states.append({'body_xyz':bodies,'ball_xyz':ball,'racket_xyz':racket,'policy_mean':means})
             trail.append(ball)
@@ -349,6 +381,11 @@ def evaluate_controller(player, args, evaluation):
                          row['swing_type']),
                      f"Ball-racket {dist_text} | best {best_text} | contact {'YES' if contact else 'NO'}",
                      f"Aux {aux_loss:.4f} | bounds {bounds_loss:.5f} | est-in {row['estimated_in']}"]
+            if 'interception_valid' in row:
+                eta = row['interception_eta_at_action_s']
+                lines.append('Intercept {} | window {} | preset gate {:.2f}'.format(
+                    'n/a' if eta is None else f'{eta:.2f}s',
+                    'ON' if row['interception_window_active'] else 'off',row['racket_preset_gate']))
             frame = renderer.render(bodies,ball,racket,normal,target,trail[-12:],lines)
             writer.append_data(np.asarray(frame))
             if ended:
@@ -372,12 +409,19 @@ def evaluate_controller(player, args, evaluation):
                   'phase_error_rad':'phase_rad - phase_target_rad; no circular wrapping.',
                   'phase_reward_factor':'exp(-phase_scale * phase_error_rad**2); multiplies proximity shaping, not an additive reward. Reach reward is zero outside reaction; return proximity shaping becomes 1 after contact.',
                   'phase_enabled':'False means phase prediction is disabled; the recorded phase buffer is then a placeholder and phase_scale must be zero.'},
+              'interception_definitions':{
+                  'source':'Cached paired incoming launch preview, not an observation of the actor; estimate is approximate and stopped after contact, miss or excessive live-ball divergence.',
+                  'interception_eta_at_action_s':'Predicted seconds remaining at the START of the recorded action; other phase/reward values are post-step.',
+                  'interception_contact_error_s':'First detected contact step end minus predicted interception time; uncertainty is at least one control step.',
+                  'racket_preset_gate':'Desired preset weight including decoded phase/swing gates; relative preset rotations are additionally smoothed and may have a decaying tail.',
+                  'interception_swing_type':'Side-based diagnostic only; does not overwrite decoded swing classification.'},
               }
     columns = ['step','time_s','reward','cumulative_reward','aux_dof_res_loss',
                'weighted_aux_dof_res_loss','bounds_loss','weighted_bounds_loss',
                'total_regularization_loss','ball_racket_distance_m','has_contact','estimated_in','terminated']
     columns += ['phase_rad','phase_target_rad','phase_error_rad','phase_reward_factor',
                 'phase_scale','swing_type','is_reaction','phase_enabled']
+    columns += [key for key in metrics[0] if key.startswith(('interception_', 'racket_'))]
     component_names = sorted({name for row in metrics for name in row['reward_components']})
     metric_values = [[np.nan if row[key] is None else row[key] for key in columns]+
                      [row['reward_components'].get(name,np.nan) for name in component_names]+

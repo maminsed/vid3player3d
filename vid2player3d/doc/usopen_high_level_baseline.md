@@ -124,11 +124,12 @@ folder under `out/controller_eval/`. Each completed run saves exactly four files
 
 - `video.mp4`: fixed court view, simulated skeleton/racket/ball, and top-left metrics,
   including predicted phase, target phase (radians), phase reward factor and swing type.
-- `metrics.png`: static curves of step reward, cumulative reward, weighted reward
-  components, weighted auxiliary/bounds losses, predicted/target phase and phase
-  reward factor against time. The phase factor is a proximity-reward multiplier,
-  not an additive reward; the reaction mask is plotted alongside it. A dashed line
-  marks the first detected contact. Evaluation performs no PPO update.
+- `metrics.png`: four panels: step reward, predicted/target phase, phase factor
+  with the incoming-ball attempt mask, and interception window/preset gate (or
+  ball–racket distance for configs without interception prediction). Total reward
+  appears in the title. A prominent red dashed line labels first detected racket
+  contact; absent contact is explicitly reported. Detailed components, cumulative
+  rewards and regularization losses remain in `rollout.npz`.
 - `evaluation_config.json`: checkpoint, effective configs, seed, camera, requested
   ball coordinates, selected launch row, desired return target, and final results.
 - `rollout.npz`: actual body/ball/racket positions and policy means per frame, plus
@@ -150,6 +151,10 @@ To reproduce the historical evaluation-only suppression of residual actions
 outside swing gates, add `--env-flag legacy_eval_residual_gating` (or set
 `env.vid2player.legacy_eval_residual_gating: true` in YAML). Training behavior
 and the phase preset values are unchanged.
+
+Optional interception-gated presets and the no-preset ablation are documented in
+[racket_phase_experiments.md](racket_phase_experiments.md). These modes leave
+phase prediction, phase reward and actor observation dimensions unchanged.
 
 Auxiliary and bounds penalties are calculated from each deterministic policy
 output before scaling, with the configured coefficients also reported. PPO actor
