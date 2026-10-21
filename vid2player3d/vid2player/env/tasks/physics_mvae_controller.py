@@ -205,8 +205,9 @@ class PhysicsMVAEController():
             self._num_reset[reset_humanoid_env_ids] += 1
         if len(reset_humanoid_env_ids) > 0 or len(reset_reaction_env_ids) > 0:
             new_traj = self._physics_player.task.reset(reset_humanoid_env_ids, reset_reaction_env_ids)
-            if not self.cfg_v2p.get('use_history_ball_obs', False):
-                self._ball_traj[reset_reaction_env_ids] = new_traj.to(self.device)
+            # Keep the paired preview for diagnostics in both observation modes.
+            # _compute_task_obs selects history separately for history-based actors.
+            self._ball_traj[reset_reaction_env_ids] = new_traj.to(self.device)
             if self._interception_window is not None and len(reset_reaction_env_ids) > 0:
                 self._interception_window.reset(reset_reaction_env_ids, new_traj)
             if not self.headless and len(reset_humanoid_env_ids) == self.num_envs:
