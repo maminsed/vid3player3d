@@ -70,6 +70,13 @@ def load_cfg(args):
     cfg = {'name': cfg_all['name'], 'test_name': cfg_all.get('test_name', 'HumanoidSMPLRefv1'), 'env': cfg_all['env'], 'sim': cfg_all['sim']}
     cfg_train = {'params': cfg_all['params']}
 
+    for flag in getattr(args, 'env_flag', None) or []:
+        if flag != 'legacy_eval_residual_gating':
+            raise ValueError('Unknown --env-flag: ' + flag)
+        cfg['env'].setdefault('vid2player', {})[flag] = True
+    if 'vid2player' in cfg['env']:
+        cfg['env']['vid2player'].setdefault('legacy_eval_residual_gating', False)
+
     # override number of environments if passed on the command line
     if args.num_envs > 0:
         cfg["env"]["numEnvs"] = args.num_envs
@@ -150,6 +157,7 @@ def load_cfg(args):
     cfg_train['params']['config']['wandb_dir'] = cfg_dir
     cfg_train['params']['config']['train_dir'] = os.path.join(cfg_dir, 'train') 
     cfg_train['params']['config']['device'] = args.rl_device
+    cfg_train['params']['config']['device_name'] = args.rl_device
     cfg_train['params']['config']['max_test_steps'] = args.max_test_steps
 
     check_training_output(cfg_train['params']['config'], args, network_path)
@@ -263,6 +271,8 @@ def get_args(benchmark=False):
             "help": "Requires --experiment flag, adds physics engine, sim device, pipeline info and if domain randomization is used to the experiment name provided by user"},
         {"name": "--cfg", "type": str, "default": "Base", "help": "Config name, folder/name under cfg/controller, or YAML path; output folders use folder__name"},
         {"name": "--cfg_dir", "type": str, "default": "vid2player", "help": "cfg folder"},
+        {"name": "--env-flag", "action": "append", "default": None,
+            "help": "Enable an environment compatibility option. legacy_eval_residual_gating restores evaluation-only suppression of arm residuals outside swing gates; default uses training corrections everywhere."},
         {"name": "--num_envs", "type": int, "default": 0,
             "help": "Number of environments to create - override config file"},
         {"name": "--episode_length", "type": int, "default": 0,

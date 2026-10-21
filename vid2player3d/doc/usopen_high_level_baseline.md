@@ -122,9 +122,12 @@ Stage 1 rewards proximity and does not reward that return target.
 The output directory must be new; omitting `--eval_output` generates a timestamped
 folder under `out/controller_eval/`. Each completed run saves exactly four files:
 
-- `video.mp4`: fixed court view, simulated skeleton/racket/ball, and top-left metrics.
+- `video.mp4`: fixed court view, simulated skeleton/racket/ball, and top-left metrics,
+  including predicted phase, target phase (radians), phase reward factor and swing type.
 - `metrics.png`: static curves of step reward, cumulative reward, weighted reward
-  components, and weighted auxiliary/bounds losses against time. A dashed line
+  components, weighted auxiliary/bounds losses, predicted/target phase and phase
+  reward factor against time. The phase factor is a proximity-reward multiplier,
+  not an additive reward; the reaction mask is plotted alongside it. A dashed line
   marks the first detected contact. Evaluation performs no PPO update.
 - `evaluation_config.json`: checkpoint, effective configs, seed, camera, requested
   ball coordinates, selected launch row, desired return target, and final results.
@@ -132,6 +135,21 @@ folder under `out/controller_eval/`. Each completed run saves exactly four files
   the selected launch/preview row and numeric per-frame metrics (`metrics` matrix
   with `metric_names` columns). No extra launch file is retained; the simulator's
   temporary input is cleaned up after the run.
+
+Phase columns in `rollout.npz` are `phase_rad`, `phase_target_rad`,
+`phase_error_rad`, `phase_reward_factor`, `phase_scale`, `swing_type`,
+`is_reaction` and `phase_enabled`. They align with the post-step reward and
+video frame. The factor is `exp(-phase_scale * phase_error_rad**2)`, using
+the reward's ordinary signed phase difference, without circular wrapping.
+The config JSON records definitions, including the different target-phase
+rules for reach and return rewards. With phase prediction disabled, the
+phase buffer is a placeholder and its scale is zero.
+
+Arm corrections now match training during both evaluation and validation.
+To reproduce the historical evaluation-only suppression of residual actions
+outside swing gates, add `--env-flag legacy_eval_residual_gating` (or set
+`env.vid2player.legacy_eval_residual_gating: true` in YAML). Training behavior
+and the phase preset values are unchanged.
 
 Auxiliary and bounds penalties are calculated from each deterministic policy
 output before scaling, with the configured coefficients also reported. PPO actor

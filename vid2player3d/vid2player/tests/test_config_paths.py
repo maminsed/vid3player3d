@@ -74,7 +74,7 @@ class ConfigPathsTests(unittest.TestCase):
         tree = ast.parse((SOURCE / 'utils/config.py').read_text())
         get_args = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == 'get_args')
         parameters = eval(compile(ast.Expression(get_args.body[0].value), '<parameters>', 'eval'))
-        defaults = {p['name'][2:]: p.get('default', False if p.get('action') == 'store_true' else None)
+        defaults = {p['name'][2:].replace('-', '_'): p.get('default', False if p.get('action') == 'store_true' else None)
                     for p in parameters}
         defaults.update(cfg='strategy/deeper/stage', train=True, torch_deterministic=False,
                         results_dir=str(Path(self.temporary.name) / 'results'))
@@ -98,6 +98,18 @@ class ConfigPathsTests(unittest.TestCase):
                     self.assertEqual(training['params']['config'][key], str(output / folder))
                 self.assertTrue((output / 'models').is_dir())
                 self.assertTrue((output / 'logs').is_dir())
+                self.assertFalse(cfg['env']['vid2player']['legacy_eval_residual_gating'])
+        # Exercise the CLI option's actual argparse definition and config propagation.
+        import argparse
+        parser = argparse.ArgumentParser()
+        flag = next(p.copy() for p in parameters if p['name'] == '--env-flag')
+        parser.add_argument(flag.pop('name'), **flag)
+        args.env_flag = parser.parse_args(['--env-flag', 'legacy_eval_residual_gating']).env_flag
+        cfg, _ = namespace['load_cfg'](args)
+        self.assertTrue(cfg['env']['vid2player']['legacy_eval_residual_gating'])
+        args.env_flag = ['unknown_option']
+        with self.assertRaisesRegex(ValueError, 'Unknown --env-flag'):
+            namespace['load_cfg'](args)
 
     def test_default_evaluation_and_validation_directories_are_flat(self):
         args = SimpleNamespace(cfg='strategy/deeper/stage', cfg_name='strategy__deeper__stage',

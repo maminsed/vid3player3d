@@ -13,7 +13,7 @@ import torch
 import imageio.v2 as imageio
 
 from vid2player.utils.controller_evaluation import (
-    configure_eval_args, prepare_evaluation, select_ball_case, CourtRenderer, evaluate_controller)
+    configure_eval_args, prepare_evaluation, select_ball_case, CourtRenderer, evaluate_controller, phase_metrics)
 
 
 def offline_generator_class():
@@ -127,7 +127,10 @@ class ControllerEvaluationTests(unittest.TestCase):
                 _ball_generator=SimpleNamespace(sample_idx=torch.zeros(1,dtype=torch.long)))
             task=SimpleNamespace(device='cpu',_physics_player=SimpleNamespace(task=physics),
                 cfg_v2p={'court_min':[-5,-16],'court_max':[5,-10],
-                         'reward_weights':{'pos':1.},'aux_loss_specs':{'dof_res':.01}},
+                         'reward_type':'reach', 'reward_weights':{'pos':1.},'aux_loss_specs':{'dof_res':.01}},
+                _phase_pred=torch.tensor([3.]), _reward_scales={'phase':5.},
+                _tar_action=torch.ones(1,dtype=torch.long),
+                _mvae_player=SimpleNamespace(_swing_type=torch.tensor([1])),
                 _num_mvae_action=32,_num_res_dof_action=3,
                 _reset_reaction_buf=torch.ones(1,dtype=torch.bool),_reset_recovery_buf=torch.zeros(1,dtype=torch.bool),
                 _tar_time_total=torch.zeros(1,dtype=torch.long),_target_bounce_pos=torch.zeros(1,3),
@@ -144,6 +147,7 @@ class ControllerEvaluationTests(unittest.TestCase):
                 return {'obs':task.obs_buf}
             def step(env,action):
                 n=len(steps)+1;steps.append(n)
+                task._phase_pred[:]=2. + n*.2
                 task._ball_pos[:,1:]=torch.tensor([-13.,1.])
                 task._ball_pos[:,0]=.4/n
                 physics._has_racket_ball_contact[:]=n>=2
@@ -176,6 +180,10 @@ class ControllerEvaluationTests(unittest.TestCase):
             self.assertAlmostEqual(first['weighted_bounds_loss'],.1,places=6)
             self.assertAlmostEqual(first['total_regularization_loss'],.1004,places=6)
             self.assertAlmostEqual(first['weighted/pos_reward'],.1)
+            self.assertAlmostEqual(first['phase_rad'],2.2,places=6)
+            self.assertAlmostEqual(first['phase_target_rad'],np.pi)
+            self.assertAlmostEqual(first['phase_reward_factor'],np.exp(-5*(2.2-np.pi)**2),places=6)
+            self.assertEqual(first['is_reaction'],1.)
             self.assertEqual(resets[0],[0])
             self.assertTrue(all(not ids for ids in resets[1:]))
             self.assertEqual(cleanups,[True])
@@ -187,7 +195,38 @@ class ControllerEvaluationTests(unittest.TestCase):
             reader.close()
             from PIL import Image
             with Image.open(output/'metrics.png') as plot:
-                self.assertEqual(plot.size,(1800,1200))
+                self.assertEqual(plot.size,(1800,1800))
+
+    def test_phase_diagnostics_match_rewards(self):
+        from vid2player.tests.test_controller_baseline import definitions, ROOT
+        import math
+        ns=definitions(ROOT/'env/tasks/physics_mvae_controller.py',
+                       {'compute_reward_reach','compute_reward_return','compute_reward_return_w_estimate'},
+                       {'torch':torch,'math':math})
+        zeros=torch.zeros(1,3);no=torch.zeros(1,dtype=torch.bool)
+        for kind in ['reach','return','return_w_estimate']:
+            for swing in [-1,1,2]:
+                for phase in [0.,3.,np.pi,6.2]:
+                    task=SimpleNamespace(cfg_v2p={'reward_type':kind},_phase_pred=torch.tensor([phase]),
+                        _reward_scales={'phase':5.},_tar_action=torch.ones(1),
+                        _mvae_player=SimpleNamespace(_swing_type=torch.tensor([swing]),
+                            _swing_type_cycle=torch.tensor([swing])))
+                    if kind=='reach':
+                        reward,*_=ns['compute_reward_reach'](task._phase_pred,task._tar_action,zeros,zeros,
+                            task._mvae_player._swing_type,task._reward_scales,{'pos':1.})
+                    elif kind=='return':
+                        reward,*_=ns['compute_reward_return'](task._phase_pred,zeros,zeros,no,no,zeros,zeros,
+                            task._mvae_player._swing_type,task._reward_scales,{'pos':1.})
+                    else:
+                        reward,*_=ns['compute_reward_return_w_estimate'](zeros,task._phase_pred,
+                            task._mvae_player._swing_type_cycle,zeros,no,zeros,torch.zeros(1),no,zeros,
+                            task._reward_scales,{'pos':1.})
+                    self.assertAlmostEqual(phase_metrics(task)['phase_reward_factor'],reward.item(),places=6)
+        # A disabled phase head still records its placeholder honestly; zero scale is neutral.
+        task.cfg_v2p['predict_phase']=False
+        task._reward_scales['phase']=0.
+        self.assertEqual(phase_metrics(task)['phase_reward_factor'],1.)
+        self.assertFalse(phase_metrics(task)['phase_enabled'])
 
 
 if __name__=='__main__':

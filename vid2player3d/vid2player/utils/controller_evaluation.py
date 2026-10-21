@@ -197,6 +197,28 @@ def _number(value):
     return value if np.isfinite(value) else None
 
 
+def phase_metrics(task):
+    """Mirror the configured reward's phase term (ordinary, unwrapped error).
+
+    This is a multiplier of the proximity reward, not an additive reward.
+    Recovery/contact masks are reported separately from this factor.
+    """
+    reward_type = task.cfg_v2p.get('reward_type', 'return')
+    swing = task._mvae_player._swing_type
+    if reward_type == 'return_w_estimate':
+        swing = task._mvae_player._swing_type_cycle
+    swing = int(swing[0].item())
+    target = (3. if swing == -1 else np.pi) if reward_type == 'reach' else (3. if swing >= 2 else np.pi)
+    phase = _number(task._phase_pred[0].item())
+    error = None if phase is None else phase - target
+    scale = task._reward_scales.get('phase', 10.)
+    factor = None if error is None else float(np.exp(-scale * error**2))
+    return {'phase_rad': phase, 'phase_target_rad': target, 'phase_error_rad': error,
+            'phase_reward_factor': factor, 'phase_scale': scale, 'swing_type': swing,
+            'is_reaction': bool(task._tar_action[0].item() == 1),
+            'phase_enabled': bool(task.cfg_v2p.get('predict_phase', True))}
+
+
 def save_metrics_plot(filename, metrics, fps):
     """Save one static reward/loss figure for the complete evaluation flight."""
     from matplotlib.figure import Figure
@@ -210,11 +232,17 @@ def save_metrics_plot(filename, metrics, fps):
                [(name,[row['weighted_reward_components'].get(name) for row in metrics]) for name in components]),
               ('Weighted regularization losses', 'Loss contribution',
                [('auxiliary',[row['weighted_aux_dof_res_loss'] for row in metrics]),
-                ('bounds',[row['weighted_bounds_loss'] for row in metrics])])]
-    figure = Figure(figsize=(12,8), constrained_layout=True)
+                ('bounds',[row['weighted_bounds_loss'] for row in metrics])]),
+              ('Predicted and target phase', 'Phase (radians)',
+               [('predicted',[row['phase_rad'] for row in metrics]),
+                ('target',[row['phase_target_rad'] for row in metrics])]),
+              ('Phase reward factor: exp(-scale * error²)', 'Multiplier / reaction mask',
+               [('phase factor',[row['phase_reward_factor'] for row in metrics]),
+                ('reaction',[float(row['is_reaction']) for row in metrics])])]
+    figure = Figure(figsize=(12,12), constrained_layout=True)
     FigureCanvasAgg(figure)
     contact = next((row['time_s'] for row in metrics if row['has_contact']),None)
-    for axis,(title,label,curves) in zip(figure.subplots(2,2).ravel(),panels):
+    for axis,(title,label,curves) in zip(figure.subplots(3,2).ravel(),panels):
         for name,values in curves:
             values = np.asarray([np.nan if value is None else value for value in values])
             axis.plot(times,values,label=name,linewidth=1.8)
@@ -297,6 +325,7 @@ def evaluate_controller(player, args, evaluation):
             weighted = {name:None if val is None else val*weights.get(name[:-7],0.)
                         for name,val in components.items()}
             row = {'step':step+1,'time_s':(step+1)/fps,'reward':value,'cumulative_reward':cumulative,
+                   **phase_metrics(task),
                    'reward_components':components,'weighted_reward_components':weighted,
                    'aux_dof_res_loss':_number(aux_loss),'weighted_aux_dof_res_loss':_number(aux_weight*aux_loss),
                    'bounds_loss':_number(bounds_loss),'weighted_bounds_loss':_number(bounds_weight*bounds_loss),
@@ -313,6 +342,11 @@ def evaluate_controller(player, args, evaluation):
             value_text = 'n/a' if value is None else f'{value:.4f}'
             lines = [f"{case['preset']} | {Path(args.eval_checkpoint).stem}",
                      f"Step {step+1} | {(step+1)/fps:.2f}s | reward {value_text} | total {cumulative:.3f}",
+                     'Phase {} | target {:.3f} rad | factor {} | swing {}'.format(
+                         'n/a' if row['phase_rad'] is None else f"{row['phase_rad']:.3f}",
+                         row['phase_target_rad'],
+                         'n/a' if row['phase_reward_factor'] is None else f"{row['phase_reward_factor']:.3f}",
+                         row['swing_type']),
                      f"Ball-racket {dist_text} | best {best_text} | contact {'YES' if contact else 'NO'}",
                      f"Aux {aux_loss:.4f} | bounds {bounds_loss:.5f} | est-in {row['estimated_in']}"]
             frame = renderer.render(bodies,ball,racket,normal,target,trail[-12:],lines)
@@ -332,10 +366,18 @@ def evaluate_controller(player, args, evaluation):
                                   'bounds_loss':'Squared excess of action means beyond +/-1, summed over actions.',
                                   'ppo_actor_loss':None,'ppo_critic_loss':None,
                                   'note':'Evaluation performs no PPO update: actor/critic training losses are not computed. Regularization losses are reported unweighted and weighted.'},
+              'phase_definitions':{
+                  'phase_rad':'MVAE prediction mapped to [0, 2*pi); radians, not elapsed time.',
+                  'phase_target_rad':'Reach: 3 if swing=-1, else pi. Return: 3 if swing>=2, else pi; return_w_estimate uses cycle swing type.',
+                  'phase_error_rad':'phase_rad - phase_target_rad; no circular wrapping.',
+                  'phase_reward_factor':'exp(-phase_scale * phase_error_rad**2); multiplies proximity shaping, not an additive reward. Reach reward is zero outside reaction; return proximity shaping becomes 1 after contact.',
+                  'phase_enabled':'False means phase prediction is disabled; the recorded phase buffer is then a placeholder and phase_scale must be zero.'},
               }
     columns = ['step','time_s','reward','cumulative_reward','aux_dof_res_loss',
                'weighted_aux_dof_res_loss','bounds_loss','weighted_bounds_loss',
                'total_regularization_loss','ball_racket_distance_m','has_contact','estimated_in','terminated']
+    columns += ['phase_rad','phase_target_rad','phase_error_rad','phase_reward_factor',
+                'phase_scale','swing_type','is_reaction','phase_enabled']
     component_names = sorted({name for row in metrics for name in row['reward_components']})
     metric_values = [[np.nan if row[key] is None else row[key] for key in columns]+
                      [row['reward_components'].get(name,np.nan) for name in component_names]+

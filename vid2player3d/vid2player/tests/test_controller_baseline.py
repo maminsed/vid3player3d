@@ -50,7 +50,7 @@ def test_phase_free_rewards_and_latched_contact():
     assert math.isclose(reward[1].item(), .1, rel_tol=1e-6)
 
 
-def check_phase_free_residual_preserves_decoded_pose(training):
+def residual_player(training):
     ns = definitions(ROOT / 'players/mvae_player.py', {'MVAEPlayer'}, {
         'torch': torch, 'math': math,
         'rotmat_to_rot6d': rotmat_to_rot6d, 'rot6d_to_rotmat': rot6d_to_rotmat,
@@ -77,6 +77,12 @@ def check_phase_free_residual_preserves_decoded_pose(training):
     base = angle_axis_to_rotation_matrix(rotations)
     feature = torch.zeros(2, 288)
     feature[:, 144:] = rotmat_to_rot6d(base).reshape(2, -1)
+    return player, feature, rotations
+
+
+def check_phase_free_residual_preserves_decoded_pose(training):
+    player, feature, rotations = residual_player(training)
+    base = angle_axis_to_rotation_matrix(rotations)
     player._update_mvae_state(feature.clone(), residual=torch.zeros(2, 3))
     assert torch.allclose(player._joint_rotmat, base, atol=1e-5)
     residual = torch.tensor([[.4, -.4, .4]]).repeat(2, 1)
@@ -160,6 +166,29 @@ def check_batched_mvae_decode():
 
 
 class ControllerBaselineTests(unittest.TestCase):
+    def test_phase_residual_parity_and_legacy_gate(self):
+        residual = torch.tensor([[.4, -.4, .4]]).repeat(2, 1)
+        for name in ['djokovic', 'federer', 'nadal']:
+            for phase in [1., 2.5, 2.8, 3., 3.1, 3.2, 3.6]:
+                poses = {}
+                for legacy in [False, True]:
+                    for training in [False, True]:
+                        player, feature, _ = residual_player(training)
+                        player._predict_phase = True
+                        player.cfg.update(player=name, legacy_eval_residual_gating=legacy)
+                        player._phase_pred = torch.full((2,), phase)
+                        player._swing_type = torch.tensor([1, 2])
+                        player._update_mvae_state(feature.clone(), residual=residual)
+                        poses[legacy, training] = player._joint_rotmat.clone()
+                # Unified eval follows the original training targets, at every gate.
+                torch.testing.assert_close(poses[False, False], poses[False, True])
+                torch.testing.assert_close(poses[False, True], poses[True, True])
+                # Historical suppression only changes residuals outside swing gates.
+                if phase in [1., 3.6]:
+                    self.assertFalse(torch.allclose(poses[True, False], poses[False, False]))
+                if phase == 2.8:
+                    torch.testing.assert_close(poses[True, False], poses[False, False])
+
     def test_batched_decoder(self):
         check_batched_mvae_decode()
 

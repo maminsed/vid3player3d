@@ -354,7 +354,8 @@ class MVAEPlayer:
                 eblow_twist_base[during_bh_swing] = -0.25
                 wrist_swing_base[during_bh_pre_contact] = 0.1
 
-                if not self._is_train:
+                # Match training by default; opt in to the historical eval-only gate.
+                if self.cfg.get('legacy_eval_residual_gating', False) and not self._is_train:
                     not_swing = ~(during_fh_swing | during_bh_swing)
                     residual[not_swing, :] = 0
 
@@ -397,7 +398,7 @@ class MVAEPlayer:
                 eblow_twist_base[during_serve] = -0.25
                 wrist_swing_base[pre_serve] = -0.5
 
-                if not self._is_train:
+                if self.cfg.get('legacy_eval_residual_gating', False) and not self._is_train:
                     not_swing = ~(during_fh_swing | during_bh_swing)
                     residual[not_swing, :] = 0
 
@@ -427,7 +428,7 @@ class MVAEPlayer:
                 wrist_twist_base[during_bh_swing] = -0.4 # for changing grip
                 wrist_swing_base[during_bh_pre_contact] = -0.25
 
-                if not self._is_train:
+                if self.cfg.get('legacy_eval_residual_gating', False) and not self._is_train:
                     not_swing = ~(during_fh_swing | during_bh_swing)
                     residual[not_swing, :] = 0
 
