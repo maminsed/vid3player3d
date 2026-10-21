@@ -1,0 +1,177 @@
+name: PhysicsMVAEController
+test_name: MVAEControllerVis
+env: 
+  numEnvs: 2048  # Conservative starting point for a 16 GiB GPU.
+  episodeLength: 600
+  envSpacing: 5
+  isFlagrun: False
+  enableDebugVis: False
+  powerScale: 1.0
+  numAMPObsSteps: 10
+  enableHistObs: False
+  enableEarlyTermination: False
+
+  physics:
+    config: usopen_im
+    pretrained_model_cp: output/tennis_im_training_2/models/tennis_motion_2_latest.pth
+    name: HumanoidSMPLIMMVAE
+    test_name: HumanoidSMPLIMMVAE
+    assetFileName: smpl_mesh_humanoid_djokovic.xml
+    residual_force_scale: 31.85
+    # Original usopen_im defaults before 2148c896432602516a424a9cff82febb8ad8258c.
+    dt: 0.016666666666666666
+    controlFrequencyInv: 2
+    substeps: 2
+    solver_type: 1
+    num_position_iterations: 4
+    num_velocity_iterations: 0
+    contact_offset: 0.02
+    rest_offset: 0.0
+    bounce_threshold_velocity: 0.2
+    max_depenetration_velocity: 10.0
+    friction_offset_threshold: 0.02
+    plane_restitution: 0.5
+
+  vid2player:
+    mvae_ver: usopen_6_4
+    mvae_inference_batch_size: 512  # Bound per-environment mixed decoder weights.
+    predict_phase: True
+    righthand: True
+    player: djokovic
+    grip: semi_western  # Matches the Djokovic asset's physical racket head.
+    # Allowed root XY (meters); crossing a bound ends the episode.
+    court_min: [-5, -16]
+    court_max: [5, -10]
+    racket_friction: 0.8
+    ball_friction: 0.2
+    restitution: 0.9
+    spin_scale: 5
+    # Explicit compatibility settings for the pre-2148c89 training runs.
+    ball_physics:
+      model: legacy
+    tennis_contacts:
+      model: legacy
+    racket_dynamics:
+      model: legacy
+
+    reward_weights: {'pos': 1}
+    reward_scales: {'pos': 5, 'phase': 5}
+    # Broad reaching feedback first, then precise racket positioning.
+    # Frames are total environment transitions, not physics steps or epochs.
+    # At 2048 envs x 64 steps: hold for 200 iterations, ramp until 800.
+    # Evaluation always uses the fixed pos scale above (5).
+    pos_reward_schedule:
+      type: linear
+      start: 1.0
+      end: 5.0
+      start_frame: 26214400
+      end_frame: 104857600
+    reward_type: reach
+    ball_traj_out_x_file: data/ball_traj/ball_traj_out_x.npy
+    ball_traj_out_y_file: data/ball_traj/ball_traj_out_y.npy
+
+    obs_ball_traj_length: 10
+    use_history_ball_obs: False
+    ball_traj_file: data/ball_traj/ball_traj_in_subs2.npy
+    use_random_ball_target: True
+
+    vae_action_scale: 1.5
+    add_residual_dof: euler
+    residual_dof_scale: 0.4
+    aux_loss_specs: {'dof_res': 0.01}
+    fix_head_orientation: True
+
+    vae_init_conditions: data/vae/vae_init_condition_usopen_2.pt
+    reset_reaction_nframes: 70
+    random_walk_in_recovery: True
+    
+sim:
+  none: 0
+
+params:
+  seed: 10
+
+  algo:
+    name: vid2player
+
+  model:
+    name: vid2player
+
+  network:
+    name: vid2player
+    separate: True
+    actor_net_type: 'style_cat1'
+    latent_type: 'sphere'
+
+    space:
+      continuous:
+        mu_activation: None
+        sigma_activation: None
+        mu_init:
+          name: default
+        sigma_init:
+          name: const_initializer
+          val: -0.69
+        fixed_sigma: True
+
+    mlp:
+      units: [1024, 1024, 512]
+      activation: relu
+      d2rl: False
+
+      initializer:
+        name: default
+      regularizer:
+        name: None
+
+    disc:
+      units: [1024, 1024, 512]
+      activation: relu
+
+      initializer:
+        name: default
+
+    enc:
+      units: [1024, 512]
+      activation: relu
+      separate: False
+
+      initializer:
+        name: default
+
+  load_checkpoint: False
+
+  config:
+    name: high_level_2
+    description: "Changed MVAE from usopen_6_3 to usopen_6_4."
+    protect_existing_checkpoints: True
+    env_name: rlgpu
+    multi_gpu: False
+    ppo: True
+    mixed_precision: False
+    normalize_input: True
+    normalize_value: True
+    reward_shaper:
+      scale_value: 1
+    normalize_advantage: True
+    gamma: 0.99
+    tau: 0.95
+    learning_rate: 1e-4
+    lr_schedule: constant
+    score_to_win: 20000
+    max_epochs: 1000
+    save_best_after: 50
+    save_frequency: 100
+    print_stats: True
+    entropy_coef: 0.0
+    truncate_grads: True
+    grad_norm: 50.0
+    e_clip: 0.2
+    horizon_length: 64
+    minibatch_size: 4096
+    mini_epochs: 3
+    critic_coef: 5
+    clip_value: False
+    seq_len: 4
+    bounds_loss_coef: 10
+    clip_actions_val: 5.0

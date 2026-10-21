@@ -3,8 +3,8 @@
 From `vid2player3d`, run a fixed suite against an explicit high-level checkpoint:
 
 ```bash
-python vid2player/run.py --validation --cfg usopen_train_stage_1 \
-  --eval_checkpoint results/usopen_train_stage_1_mvae_6_3/models/usopen_6_3_best.pth \
+python vid2player/run.py --validation --cfg usopen_train_stage_1/high_level_1 \
+  --eval_checkpoint results/usopen_train_stage_1__high_level_1/models/high_level_1_best.pth \
   --rl_device cpu --sim_device cpu --pipeline cpu
 ```
 

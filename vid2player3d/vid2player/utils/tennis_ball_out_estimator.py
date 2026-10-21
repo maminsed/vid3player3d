@@ -165,7 +165,7 @@ class TennisBallOutEstimator():
         VEL_X_RANGE, VEL_Y_RANGE, TRAJ_Y_RANGE = \
             self.params.VEL_X_RANGE, self.params.VEL_Y_RANGE, self.params.TRAJ_Y_RANGE
 
-        device = ball_states_all.get_device()
+        device = ball_states_all.device
         has_valid_contact = (ball_states_all[:, 8] > VEL_X_RANGE[0]) & (ball_states_all[:, 9] > VEL_Y_RANGE[0]) \
             & (ball_states_all[:, 9] < VEL_Y_RANGE[1]) & (ball_states_all[:, 2] < TRAJ_Y_RANGE[1])
         # inside when passing the net
