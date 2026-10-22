@@ -21,6 +21,7 @@ from vid2player.utils.tennis_contacts import contact_materials, ground_impact, r
 from vid2player.utils.tennis_materials import configure_ball_asset, configure_racket_asset
 from vid2player.utils.ball_physics import resolve_ball_physics, configure_ball_options, resolve_ball_asset, ball_aerodynamic_force
 from vid2player.utils.ground_alignment import reset_height_offset
+from vid2player.utils.racket_diagnostics import racket_ball_snapshot
 
 import torch
 import torch.nn.functional as F
@@ -812,7 +813,11 @@ class HumanoidSMPLIMMVAE(HumanoidSMPL):
         self._prev_target_rb_rot = self._target_rb_rot.clone()
     
     def _physics_step(self):
+        record = getattr(self, '_record_racket_diagnostics', False)
         for i in range(self.control_freq_inv):
+            if record:
+                self.gym.refresh_rigid_body_state_tensor(self.sim)
+                diagnostic = {'pre_' + key: value for key, value in racket_ball_snapshot(self).items()}
             if self._tennis_contacts.enabled:
                 previous_ball = self._ball_root_states.clone()
                 previous_racket = self._rigid_body_pos_origin[
@@ -844,13 +849,23 @@ class HumanoidSMPLIMMVAE(HumanoidSMPL):
                     self._contact_env_ids, self._contact_racket_ids]
                 expected_change = self.forces[:, -1] / .057 * self.sim_params.dt
                 expected_change[:, 2] -= 9.81 * self.sim_params.dt
-                hit = racket_impact(
+                impact_result = racket_impact(
                     previous_ball, self._ball_root_states, previous_racket, racket_position,
                     self._contact_forces[:, -1], self._contact_forces[
                         self._contact_env_ids, self._contact_racket_ids], expected_change,
                     self._ball_physics.radius, self._tennis_contacts.racket_contact_offset,
-                    self.sim_params.dt)
+                    self.sim_params.dt, return_details=record)
+                if record:
+                    hit, evidence = impact_result
+                    diagnostic.update(evidence)
+                    diagnostic['ground_impact'] = ground_hit.clone()
+                    diagnostic['contact_already_latched'] = self._has_racket_ball_contact.clone()
+                    diagnostic['expected_delta_v_mps'] = expected_change.clone()
+                else:
+                    hit = impact_result
                 hit &= ~ground_hit & ~self._has_racket_ball_contact
+                if record:
+                    diagnostic['accepted_contact'] = hit.clone()
                 self._has_racket_ball_contact_now |= hit
                 self._has_racket_ball_contact |= hit
 
@@ -866,6 +881,14 @@ class HumanoidSMPLIMMVAE(HumanoidSMPL):
                     (self._contact_forces[:, -1].sum(dim=-1) != 0)
                 self._has_racket_ball_contact_now |= has_racket_ball_contact_now
                 self._has_racket_ball_contact |= has_racket_ball_contact_now
+
+            if record:
+                self.gym.refresh_rigid_body_state_tensor(self.sim)
+                diagnostic.update({'post_' + key: value for key, value in racket_ball_snapshot(self).items()})
+                diagnostic['ball_contact_force_n'] = self._contact_forces[:, -1].clone()
+                diagnostic['racket_contact_force_n'] = self._contact_forces[
+                    self._contact_env_ids, self._contact_racket_ids].clone()
+                self._racket_diagnostic_samples.append(diagnostic)
 
             self._contact_forces_sum += self._contact_forces
 

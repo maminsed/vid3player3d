@@ -11,6 +11,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 from vid2player.utils.tennis_court import NET_HEIGHT_M
+from vid2player.utils.racket_diagnostics import racket_ball_snapshot, racket_geometry
 
 
 BALL_PRESETS = {
@@ -300,6 +301,37 @@ def evaluate_controller(player, args, evaluation):
     player.model.eval()
     task = player.task
     physics = task._physics_player.task
+    # Read actual simulator properties, including density-derived legacy COM.
+    racket_id = int(physics._contact_racket_ids.reshape(-1)[0].item())
+    racket_prop = physics.gym.get_actor_rigid_body_properties(
+        physics.envs[0], physics.humanoid_handles[0])[racket_id]
+    com_local = [racket_prop.com.x, racket_prop.com.y, racket_prop.com.z]
+    grip = task.cfg_v2p.get('grip', 'eastern')
+    normal_local = [0., 1., 0.] if grip == 'eastern' else [0., 2**-.5, 2**-.5]
+    diagnostics_metadata = {
+        'schema_version': 2,
+        'coordinates': 'Simulator world frame, meters; +Y toward opponent, +Z up.',
+        'state_layout': 'XYZ position, XYZW quaternion, XYZ linear velocity m/s, XYZ angular velocity rad/s.',
+        'frame_sampling': 'Post-control-step simulator state; original rollout arrays are preserved.',
+        'physics_sampling': 'Pre/post gym.simulate intervals, NOT individual internal PhysX substeps. physics_control_step is 1-based; physics_interval_in_control_step is 0-based.',
+        'physics_dt_s': float(physics.sim_params.dt),
+        'physx_substeps': int(physics.sim_params.substeps),
+        'racket_body_id': racket_id,
+        'racket_com_local_m': com_local,
+        'racket_mass_kg': float(racket_prop.mass),
+        'racket_inertia_local_kg_m2': [[float(getattr(getattr(racket_prop.inertia, a), b))
+                                       for b in 'xyz'] for a in 'xyz'],
+        'racket_face_normal_local': normal_local,
+        'face_normal_definition': 'Configured grip normal rotated by actual racket body quaternion; sign is a convention, not a chosen contacting side.',
+        'surface_velocity_definition': 'v_COM + omega cross (ball_center - COM); proxy at ball center, NOT measured contact location.',
+        'contact_force_definition': 'Net body contact force tensors in N, not pair-resolved impulses; short impacts may be absent.',
+        'contact_evidence_definition': 'Independent proximity, sensor and residual-delta-v checks. accepted_contact additionally excludes ground impact and previously latched contact.',
+        'detector_evidence_available': bool(physics._tennis_contacts.enabled),
+        'missing_contact_information': 'Exact contact point, contact normal and colliding shape pair are not provided by this recorder.',
+        'ball_radius_m': float(physics._ball_physics.radius),
+        'racket_dynamics': dict(vars(physics._racket_dynamics)),
+        'tennis_contacts': dict(vars(physics._tennis_contacts)),
+    }
     names = physics.gym.get_asset_rigid_body_names(physics.humanoid_asset)
     renderer = CourtRenderer(names,task.cfg_v2p['court_min'],task.cfg_v2p['court_max'])
     fps = 1./physics.dt
@@ -316,19 +348,31 @@ def evaluate_controller(player, args, evaluation):
     task._compute_observations()
     obs = player.obs_to_torch(task.obs_buf.to(player.device))
     cumulative,closest,contact_step = 0.,None,None
-    metrics,states,trail = [],[],[]
+    metrics,states,trail,physics_samples = [],[],[],[]
     end_reason = 'step_limit'
     bounds_weight = player.config.get('bounds_loss_coef',0.) or 0.
     aux_weight = task.cfg_v2p.get('aux_loss_specs',{}).get('dof_res',0.)
     writer = imageio.get_writer(str(output/'video.mp4'),fps=fps,codec='libx264',quality=7,macro_block_size=16)
     try:
         for step in range(args.eval_steps):
+            physics._record_racket_diagnostics = True
+            physics._racket_diagnostic_samples = []
             action = player.get_action(obs,is_determenistic=True)
             means = _cpu(action)[0]
             bounds_loss = float(np.square(np.maximum(np.abs(means)-1,0)).sum())
             residual = means[task._num_mvae_action:task._num_mvae_action+task._num_res_dof_action]
             aux_loss = float(np.square(residual).sum())
             obs,reward,done,info = player.env_step(player.env,action)
+            snapshot = racket_ball_snapshot(physics)
+            snapshot.update(racket_geometry(snapshot, com_local, normal_local))
+            for interval, sample in enumerate(physics._racket_diagnostic_samples):
+                for prefix in ('pre_', 'post_'):
+                    geometry = racket_geometry({key: sample[prefix + key]
+                                                for key in ('ball_state', 'racket_state')},
+                                               com_local, normal_local)
+                    sample.update({prefix + key: value for key, value in geometry.items()})
+                physics_samples.append({'control_step': step+1, 'interval_in_control_step': interval,
+                                        **{key: _cpu(value)[0].copy() for key, value in sample.items()}})
             bodies,ball,racket,normal,target,root = [ _cpu(value)[0] for value in
                 [physics._rigid_body_pos,task._ball_pos,task._racket_pos,task._racket_normal,
                  task._target_bounce_pos,task._root_pos] ]
@@ -368,7 +412,8 @@ def evaluate_controller(player, args, evaluation):
                 eta = row['interception_eta_at_action_s']
                 row['interception_contact_error_s'] = None if contact_step != step+1 or eta is None else 1/fps - eta
             metrics.append(row)
-            states.append({'body_xyz':bodies,'ball_xyz':ball,'racket_xyz':racket,'policy_mean':means})
+            states.append({'body_xyz':bodies,'ball_xyz':ball,'racket_xyz':racket,'policy_mean':means,
+                           **{key: _cpu(value)[0].copy() for key, value in snapshot.items()}})
             trail.append(ball)
             dist_text = 'n/a' if distance is None else f'{distance:.3f}m'
             best_text = 'n/a' if closest is None else f'{closest:.3f}m'
@@ -394,6 +439,8 @@ def evaluate_controller(player, args, evaluation):
             task._reset_reaction_buf[:] = False
             obs = player.env_reset(torch.empty(0,dtype=torch.long,device=task.device))
     finally:
+        physics._record_racket_diagnostics = False
+        physics._racket_diagnostic_samples = []
         writer.close()
         temporary.cleanup()
     # One accompanying data file: actual motion and the paired launch/preview.
@@ -431,6 +478,9 @@ def evaluate_controller(player, args, evaluation):
     metric_names = columns+['raw/'+name for name in component_names]+['weighted/'+name for name in component_names]
     np.savez_compressed(output/'rollout.npz',launch_row=np.asarray(source[case['source_row']]),
                         metrics=np.asarray(metric_values,dtype=float),metric_names=np.asarray(metric_names),
+                        diagnostics_metadata_json=np.asarray(json.dumps(diagnostics_metadata)),
+                        **({'physics_' + key: np.stack([sample[key] for sample in physics_samples])
+                            for key in physics_samples[0]} if physics_samples else {}),
                         **{key:np.stack([state[key] for state in states]) for key in states[0]})
     config_path = output/'evaluation_config.json'
     config = json.loads(config_path.read_text())

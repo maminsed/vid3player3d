@@ -110,7 +110,7 @@ def apply_solver_config(sim_params, physics):
 
 def racket_impact(previous, current, racket_previous, racket_current,
                   ball_contact_force, racket_contact_force, expected_velocity_change,
-                  radius, contact_margin, dt):
+                  radius, contact_margin, dt, *, return_details=False):
     """Racket-region event from impulses and a swept proximity check.
 
     GPU contact tensors can omit short impacts even with all-substep collection.
@@ -129,7 +129,17 @@ def racket_impact(previous, current, racket_previous, racket_current,
     sensors = ((ball_contact_force.square().sum(-1) > 1e-8)
                & (racket_contact_force.square().sum(-1) > 1e-8))
     impulse = current[:, 7:10] - previous[:, 7:10] - expected_velocity_change
-    return near & (sensors | (impulse.square().sum(-1) > 4.))
+    impulse_evidence = impulse.square().sum(-1) > 4.
+    hit = near & (sensors | impulse_evidence)
+    if return_details:
+        return hit, {
+            'swept_distance_m': closest.norm(dim=-1),
+            'proximity_pass': near,
+            'sensor_evidence': sensors,
+            'impulse_evidence': impulse_evidence,
+            'residual_delta_v_mps': impulse,
+        }
+    return hit
 
 
 def preview_timing(sim_params):

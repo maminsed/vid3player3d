@@ -147,6 +147,26 @@ class ControllerEvaluationTests(unittest.TestCase):
                 _rigid_body_pos=torch.zeros(1,6,3),_has_racket_ball_contact=torch.zeros(1,dtype=torch.bool),
                 _has_bounce_now=torch.zeros(1,dtype=torch.bool),_bounce_pos=torch.zeros(1,3),
                 _ball_generator=SimpleNamespace(sample_idx=torch.zeros(1,dtype=torch.long)))
+            from vid2player.utils.racket_diagnostics import racket_ball_snapshot
+            from vid2player.utils.tennis_contacts import resolve_tennis_contacts
+            from vid2player.utils.racket_dynamics import resolve_racket_dynamics
+            from vid2player.utils.ball_physics import resolve_ball_physics
+            vector=lambda x,y,z:SimpleNamespace(x=x,y=y,z=z)
+            prop=SimpleNamespace(mass=.27,com=vector(.18,0,0),
+                inertia=SimpleNamespace(x=vector(.0012,0,0),y=vector(0,.0123,0),z=vector(0,0,.01349)))
+            physics.gym.get_actor_rigid_body_properties=lambda *args:[prop]
+            physics.envs=[object()];physics.humanoid_handles=[object()]
+            physics.sim_params=SimpleNamespace(dt=1/60,substeps=12)
+            physics._tennis_contacts=resolve_tennis_contacts({'model':'hardcourt_v1'})
+            physics._racket_dynamics=resolve_racket_dynamics()
+            physics._ball_physics=resolve_ball_physics()
+            physics._contact_env_ids=torch.tensor([0]);physics._contact_racket_ids=torch.tensor(0)
+            physics._rigid_body_pos_origin=torch.zeros(1,1,3)
+            physics._rigid_body_rot_origin=torch.tensor([[[0.,0.,0.,1.]]])
+            physics._rigid_body_vel_origin=torch.zeros(1,1,3)
+            physics._rigid_body_ang_vel_origin=torch.zeros(1,1,3)
+            physics._ball_root_states=torch.zeros(1,13)
+            physics._ball_root_states[:,6]=1
             task=SimpleNamespace(device='cpu',_physics_player=SimpleNamespace(task=physics),
                 cfg_v2p={'court_min':[-5,-16],'court_max':[5,-10],
                          'reward_type':'reach', 'reward_weights':{'pos':1.},'aux_loss_specs':{'dof_res':.01}},
@@ -169,6 +189,16 @@ class ControllerEvaluationTests(unittest.TestCase):
                 return {'obs':task.obs_buf}
             def step(env,action):
                 n=len(steps)+1;steps.append(n)
+                for interval in range(2):
+                    pre=racket_ball_snapshot(physics)
+                    physics._ball_root_states[:,8]=n + interval/2
+                    post=racket_ball_snapshot(physics)
+                    physics._racket_diagnostic_samples.append({
+                        **{'pre_'+k:v for k,v in pre.items()},
+                        **{'post_'+k:v for k,v in post.items()},
+                        'accepted_contact':torch.tensor([n==2 and interval==0]),
+                        'sensor_evidence':torch.tensor([False]),
+                        'impulse_evidence':torch.tensor([n==2 and interval==0])})
                 task._phase_pred[:]=2. + n*.2
                 task._ball_pos[:,1:]=torch.tensor([-13.,1.])
                 task._ball_pos[:,0]=.4/n
@@ -194,6 +224,17 @@ class ControllerEvaluationTests(unittest.TestCase):
             first=dict(zip(data['metric_names'].tolist(),data['metrics'][0]))
             self.assertEqual(report['steps'],4)
             self.assertEqual(report['contact_step'],2)
+            self.assertEqual(data['racket_state'].shape,(4,13))
+            self.assertEqual(data['physics_pre_ball_state'].shape,(8,13))
+            np.testing.assert_array_equal(data['physics_control_step'],[1,1,2,2,3,3,4,4])
+            np.testing.assert_array_equal(data['physics_interval_in_control_step'],[0,1]*4)
+            np.testing.assert_allclose(data['ball_state'][:,8],[1.5,2.5,3.5,4.5])
+            self.assertEqual(data['physics_accepted_contact'].sum(),1)
+            self.assertTrue(data['physics_accepted_contact'][2])
+            self.assertEqual(data['physics_pre_ball_state'][0,8],0.)
+            metadata=json.loads(data['diagnostics_metadata_json'].item())
+            self.assertEqual(metadata['racket_com_local_m'],[.18,0,0])
+            self.assertFalse(physics._record_racket_diagnostics)
             self.assertEqual(report['end_reason'],'movement_boundary')
             self.assertAlmostEqual(report['total_reward'],.4)
             self.assertAlmostEqual(first['aux_dof_res_loss'],.04)
