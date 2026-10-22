@@ -10,6 +10,7 @@ from pathlib import Path
 
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
+from vid2player.utils.tennis_court import NET_HEIGHT_M
 
 
 BALL_PRESETS = {
@@ -140,10 +141,10 @@ class CourtRenderer:
         for y in [-6.4,6.4]:
             self.line(draw, [[-4.115,y,0], [4.115,y,0]], 'white')
         self.line(draw, [[0,-6.4,0], [0,6.4,0]], 'white')
-        for z in [.2,.4,.6,.8,1.07]:
+        for z in [.2,.4,.6,.8,NET_HEIGHT_M]:
             self.line(draw, [[-6.395,0,z], [6.395,0,z]], (195,195,195))
         for x in [-6.395,6.395]:
-            self.line(draw, [[x,0,0], [x,0,1.07]], 'white', 3)
+            self.line(draw, [[x,0,0], [x,0,NET_HEIGHT_M]], 'white', 3)
         a,b = court_min,court_max
         self.line(draw, [[a[0],a[1],.01], [b[0],a[1],.01], [b[0],b[1],.01],
                          [a[0],b[1],.01], [a[0],a[1],.01]], (230,140,75))
@@ -208,7 +209,7 @@ def phase_metrics(task):
     if reward_type == 'return_w_estimate':
         swing = task._mvae_player._swing_type_cycle
     swing = int(swing[0].item())
-    target = (3. if swing == -1 else np.pi) if reward_type == 'reach' else (3. if swing >= 2 else np.pi)
+    target = (3. if swing == -1 else np.pi) if reward_type in ('reach', 'return_curriculum') else (3. if swing >= 2 else np.pi)
     phase = _number(task._phase_pred[0].item())
     error = None if phase is None else phase - target
     scale = task._reward_scales.get('phase', 10.)
@@ -405,7 +406,7 @@ def evaluate_controller(player, args, evaluation):
                                   'note':'Evaluation performs no PPO update: actor/critic training losses are not computed. Regularization losses are reported unweighted and weighted.'},
               'phase_definitions':{
                   'phase_rad':'MVAE prediction mapped to [0, 2*pi); radians, not elapsed time.',
-                  'phase_target_rad':'Reach: 3 if swing=-1, else pi. Return: 3 if swing>=2, else pi; return_w_estimate uses cycle swing type.',
+                  'phase_target_rad':'Reach/return_curriculum: 3 if swing=-1, else pi. Return: 3 if swing>=2, else pi; return_w_estimate uses cycle swing type.',
                   'phase_error_rad':'phase_rad - phase_target_rad; no circular wrapping.',
                   'phase_reward_factor':'exp(-phase_scale * phase_error_rad**2); multiplies proximity shaping, not an additive reward. Reach reward is zero outside reaction; return proximity shaping becomes 1 after contact.',
                   'phase_enabled':'False means phase prediction is disabled; the recorded phase buffer is then a placeholder and phase_scale must be zero.'},

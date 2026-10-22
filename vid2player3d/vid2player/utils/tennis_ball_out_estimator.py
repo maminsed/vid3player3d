@@ -8,6 +8,7 @@ import torch.nn.functional as F
 from tqdm import tqdm
 
 from vid2player.utils.tennis_contacts import preview_timing
+from vid2player.utils.tennis_court import NET_HEIGHT_M
 from vid2player.utils.tennis_ball import * 
 
 
@@ -193,7 +194,7 @@ class TennisBallOutEstimator():
             # set bounce pos to 0 if ball into net
             net_dist = -ball_states[:, 1] / ball_states[:, 8] * vel_x
             net_index = self.get_ball_traj_out_x_index(net_dist)
-            not_pass_net = ball_traj_x[torch.arange(num_need_update), net_index] + ball_states[:, 2].cpu() < NET_HEIGHT
+            not_pass_net = ball_traj_x[torch.arange(num_need_update), net_index] + ball_states[:, 2].cpu() < NET_HEIGHT_M
             bounce_pos[not_pass_net, :] = 0
             bounce_time[not_pass_net] = 0
 

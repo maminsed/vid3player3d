@@ -3,6 +3,7 @@ from vid2player.env.utils.player_builder import PlayerBuilder
 from vid2player.utils.tennis_ball_out_estimator import TennisBallOutEstimator
 from vid2player.utils.common import AverageMeter
 from vid2player.utils.reward_schedule import LinearRewardSchedule
+from vid2player.utils.return_curriculum import ReturnCurriculum, COMPONENTS
 from vid2player.utils.racket_control import resolve_racket_control, InterceptionWindow
 from vid2player.utils.torch_transform import quat_to_rot6d
 from utils import torch_utils
@@ -57,6 +58,8 @@ class PhysicsMVAEController():
         self._racket_pos = torch.zeros((self.num_envs, 3), device=self.device, dtype=torch.float32)
         self._racket_normal = torch.zeros((self.num_envs, 3), device=self.device, dtype=torch.float32)
         self._reward_scales = self.cfg_v2p.get('reward_scales', {}).copy()
+        self._reward_weights = self.cfg_v2p.get('reward_weights', {}).copy()
+        self._return_curriculum = None
         schedule = self.cfg_v2p.get('pos_reward_schedule')
         self._pos_reward_schedule = LinearRewardSchedule(schedule) if schedule else None
         # Evaluation keeps the configured fixed scale, independent of checkpoint age.
@@ -75,6 +78,7 @@ class PhysicsMVAEController():
         self._est_bounce_pos = torch.zeros((self.num_envs, 3), device=self.device, dtype=torch.float32)
         self._est_bounce_time = torch.zeros(self.num_envs, device=self.device, dtype=torch.float32)
         self._est_bounce_in = torch.zeros(self.num_envs, device=self.device, dtype=torch.bool)
+        self._est_bounce_valid = torch.zeros(self.num_envs, device=self.device, dtype=torch.bool)
         self._est_max_height = torch.zeros(self.num_envs, device=self.device, dtype=torch.float32)
         if not self.cfg_v2p.get('dual_mode'):
             self._ball_out_estimator = TennisBallOutEstimator(
@@ -104,6 +108,15 @@ class PhysicsMVAEController():
         self._num_reset = torch.zeros(self.num_envs, device=self.device, dtype=torch.int64)
         self._distance = torch.zeros(self.num_envs, device=self.device, dtype=torch.float32)
 
+        if self.cfg_v2p.get('reward_type') == 'return_curriculum':
+            if self.cfg_v2p.get('dual_mode'):
+                raise ValueError('Return curriculum currently supports single-player control only')
+            self._return_curriculum = ReturnCurriculum(
+                self.num_envs, self.device, self.cfg_v2p.get('return_curriculum', {}),
+                self._reward_weights, self._reward_scales, self._physics_player.task.dt,
+                ball_radius=self._physics_player.task._ball_physics.radius)
+            self.set_reward_schedule_progress(0)
+
         self._sub_rewards = [None] * self.num_envs
         self._sub_rewards_names = None
         self._mvae_actions = None
@@ -129,6 +142,8 @@ class PhysicsMVAEController():
         """Called before collecting a rollout; frame is restored on full resume."""
         if self._is_train and self._pos_reward_schedule is not None:
             self._reward_scales['pos'] = self._pos_reward_schedule.value(frame)
+        if self._is_train and getattr(self, '_return_curriculum', None) is not None:
+            self._return_curriculum.set_progress(frame)
 
     def get_action_size(self):
         return self._num_actions
@@ -243,7 +258,10 @@ class PhysicsMVAEController():
         self._est_bounce_pos[env_ids, :] = 0
         self._est_bounce_time[env_ids] = 0
         self._est_bounce_in[env_ids] = 0
+        self._est_bounce_valid[env_ids] = False
         self._est_max_height[env_ids] = 0
+        if self._return_curriculum is not None:
+            self._return_curriculum.reset(env_ids, self._ball_pos[env_ids])
         self._mvae_player._swing_type_cycle[env_ids] = -1
 
         self._tar_time_total[env_ids] = self.cfg_v2p['reset_reaction_nframes'] + \
@@ -331,6 +349,7 @@ class PhysicsMVAEController():
                 self._physics_player.task._ball_root_states[has_contact_now])
             if has_valid_contact.sum() > 0:
                 env_ids = has_contact_now.nonzero(as_tuple=False).flatten()[has_valid_contact]
+                self._est_bounce_valid[env_ids] = True
                 self._est_bounce_pos[env_ids, :2] = bounce_pos
                 self._est_bounce_time[env_ids] = bounce_time
                 self._est_max_height[env_ids] = max_height
@@ -397,9 +416,22 @@ class PhysicsMVAEController():
     
     def _compute_reward(self, actions):
         reward_type = self.cfg_v2p.get('reward_type', 'return')
-        reward_weights = self.cfg_v2p.get('reward_weights', {})
+        reward_weights = self._reward_weights
 
-        if reward_type == 'reach':
+        if reward_type == 'return_curriculum':
+            reach, _, _ = compute_reward_reach(
+                self._phase_pred, self._tar_action, self._racket_pos, self._ball_pos,
+                self._mvae_player._swing_type, self._reward_scales, {'pos': 1.})
+            player = self._physics_player.task
+            events = self._return_curriculum.step(
+                self._ball_pos, self._ball_vel, player._has_racket_ball_contact_now,
+                player._has_bounce_now, player._bounce_pos, self._target_bounce_pos,
+                self._est_bounce_valid)
+            self._sub_rewards = torch.cat((reach[:, None], events), dim=-1)
+            weights = self._sub_rewards.new_tensor([reward_weights[k] for k in COMPONENTS])
+            self.rew_buf[:] = (self._sub_rewards * weights).sum(-1)
+            self._sub_rewards_names = ','.join(k + '_reward' for k in COMPONENTS)
+        elif reward_type == 'reach':
             self.rew_buf[:], self._sub_rewards, self._sub_rewards_names = compute_reward_reach(
                 self._phase_pred, 
                 self._tar_action,
@@ -448,6 +480,11 @@ class PhysicsMVAEController():
 
         has_contact = self._physics_player.task._has_racket_ball_contact
         self._reset_reaction_buf = self._tar_time == self._tar_time_total 
+        if self._return_curriculum is not None:
+            # Keep the original incoming/recovery timing, but don't replace a
+            # contacted ball before its first landing (or flight timeout).
+            self._reset_reaction_buf = ((self._tar_time >= self._tar_time_total)
+                                        & ~self._return_curriculum.waiting_for_landing())
         self._reset_recovery_buf =  (self._tar_action == 1) & (has_contact | (self._ball_pos[:, 1] < self._root_pos[:, 1] - 1))
 
         self._compute_stats()
@@ -491,7 +528,7 @@ class PhysicsMVAEController():
         bounce = (self._tar_action == 0) & player._has_bounce_now
         estimated_bounce = bounce & self._est_bounce_in
         preview = (self._tar_action == 1) & ~player._has_racket_ball_contact & (self._tar_time < 99)
-        return {
+        stats = {
             'cycles': completed.sum(),
             'hits': hit.sum(),
             'contacts': player._has_racket_ball_contact_now.sum(),
@@ -505,6 +542,10 @@ class PhysicsMVAEController():
             'preview_count': preview.sum(),
             'preview_error_sum': (self._ball_traj[preview, 0] - self._ball_pos[preview]).norm(dim=-1).sum(),
         }
+        if getattr(self, '_return_curriculum', None) is not None:
+            boundary = check_out_of_court(self._root_pos, self._court_min, self._court_max).bool()
+            stats.update(self._return_curriculum.stats(completed, boundary))
+        return stats
     
     def step(self, actions):
         self.pre_physics_step(actions)

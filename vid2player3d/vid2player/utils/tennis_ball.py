@@ -12,6 +12,7 @@ import torch.nn.functional as F
 from tqdm import tqdm
 import os
 from vid2player.utils.tennis_materials import configure_ball_asset
+from vid2player.utils.tennis_court import NET_HEIGHT_M
 from vid2player.utils.tennis_contacts import contact_materials, ground_impact, apply_solver_config, preview_timing
 from vid2player.utils.ball_physics import (
     resolve_ball_physics, configure_ball_options, resolve_ball_asset,
@@ -22,7 +23,7 @@ R   = 0.032 # Legacy export; active dynamics use BallPhysics.radius.
 rho = AIR_DENSITY_KG_M3
 g   = 9.81  # m/s^2, gravitational field
 fps = 30
-NET_HEIGHT = 1.07 # m
+NET_HEIGHT = NET_HEIGHT_M  # Compatibility export for existing trajectory consumers.
 kv   = (rho * pi * R * R) / (2 * m)
 kf   = (rho * pi * R * R) / 2
 

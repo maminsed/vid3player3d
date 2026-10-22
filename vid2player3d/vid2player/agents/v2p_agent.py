@@ -166,6 +166,9 @@ class V2PAgent(common_agent.CommonAgent):
                 self.log_dict.update({'performance/play_time': train_info['play_time']})
                 if getattr(self.task, '_pos_reward_schedule', None) is not None:
                     self.log_dict['curriculum/pos_reward_scale'] = self.task._reward_scales['pos']
+                return_curriculum = getattr(self.task, '_return_curriculum', None)
+                if return_curriculum is not None:
+                    self.log_dict.update(return_curriculum.schedule_metrics())
                 self.log_dict.update({'losses/a_loss': torch_ext.mean_list(train_info['actor_loss']).item()})
                 self.log_dict.update({'losses/c_loss': torch_ext.mean_list(train_info['critic_loss']).item()})
                 self.log_dict.update({'losses/bounds_loss': torch_ext.mean_list(train_info['b_loss']).item()})
@@ -184,7 +187,12 @@ class V2PAgent(common_agent.CommonAgent):
                 self.log_dict.update(train_info.get('task_metrics', {}))
                 if self.sub_rewards_names is not None:
                     for i, name in enumerate(self.sub_rewards_names.split(',')):
-                        self.log_dict.update({f'sub_rewards/{name}': self.step_sub_rewards.avg[i].item()})
+                        if return_curriculum is None:
+                            self.log_dict[f'sub_rewards/{name}'] = self.step_sub_rewards.avg[i].item()
+                        elif name[:-7] in return_curriculum.logged_components:
+                            # Weighted contributions are comparable as the curriculum changes.
+                            self.log_dict[f'reward/{name[:-7]}'] = (
+                                self.step_sub_rewards.avg[i].item() * return_curriculum.weights[name[:-7]])
 
                 self.algo_observer.after_print_stats(frame, epoch_num, total_time)
                 
@@ -444,14 +452,31 @@ def summarize_task_stats(totals):
     values = {key: float(value.item()) for key, value in totals.items()}
     result = {'task/' + key: values[key] for key in ('cycles', 'contacts', 'detected_bounces') if key in values}
     for name, numerator, denominator in (
-        ('hit_rate', 'hits', 'cycles'),
-        ('estimated_in_rate', 'estimated_in', 'cycles'),
-        ('estimated_landing_error_m', 'landing_error_sum', 'estimated_in'),
-        ('estimated_flight_time_s', 'flight_time_sum', 'estimated_in'),
-        ('detected_in_rate', 'detected_in', 'detected_bounces'),
-        ('estimate_vs_detected_error_m', 'estimate_error_sum', 'estimated_detected_bounces'),
-        ('ball_preview_error_m', 'preview_error_sum', 'preview_count'),
+        ('task/hit_rate', 'hits', 'cycles'),
+        ('task/estimated_in_rate', 'estimated_in', 'cycles'),
+        ('task/estimated_landing_error_m', 'landing_error_sum', 'estimated_in'),
+        ('task/estimated_flight_time_s', 'flight_time_sum', 'estimated_in'),
+        ('task/detected_in_rate', 'detected_in', 'detected_bounces'),
+        ('task/estimate_vs_detected_error_m', 'estimate_error_sum', 'estimated_detected_bounces'),
+        ('task/ball_preview_error_m', 'preview_error_sum', 'preview_count'),
+        ('return/forward_rate', 'return_forward', 'cycles'),
+        ('return/net_clear_rate', 'return_net', 'cycles'),
+        ('return/in_rate', 'return_in', 'cycles'),
+        ('return/landing_observed_per_contact', 'return_landings', 'return_hits'),
+        ('return/estimator_valid_per_contact', 'return_valid_estimates', 'return_hits'),
+        ('return/target_error_m', 'return_target_error_sum', 'return_target_landings'),
+        ('return/contact_forward_speed_mps', 'return_contact_vy_sum', 'return_hits'),
+        ('return/boundary_rate', 'return_boundaries', 'cycles'),
     ):
+        if ('return_hits' in values and name.startswith('task/')
+                and name not in ('task/hit_rate', 'task/ball_preview_error_m')):
+            # The curriculum exposes measured outcomes and estimator coverage
+            # below; don't duplicate the older estimate-centric panels.
+            continue
         if values.get(denominator, 0) > 0:
-            result['task/' + name] = values.get(numerator, 0) / values[denominator]
+            if name.startswith('return/') and 'return_hits' not in values:
+                continue
+            result[name] = values.get(numerator, 0) / values[denominator]
+    if values.get('return_target_landings', 0) > 0:
+        result['return/target_landings'] = values['return_target_landings']
     return result
