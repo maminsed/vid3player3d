@@ -23,3 +23,34 @@ class LinearRewardSchedule:
         fraction = min(1., max(0., (frame - self.start_frame) /
                               (self.end_frame - self.start_frame)))
         return self.start + fraction * (self.end - self.start)
+
+
+class PiecewiseRewardSchedule:
+    """Ordered linear ramps with holds between them and continuous endpoints."""
+
+    def __init__(self, config, allow_zero=False):
+        specs = config.get('segments')
+        if not isinstance(specs, list) or not specs:
+            raise ValueError('Piecewise reward schedule requires a nonempty segments list.')
+        if any(key in config for key in ('start', 'end', 'start_frame', 'end_frame', 'type')):
+            raise ValueError('Put linear ramp settings inside segments, not beside them.')
+        self.segments = []
+        for spec in specs:
+            if not isinstance(spec, dict) or 'enabled' in spec:
+                raise ValueError('Each segment must be a linear mapping; set enabled on the whole schedule.')
+            ramp = LinearRewardSchedule(spec, allow_zero=allow_zero)
+            if self.segments:
+                previous = self.segments[-1]
+                if ramp.start_frame < previous.end_frame:
+                    raise ValueError('Reward schedule segments must be ordered and nonoverlapping.')
+                if not math.isclose(ramp.start, previous.end, rel_tol=1e-9, abs_tol=1e-12):
+                    raise ValueError('Consecutive reward schedule segments must have matching end/start values.')
+            self.segments.append(ramp)
+
+    def value(self, frame):
+        value = self.segments[0].start
+        for ramp in self.segments:
+            if frame < ramp.start_frame:
+                break
+            value = ramp.value(frame)
+        return value

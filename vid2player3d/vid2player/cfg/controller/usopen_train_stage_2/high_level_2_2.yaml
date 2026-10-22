@@ -88,26 +88,38 @@ env:
     # Training schedules override them from frame zero. Compare physical outcomes,
     # not total reward, against 2_1 (which has different evaluation weights).
     reward_type: return_curriculum
-    reward_weights: {pos: 0.5, contact: 1.0, forward: 2.0, net: 0.0, court: 0.0, target: 0.0}
+    reward_weights: {pos: 0.5, contact: 1.0, forward: 2.0, net: 0.0, court: 0.0, target: 0.0, vertical: 0.0}
     reward_scales: {pos: 5.0, phase: 5.0, court: 0.02, target: 0.005}
     return_curriculum:
       forward_reward_mode: signed_linear  # 2_1 defaults to positive_linear, unchanged.
       forward_speed_mps: 10.0  # Normalize outgoing vy; saturate at +/-10 m/s, not a contact gate.
-      backward_penalty_scale: 0.5  # Raw forward component ranges [-1, +1].
+      backward_penalty_scale: 0.5  # Preserve the trained value; raw forward range [-0.5, +1].
+      # Optional contact-time penalty: zero in this broad band, bounded below by -1.
+      # Not an exact launch-velocity target or a substitute for measured outcomes.
+      vertical_velocity: {min_mps: 0.0, max_mps: 8.0, falloff_mps: 8.0}
       max_post_contact_s: 3.0 # Delay timed relaunch while observing a contacted flight.
       # Total environment transitions SINCE this stage starts, not physics steps.
       # With 2048 environments x 64 steps, one epoch collects 131072 transitions.
       weights_schedule:
         contact: {start: 0.25, end: 1.0, start_frame: 0, end_frame: 13107200}  # Epochs 0-100.
         forward: {start: 0.0, end: 2.0, start_frame: 1310720, end_frame: 13107200}  # 10-100.
-        pos: {start: 1.0, end: 0.5, start_frame: 1310720, end_frame: 13107200}  # 10-100.
-        # Later phases are deliberately disabled for the first 200-epoch review.
-        # Enable/edit after reviewing contacts, forward flights and net clearance.
-        net: {enabled: false, start: 0.0, end: 0.5, start_frame: 26214400, end_frame: 52428800}
-        court: {enabled: false, start: 0.0, end: 1.0, start_frame: 26214400, end_frame: 52428800}
-        target: {enabled: false, start: 0.0, end: 1.0, start_frame: 52428800, end_frame: 104857600}
+        pos: {start: 1.0, end: 0.5, start_frame: 1310720, end_frame: 13107200}  # 10-100
+        # Resume unchanged rewards to epoch 300, inspect, then explicitly enable
+        # selected proposals and raise max_epochs. These are NOT automatic gates.
+        vertical:
+          enabled: false
+          segments:
+            - {start: 0.0, end: 0.2, start_frame: 39321600, end_frame: 45875200} # 300-350.
+            - {start: 0.2, end: 0.0, start_frame: 52428800, end_frame: 58982400} # 400-450, if outcomes improve.
+        net:
+          enabled: false
+          segments:
+            - {start: 0.0, end: 0.5, start_frame: 39321600, end_frame: 52428800} # 300-400.
+            - {start: 0.5, end: 1.0, start_frame: 52428800, end_frame: 58982400} # 400-450.
+        court: {enabled: false, start: 0.0, end: 0.5, start_frame: 52428800, end_frame: 65536000} # 400-500, after useful net clearance.
+        target: {enabled: false, start: 0.0, end: 0.5, start_frame: 65536000, end_frame: 78643200} # 500-600, after broad returns.
       scales_schedule:
-        target: {enabled: false, start: 0.005, end: 0.05, start_frame: 52428800, end_frame: 104857600}
+        target: {enabled: false, start: 0.005, end: 0.05, start_frame: 78643200, end_frame: 91750400} # 600-700, only after target coverage.
     ball_traj_out_x_file: data/ball_traj/usopen_v2/ball_traj_out_x.npy
     ball_traj_out_y_file: data/ball_traj/usopen_v2/ball_traj_out_y.npy
 
@@ -214,7 +226,7 @@ params:
 
   config:
     name: high_level_2_2
-    description: "Run 6 comparison: signed contact-time direction reward; reach weight 1 to 0.5 and forward weight 0 to 2 over epochs 10-100."
+    description: "Continue 2_2 to 300 epochs with its trained rewards; optional reviewed net, bounded vertical, court and target schedules."
     protect_existing_checkpoints: True
     env_name: rlgpu
     multi_gpu: False
@@ -230,7 +242,7 @@ params:
     learning_rate: 2e-5
     lr_schedule: constant
     score_to_win: 20000
-    max_epochs: 200
+    max_epochs: 300
     save_best_after: 50
     save_frequency: 50
     print_stats: True

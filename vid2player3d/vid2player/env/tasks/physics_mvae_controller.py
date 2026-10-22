@@ -428,9 +428,10 @@ class PhysicsMVAEController():
                 player._has_bounce_now, player._bounce_pos, self._target_bounce_pos,
                 self._est_bounce_valid)
             self._sub_rewards = torch.cat((reach[:, None], events), dim=-1)
-            weights = self._sub_rewards.new_tensor([reward_weights[k] for k in COMPONENTS])
+            components = self._return_curriculum.components
+            weights = self._sub_rewards.new_tensor([reward_weights[k] for k in components])
             self.rew_buf[:] = (self._sub_rewards * weights).sum(-1)
-            self._sub_rewards_names = ','.join(k + '_reward' for k in COMPONENTS)
+            self._sub_rewards_names = ','.join(k + '_reward' for k in components)
         elif reward_type == 'reach':
             self.rew_buf[:], self._sub_rewards, self._sub_rewards_names = compute_reward_reach(
                 self._phase_pred, 

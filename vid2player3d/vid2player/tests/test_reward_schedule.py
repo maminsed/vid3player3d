@@ -4,7 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 import unittest
 
-from vid2player.utils.reward_schedule import LinearRewardSchedule
+from vid2player.utils.reward_schedule import LinearRewardSchedule, PiecewiseRewardSchedule
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -32,6 +32,21 @@ class RewardScheduleTests(unittest.TestCase):
                         dict(start_frame=-1), dict(end_frame=100)]:
             with self.subTest(changes=changes), self.assertRaises(ValueError):
                 LinearRewardSchedule(dict(self.config, **changes))
+
+    def test_piecewise_ramps_holds_and_resume(self):
+        config = {'segments': [dict(start=0, end=.2, start_frame=100, end_frame=200),
+                               dict(start=.2, end=0, start_frame=300, end_frame=400)]}
+        schedule = PiecewiseRewardSchedule(config, allow_zero=True)
+        for frame, expected in [(0, 0), (100, 0), (150, .1), (200, .2),
+                                (250, .2), (300, .2), (350, .1), (400, 0), (500, 0)]:
+            self.assertAlmostEqual(schedule.value(frame), expected)
+            self.assertEqual(schedule.value(frame), PiecewiseRewardSchedule(config, allow_zero=True).value(frame))
+        for invalid in [dict(segments=[]), dict(segments=config['segments'], start=0),
+                        dict(segments=[config['segments'][0], dict(start=.2, end=0, start_frame=150, end_frame=400)]),
+                        dict(segments=[config['segments'][0], dict(start=.1, end=0, start_frame=300, end_frame=400)]),
+                        dict(segments=[dict(config['segments'][0], enabled=False)])]:
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                PiecewiseRewardSchedule(invalid, allow_zero=True)
 
     def test_controller_training_evaluation_and_opt_out(self):
         path = ROOT / 'env/tasks/physics_mvae_controller.py'

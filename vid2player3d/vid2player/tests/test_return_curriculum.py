@@ -114,6 +114,40 @@ class ReturnCurriculumTests(unittest.TestCase):
             with self.subTest(config=config), self.assertRaises(ValueError):
                 self.make(config=config)
 
+    def test_vertical_penalty_is_bounded_once_per_contact_and_opt_in(self):
+        vz = torch.tensor([-20., -8., -4., 0., 4., 8., 12., 16., 30.])
+        obj, ball = self.make(count=len(vz), weights={'pos': 1., 'vertical': .2})
+        velocity = torch.zeros(len(vz), 3)
+        velocity[:, 1], velocity[:, 2] = 2., vz
+        # No contact means no penalty, even for extreme velocities.
+        torch.testing.assert_close(self.step(obj, ball, velocity=velocity), torch.zeros(len(vz), 6))
+        events = self.step(obj, ball, contact=True, velocity=velocity)
+        torch.testing.assert_close(events[:, -1], torch.tensor([-1., -1., -.5, 0., 0., 0., -.5, -1., -1.]))
+        torch.testing.assert_close(events[:, 0], torch.ones(len(vz)))
+        torch.testing.assert_close(self.step(obj, ball, contact=True, velocity=velocity), torch.zeros_like(events))
+        stats = obj.stats(torch.ones(len(vz), dtype=torch.bool), torch.zeros(len(vz), dtype=torch.bool))
+        self.assertEqual(stats['return_vertical_outside_band'], 6)
+        obj.reset(torch.tensor([0]), ball[:1])
+        self.assertFalse(obj.vertical_outside_band[0])
+        # Legacy configs keep both the old component shape and old stat keys.
+        old, old_ball = self.make()
+        self.assertEqual(self.step(old, old_ball, contact=True).shape, (2, 5))
+        self.assertNotIn('return_vertical_outside_band', old.stats(
+            torch.ones(2, dtype=torch.bool), torch.zeros(2, dtype=torch.bool)))
+
+    def test_vertical_configuration_and_nonfinite_contact(self):
+        for spec in ({'min_mps': 8, 'max_mps': 0}, {'min_mps': 1, 'max_mps': 1},
+                     {'falloff_mps': 0}, {'max_mps': float('inf')}):
+            with self.subTest(spec=spec), self.assertRaises(ValueError):
+                self.make(config={'vertical_velocity': spec}, weights={'vertical': .2})
+        obj, ball = self.make(config={'vertical_velocity': {'min_mps': 1., 'max_mps': 5., 'falloff_mps': 2.}},
+                              weights={'vertical': .2})
+        events = self.step(obj, ball, contact=True,
+                           velocity=torch.tensor([[0., -2., 0.], [0., 2., float('nan')]]))
+        # Backward hits cannot collect a positive vertical bonus; invalid hits score nothing.
+        torch.testing.assert_close(events[:, -1], torch.tensor([-.5, 0.]))
+        self.assertEqual(obj.hit.tolist(), [True, False])
+
     def test_net_and_first_measured_landing_include_out_target_feedback(self):
         obj, ball = self.make()
         self.step(obj, ball, contact=True, valid=True)
@@ -232,6 +266,13 @@ class ReturnCurriculumTests(unittest.TestCase):
         task._tar_action[:] = 0
         task._compute_reward(None)
         torch.testing.assert_close(task.rew_buf, torch.zeros(2))
+        # Optional vertical column is integrated by name/order and can be negative.
+        vertical, _ = self.make(weights={'pos': 0., 'vertical': .2})
+        task._return_curriculum, task._reward_weights = vertical, vertical.weights
+        task._ball_vel = torch.tensor([[0., 2., -20.], [0., 2., 4.]])
+        task._compute_reward(None)
+        torch.testing.assert_close(task.rew_buf, torch.tensor([-.2, 0.]))
+        self.assertEqual(task._sub_rewards_names.split(',')[-1], 'vertical_reward')
 
     def test_relaunch_waits_for_landing_or_timeout_without_losing_due_timer(self):
         task = self.controller()
@@ -282,6 +323,9 @@ class ReturnCurriculumTests(unittest.TestCase):
                                   'task/estimated_in_rate': 0.})
         result = summarize({'cycles': torch.tensor(10), 'return_hits': torch.tensor(0)})
         self.assertNotIn('return/forward_per_contact', result)
+        result = summarize({'cycles': torch.tensor(10), 'return_hits': torch.tensor(4),
+                            'return_vertical_outside_band': torch.tensor(3)})
+        self.assertEqual(result['return/vertical_outside_band_per_contact'], .75)
 
     def test_2_2_direction_and_reach_schedules_and_fixed_evaluation_weights(self):
         cfg_root = ROOT / 'cfg/controller/usopen_train_stage_2'
@@ -294,9 +338,10 @@ class ReturnCurriculumTests(unittest.TestCase):
         self.assertEqual(new['env']['physics'], old['env']['physics'])
         self.assertEqual(new['params']['network'], old['params']['network'])
         for key, value in old['params']['config'].items():
-            if key not in ('name', 'description'):
+            if key not in ('name', 'description', 'max_epochs'):
                 self.assertEqual(new['params']['config'][key], value, key)
         self.assertEqual(new['params']['config']['name'], 'high_level_2_2')
+        self.assertEqual(new['params']['config']['max_epochs'], 300)
         obj, ball = self.make(config=new_v['return_curriculum'],
                               weights=new_v['reward_weights'].copy(), scales=new_v['reward_scales'].copy())
         # Without training progress updates, evaluation uses fixed final weights.
@@ -307,13 +352,26 @@ class ReturnCurriculumTests(unittest.TestCase):
             for key, value in zip(('pos', 'contact', 'forward'), expected):
                 self.assertAlmostEqual(obj.weights[key], value, msg=f'{key} at epoch {epoch}')
             self.assertEqual([obj.weights[k] for k in ('net', 'court', 'target')], [0., 0., 0.])
-        # Final contact + direction credit: -5 m/s -> 0; +2 m/s -> 1.4.
+        # Preserve the actual trained backward scale of 0.5.
+        self.assertEqual(obj.backward_penalty_scale, .5)
+        # Final contact + direction credit: -5 m/s -> 0.5; +2 m/s -> 1.4.
         events = self.step(obj, ball, contact=True,
                            velocity=torch.tensor([[0., -5., 0.], [0., 2., 0.]]))
         event_reward = obj.weights['contact'] * events[:, 0] + obj.weights['forward'] * events[:, 1]
-        torch.testing.assert_close(event_reward, torch.tensor([0., 1.4]))
+        torch.testing.assert_close(event_reward, torch.tensor([.5, 1.4]))
         self.assertEqual(set(obj.schedule_metrics()), {'curriculum/weight_pos',
                                                      'curriculum/weight_contact', 'curriculum/weight_forward'})
+        # Enable staged proposals explicitly; all reward changes remain zero up to 300.
+        import copy
+        proposal = copy.deepcopy(new_v['return_curriculum'])
+        for name in ('vertical', 'net', 'court', 'target'):
+            proposal['weights_schedule'][name]['enabled'] = True
+        obj, _ = self.make(config=proposal, weights=new_v['reward_weights'].copy())
+        for epoch, vertical, net in [(200, 0., 0.), (300, 0., 0.), (325, .1, .125),
+                                     (350, .2, .25), (400, .2, .5), (425, .1, .75), (450, 0., 1.)]:
+            obj.set_progress(epoch * 2048 * 64)
+            self.assertAlmostEqual(obj.weights['vertical'], vertical)
+            self.assertAlmostEqual(obj.weights['net'], net)
 
     def test_yaml_matches_run6_except_intentional_curriculum_and_finetuning(self):
         cfg_root = ROOT / 'cfg/controller'

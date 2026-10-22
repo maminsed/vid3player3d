@@ -480,4 +480,6 @@ def summarize_task_stats(totals):
             result[name] = values.get(numerator, 0) / values[denominator]
     if values.get('return_target_landings', 0) > 0:
         result['return/target_landings'] = values['return_target_landings']
+    if 'return_vertical_outside_band' in values and values.get('return_hits', 0) > 0:
+        result['return/vertical_outside_band_per_contact'] = values['return_vertical_outside_band'] / values['return_hits']
     return result

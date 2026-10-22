@@ -7,11 +7,12 @@ landing rewards. Net clearance is a linearly interpolated control-step estimate.
 import math
 import torch
 
-from vid2player.utils.reward_schedule import LinearRewardSchedule
+from vid2player.utils.reward_schedule import LinearRewardSchedule, PiecewiseRewardSchedule
 from vid2player.utils.tennis_court import NET_HEIGHT_M
 
 
 COMPONENTS = ('pos', 'contact', 'forward', 'net', 'court', 'target')
+OPTIONAL_COMPONENTS = ('vertical',)
 
 
 class ReturnCurriculum:
@@ -20,10 +21,13 @@ class ReturnCurriculum:
             raise ValueError('Return geometry comes from tennis_court and the active BallPhysics; '
                              'remove net_height_m/ball_radius_m from return_curriculum')
         self.weights, self.scales = weights, scales
-        unknown = set(weights) - set(COMPONENTS)
+        # Append opt-in terms so older configs retain their exact component arrays.
+        self.components = COMPONENTS + tuple(k for k in OPTIONAL_COMPONENTS
+            if k in weights or k in config.get('weights_schedule', {}))
+        unknown = set(weights) - set(self.components)
         if unknown:
             raise ValueError('Unknown return reward weights: ' + str(sorted(unknown)))
-        for name in COMPONENTS:
+        for name in self.components:
             weights.setdefault(name, 0.)
         for name, default in [('pos', 5.), ('phase', 5.), ('court', .02), ('target', .005)]:
             scales.setdefault(name, default)
@@ -39,12 +43,13 @@ class ReturnCurriculum:
             for name, spec in config.get(group + '_schedule', {}).items():
                 if name not in destination:
                     raise ValueError('Unknown return schedule ' + group + '.' + name)
-                schedule = LinearRewardSchedule(spec, allow_zero=(group == 'weights' or name == 'phase'))
+                schedule_type = PiecewiseRewardSchedule if 'segments' in spec else LinearRewardSchedule
+                schedule = schedule_type(spec, allow_zero=(group == 'weights' or name == 'phase'))
                 if not isinstance(spec.get('enabled', True), bool):
                     raise ValueError('Schedule enabled must be boolean')
                 if spec.get('enabled', True):
                     self.schedules[group][name] = schedule
-        self.logged_components = [k for k in COMPONENTS if weights[k] or k in self.schedules['weights']]
+        self.logged_components = [k for k in self.components if weights[k] or k in self.schedules['weights']]
         # Opt-in signed feedback preserves the exact positive-only 2_1 reward.
         self.forward_reward_mode = config.get('forward_reward_mode', 'positive_linear')
         if self.forward_reward_mode not in ('positive_linear', 'signed_linear'):
@@ -52,6 +57,13 @@ class ReturnCurriculum:
         self.backward_penalty_scale = float(config.get('backward_penalty_scale', 1.))
         if not math.isfinite(self.backward_penalty_scale) or self.backward_penalty_scale < 0:
             raise ValueError('backward_penalty_scale must be finite and nonnegative')
+        vertical = config.get('vertical_velocity', {})
+        self.vertical_min = float(vertical.get('min_mps', 0.))
+        self.vertical_max = float(vertical.get('max_mps', 8.))
+        self.vertical_falloff = float(vertical.get('falloff_mps', 8.))
+        if (not all(math.isfinite(v) for v in (self.vertical_min, self.vertical_max, self.vertical_falloff))
+                or self.vertical_min >= self.vertical_max or self.vertical_falloff <= 0):
+            raise ValueError('Vertical velocity requires finite min_mps < max_mps and positive falloff_mps')
         self.forward_speed = float(config.get('forward_speed_mps', 10.))
         self.net_height = NET_HEIGHT_M
         self.ball_radius = float(ball_radius)
@@ -61,7 +73,8 @@ class ReturnCurriculum:
                    (self.forward_speed, self.net_height, self.ball_radius, self.max_post_contact_s, dt)):
             raise ValueError('Return speed, net height and ball radius must be finite and positive')
         self.previous_ball = torch.zeros(count, 3, device=device)
-        for name in ('hit', 'forward', 'crossed_net', 'landing_seen', 'landed', 'in_court', 'estimate_valid'):
+        for name in ('hit', 'forward', 'crossed_net', 'landing_seen', 'landed', 'in_court', 'estimate_valid',
+                     'vertical_outside_band'):
             setattr(self, name, torch.zeros(count, dtype=torch.bool, device=device))
         self.contact_vy = torch.zeros(count, device=device)
         self.contact_age = torch.zeros(count, device=device, dtype=torch.long)
@@ -79,7 +92,8 @@ class ReturnCurriculum:
 
     def reset(self, ids, ball):
         self.previous_ball[ids] = ball
-        for name in ('hit', 'forward', 'crossed_net', 'landing_seen', 'landed', 'in_court', 'estimate_valid'):
+        for name in ('hit', 'forward', 'crossed_net', 'landing_seen', 'landed', 'in_court', 'estimate_valid',
+                     'vertical_outside_band'):
             getattr(self, name)[ids] = False
         self.contact_vy[ids] = self.target_error[ids] = 0
         self.contact_age[ids] = 0
@@ -98,6 +112,9 @@ class ReturnCurriculum:
         self.forward |= first_contact & (vy > 0)
         self.estimate_valid |= first_contact & estimate_valid
         self.hit |= first_contact
+        vz = torch.nan_to_num(velocity[:, 2], nan=0., posinf=0., neginf=0.)
+        vertical_excess = (self.vertical_min - vz).clamp_min(0) + (vz - self.vertical_max).clamp_min(0)
+        self.vertical_outside_band |= first_contact & (vertical_excess > 0)
 
         # Interpolate at y=0. Use shared net height plus the active ball radius, conservative across
         # the varying tennis net height; this is not a physical net collider.
@@ -134,15 +151,19 @@ class ReturnCurriculum:
         if self.forward_reward_mode == 'signed_linear':
             forward_reward = forward_reward - self.backward_penalty_scale * (
                 -vy / self.forward_speed).clamp(0, 1)
-        return torch.stack((first_contact.float(),
-                            first_contact * forward_reward,
-                            net.float(), court, target_reward), dim=-1)
+        events = [first_contact.float(), first_contact * forward_reward,
+                  net.float(), court, target_reward]
+        if 'vertical' in self.components:
+            # A penalty avoids granting a free bonus to flat backward/weak hits.
+            # Zero inside a broad band; at most -1 beyond it. No flight modifications.
+            events.append(-first_contact.float() * (vertical_excess / self.vertical_falloff).clamp(0, 1))
+        return torch.stack(events, dim=-1)
 
     def stats(self, completed, boundary):
         hits = completed & self.hit
         landings = completed & self.landed
         target_landings = landings & self.crossed_net
-        return {
+        stats = {
             'return_hits': hits.sum(),
             'return_forward': (completed & self.forward).sum(),
             'return_net': (completed & self.crossed_net).sum(),
@@ -154,3 +175,6 @@ class ReturnCurriculum:
             'return_contact_vy_sum': self.contact_vy[hits].sum(),
             'return_boundaries': (completed & boundary).sum(),
         }
+        if 'vertical' in self.components:
+            stats['return_vertical_outside_band'] = (hits & self.vertical_outside_band).sum()
+        return stats
