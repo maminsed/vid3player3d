@@ -45,6 +45,13 @@ class ReturnCurriculum:
                 if spec.get('enabled', True):
                     self.schedules[group][name] = schedule
         self.logged_components = [k for k in COMPONENTS if weights[k] or k in self.schedules['weights']]
+        # Opt-in signed feedback preserves the exact positive-only 2_1 reward.
+        self.forward_reward_mode = config.get('forward_reward_mode', 'positive_linear')
+        if self.forward_reward_mode not in ('positive_linear', 'signed_linear'):
+            raise ValueError('forward_reward_mode must be positive_linear or signed_linear')
+        self.backward_penalty_scale = float(config.get('backward_penalty_scale', 1.))
+        if not math.isfinite(self.backward_penalty_scale) or self.backward_penalty_scale < 0:
+            raise ValueError('backward_penalty_scale must be finite and nonnegative')
         self.forward_speed = float(config.get('forward_speed_mps', 10.))
         self.net_height = NET_HEIGHT_M
         self.ball_radius = float(ball_radius)
@@ -123,8 +130,12 @@ class ReturnCurriculum:
         target_reward = torch.where(landing & self.crossed_net,
                                     torch.exp(-self.scales['target'] * target_error_sq), 0.)
         self.previous_ball.copy_(ball)
+        forward_reward = (vy / self.forward_speed).clamp(0, 1)
+        if self.forward_reward_mode == 'signed_linear':
+            forward_reward = forward_reward - self.backward_penalty_scale * (
+                -vy / self.forward_speed).clamp(0, 1)
         return torch.stack((first_contact.float(),
-                            first_contact * (vy / self.forward_speed).clamp(0, 1),
+                            first_contact * forward_reward,
                             net.float(), court, target_reward), dim=-1)
 
     def stats(self, completed, boundary):

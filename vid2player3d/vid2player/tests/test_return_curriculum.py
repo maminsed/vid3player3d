@@ -82,6 +82,38 @@ class ReturnCurriculumTests(unittest.TestCase):
         torch.testing.assert_close(events[:, 0], torch.ones(2))
         torch.testing.assert_close(events[:, 1], torch.tensor([0., 1.]))
 
+    def test_signed_direction_distinguishes_backward_stationary_and_weak_forward(self):
+        speeds = torch.tensor([-100., -10., -5., -2., 0., 2., 5., 10., 100.])
+        velocity = torch.zeros(len(speeds), 3)
+        velocity[:, 1] = speeds
+        for penalty in (0., .5, 1., 2.):
+            obj, ball = self.make(count=len(speeds), config={
+                'forward_reward_mode': 'signed_linear', 'forward_speed_mps': 10.,
+                'backward_penalty_scale': penalty})
+            events = self.step(obj, ball, contact=True, velocity=velocity)
+            expected = (speeds / 10).clamp(0, 1) - penalty * (-speeds / 10).clamp(0, 1)
+            torch.testing.assert_close(events[:, 1], expected)
+            torch.testing.assert_close(events[:, 0], torch.ones(len(speeds)))
+            # This changes credit, never contact classification, and scores once.
+            self.assertTrue(obj.hit.all())
+            self.assertEqual(obj.forward.tolist(), (speeds > 0).tolist())
+            torch.testing.assert_close(self.step(obj, ball, contact=True, velocity=velocity),
+                                       torch.zeros_like(events))
+            obj.reset(torch.arange(len(speeds)), ball)
+            no_contact = self.step(obj, ball, velocity=velocity)
+            torch.testing.assert_close(no_contact, torch.zeros_like(events))
+        # Omitted mode retains exactly the old positive-only forward definition.
+        obj, ball = self.make(count=len(speeds))
+        torch.testing.assert_close(self.step(obj, ball, contact=True, velocity=velocity)[:, 1],
+                                   (speeds / 10).clamp(0, 1))
+
+    def test_signed_direction_configuration_rejects_typos_and_invalid_penalties(self):
+        for config in ({'forward_reward_mode': 'signed'}, {'backward_penalty_scale': -1.},
+                       {'backward_penalty_scale': float('nan')},
+                       {'backward_penalty_scale': float('inf')}):
+            with self.subTest(config=config), self.assertRaises(ValueError):
+                self.make(config=config)
+
     def test_net_and_first_measured_landing_include_out_target_feedback(self):
         obj, ball = self.make()
         self.step(obj, ball, contact=True, valid=True)
@@ -157,6 +189,18 @@ class ReturnCurriculumTests(unittest.TestCase):
         task.set_reward_schedule_progress(200)
         self.assertEqual(obj.weights['forward'], .5)
 
+    def test_every_registered_reward_supports_weight_scheduling(self):
+        config = {'weights_schedule': {key: dict(start=1., end=.5, start_frame=100, end_frame=300)
+                                       for key in COMPONENTS},
+                  'scales_schedule': {'phase': dict(start=5., end=0., start_frame=100, end_frame=300)}}
+        obj, _ = self.make(config=config)
+        obj.set_progress(200)
+        self.assertTrue(all(value == .75 for value in obj.weights.values()))
+        self.assertEqual(obj.scales['phase'], 2.5)
+        # Reject aliases rather than silently ignoring a misspelled reward.
+        with self.assertRaisesRegex(ValueError, 'weights.reach'):
+            self.make(config={'weights_schedule': {'reach': config['weights_schedule']['pos']}})
+
     def controller(self):
         namespace = definitions(ROOT / 'env/tasks/physics_mvae_controller.py',
                                 {'PhysicsMVAEController', 'compute_reward_reach', 'check_out_of_court'},
@@ -229,12 +273,47 @@ class ReturnCurriculumTests(unittest.TestCase):
         result = summarize({k: torch.tensor(v) for k, v in totals.items()})
         self.assertEqual(result['task/hit_rate'], .4)
         self.assertEqual(result['return/in_rate'], .1)
+        self.assertEqual(result['return/forward_per_contact'], .75)
         self.assertEqual(result['return/estimator_valid_per_contact'], .5)
         self.assertEqual(result['return/target_error_m'], 4.)
         self.assertNotIn('task/estimated_in_rate', result)
         result = summarize({'cycles': torch.tensor(10), 'hits': torch.tensor(4)})
         self.assertEqual(result, {'task/cycles': 10., 'task/hit_rate': .4,
                                   'task/estimated_in_rate': 0.})
+        result = summarize({'cycles': torch.tensor(10), 'return_hits': torch.tensor(0)})
+        self.assertNotIn('return/forward_per_contact', result)
+
+    def test_2_2_direction_and_reach_schedules_and_fixed_evaluation_weights(self):
+        cfg_root = ROOT / 'cfg/controller/usopen_train_stage_2'
+        old = yaml.safe_load((cfg_root / 'high_level_2_1.yaml').read_text())
+        new = yaml.safe_load((cfg_root / 'high_level_2_2.yaml').read_text())
+        old_v, new_v = old['env']['vid2player'], new['env']['vid2player']
+        for key, value in old_v.items():
+            if key not in ('reward_weights', 'return_curriculum'):
+                self.assertEqual(new_v[key], value, key)
+        self.assertEqual(new['env']['physics'], old['env']['physics'])
+        self.assertEqual(new['params']['network'], old['params']['network'])
+        for key, value in old['params']['config'].items():
+            if key not in ('name', 'description'):
+                self.assertEqual(new['params']['config'][key], value, key)
+        self.assertEqual(new['params']['config']['name'], 'high_level_2_2')
+        obj, ball = self.make(config=new_v['return_curriculum'],
+                              weights=new_v['reward_weights'].copy(), scales=new_v['reward_scales'].copy())
+        # Without training progress updates, evaluation uses fixed final weights.
+        self.assertEqual([obj.weights[k] for k in ('pos', 'contact', 'forward')], [.5, 1., 2.])
+        for epoch, expected in [(0, [1., .25, 0.]), (10, [1., .325, 0.]),
+                                (55, [.75, .6625, 1.]), (100, [.5, 1., 2.]), (200, [.5, 1., 2.])]:
+            obj.set_progress(epoch * 2048 * 64)
+            for key, value in zip(('pos', 'contact', 'forward'), expected):
+                self.assertAlmostEqual(obj.weights[key], value, msg=f'{key} at epoch {epoch}')
+            self.assertEqual([obj.weights[k] for k in ('net', 'court', 'target')], [0., 0., 0.])
+        # Final contact + direction credit: -5 m/s -> 0; +2 m/s -> 1.4.
+        events = self.step(obj, ball, contact=True,
+                           velocity=torch.tensor([[0., -5., 0.], [0., 2., 0.]]))
+        event_reward = obj.weights['contact'] * events[:, 0] + obj.weights['forward'] * events[:, 1]
+        torch.testing.assert_close(event_reward, torch.tensor([0., 1.4]))
+        self.assertEqual(set(obj.schedule_metrics()), {'curriculum/weight_pos',
+                                                     'curriculum/weight_contact', 'curriculum/weight_forward'})
 
     def test_yaml_matches_run6_except_intentional_curriculum_and_finetuning(self):
         cfg_root = ROOT / 'cfg/controller'

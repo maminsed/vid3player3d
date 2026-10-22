@@ -460,6 +460,7 @@ def summarize_task_stats(totals):
         ('task/estimate_vs_detected_error_m', 'estimate_error_sum', 'estimated_detected_bounces'),
         ('task/ball_preview_error_m', 'preview_error_sum', 'preview_count'),
         ('return/forward_rate', 'return_forward', 'cycles'),
+        ('return/forward_per_contact', 'return_forward', 'return_hits'),
         ('return/net_clear_rate', 'return_net', 'cycles'),
         ('return/in_rate', 'return_in', 'cycles'),
         ('return/landing_observed_per_contact', 'return_landings', 'return_hits'),
