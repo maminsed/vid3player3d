@@ -182,6 +182,23 @@ class ReturnCurriculumTests(unittest.TestCase):
         torch.testing.assert_close(self.step(obj, landing, bounce=True), torch.zeros(2, 5))
         self.assertFalse(obj.landed.any())
 
+    def test_bounce_before_crossing_and_same_frame_crossing_cannot_earn_clearance(self):
+        obj, ball = self.make()
+        self.step(obj, ball, contact=True)
+        # A ground rebound and crossing in one recorded interval have unknown order.
+        crossed = torch.tensor([[0., 1., 2.]]).repeat(2, 1)
+        landing = torch.tensor([[0., -1., .0335]]).repeat(2, 1)
+        first = self.step(obj, crossed, bounce=True, landing=landing)
+        torch.testing.assert_close(first[:, 2], torch.zeros(2))
+        torch.testing.assert_close(first[:, 4], torch.zeros(2))
+        self.assertFalse(obj.crossed_net.any())
+        # Neither a later crossing nor a target-shaped second landing can score.
+        self.step(obj, ball)
+        second = self.step(obj, crossed)
+        torch.testing.assert_close(second[:, 2], torch.zeros(2))
+        second = self.step(obj, torch.tensor([[0., 10., .0335]]).repeat(2, 1), bounce=True)
+        torch.testing.assert_close(second, torch.zeros(2, 5))
+
     def test_partial_reset_no_incoming_or_default_estimate_landing_reward(self):
         obj, ball = self.make()
         events = self.step(obj, ball, bounce=True, valid=True)
@@ -341,7 +358,7 @@ class ReturnCurriculumTests(unittest.TestCase):
             if key not in ('name', 'description', 'max_epochs'):
                 self.assertEqual(new['params']['config'][key], value, key)
         self.assertEqual(new['params']['config']['name'], 'high_level_2_2')
-        self.assertEqual(new['params']['config']['max_epochs'], 300)
+        self.assertEqual(new['params']['config']['max_epochs'], 500)
         obj, ball = self.make(config=new_v['return_curriculum'],
                               weights=new_v['reward_weights'].copy(), scales=new_v['reward_scales'].copy())
         # Without training progress updates, evaluation uses fixed final weights.
@@ -360,7 +377,8 @@ class ReturnCurriculumTests(unittest.TestCase):
         event_reward = obj.weights['contact'] * events[:, 0] + obj.weights['forward'] * events[:, 1]
         torch.testing.assert_close(event_reward, torch.tensor([.5, 1.4]))
         self.assertEqual(set(obj.schedule_metrics()), {'curriculum/weight_pos',
-                                                     'curriculum/weight_contact', 'curriculum/weight_forward'})
+            'curriculum/weight_contact', 'curriculum/weight_forward',
+            'curriculum/weight_vertical', 'curriculum/weight_net'})
         # Enable staged proposals explicitly; all reward changes remain zero up to 300.
         import copy
         proposal = copy.deepcopy(new_v['return_curriculum'])
@@ -368,10 +386,23 @@ class ReturnCurriculumTests(unittest.TestCase):
             proposal['weights_schedule'][name]['enabled'] = True
         obj, _ = self.make(config=proposal, weights=new_v['reward_weights'].copy())
         for epoch, vertical, net in [(200, 0., 0.), (300, 0., 0.), (325, .1, .125),
-                                     (350, .2, .25), (400, .2, .5), (425, .1, .75), (450, 0., 1.)]:
+                                     (350, .2, .25), (400, .2, .5), (425, .2, .5), (450, .2, .5)]:
             obj.set_progress(epoch * 2048 * 64)
             self.assertAlmostEqual(obj.weights['vertical'], vertical)
             self.assertAlmostEqual(obj.weights['net'], net)
+
+    def test_optional_2_3_restarts_from_run6_with_early_vertical_and_no_placement(self):
+        path = ROOT / 'cfg/controller/usopen_train_stage_2/high_level_2_3.yaml'
+        cfg = yaml.safe_load(path.read_text())
+        v = cfg['env']['vid2player']
+        obj, _ = self.make(config=v['return_curriculum'], weights=v['reward_weights'].copy())
+        for epoch, expected in [(0, 0.), (10, 0.), (50, 0.), (75, .05), (100, .1), (150, .2), (300, .2)]:
+            obj.set_progress(epoch * 2048 * 64)
+            self.assertAlmostEqual(obj.weights['vertical'], expected)
+            self.assertEqual([obj.weights[k] for k in ('net', 'court', 'target')], [0., 0., 0.])
+        self.assertEqual(cfg['params']['config']['name'], 'high_level_2_3')
+        self.assertIn('usopen_train_stage_1__high_level_6', cfg['params']['config']['pretrained_model_cp'])
+        self.assertFalse(cfg['params']['load_checkpoint'])
 
     def test_yaml_matches_run6_except_intentional_curriculum_and_finetuning(self):
         cfg_root = ROOT / 'cfg/controller'

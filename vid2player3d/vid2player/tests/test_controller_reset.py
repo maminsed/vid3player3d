@@ -85,13 +85,15 @@ class ControllerResetTests(unittest.TestCase):
         task._ball_vel = torch.zeros(3, 3)
         task._ball_root_states = torch.zeros(3, 13)
         task._bounce_pos = torch.ones(3, 3)
-        for name in ('_has_bounce', '_has_bounce_now', '_has_racket_ball_contact', '_has_racket_ball_contact_now'):
+        task._ground_impact_pos = torch.ones(3, 3)
+        for name in ('_has_bounce', '_has_bounce_now', '_has_ground_impact_now', '_has_racket_ball_contact', '_has_racket_ball_contact_now'):
             setattr(task, name, torch.ones(3, dtype=torch.bool))
         task._ball_generator = NS(generate=lambda n, **kw: (
             torch.zeros(n, 100, 3), torch.zeros(n, 3), torch.tensor([[0., -25., 1.]]).repeat(n, 1), torch.ones(n)))
         task._reset_balls(torch.tensor([1]))
-        for name in ('_has_bounce', '_has_bounce_now', '_has_racket_ball_contact', '_has_racket_ball_contact_now'):
+        for name in ('_has_bounce', '_has_bounce_now', '_has_ground_impact_now', '_has_racket_ball_contact', '_has_racket_ball_contact_now'):
             self.assertEqual(getattr(task, name).tolist(), [True, False, True])
+        torch.testing.assert_close(task._ground_impact_pos, torch.tensor([[1.,1.,1.],[0.,0.,0.],[1.,1.,1.]]))
 
 
 if __name__ == '__main__':

@@ -118,7 +118,10 @@ class HumanoidSMPLIMMVAE(HumanoidSMPL):
         self._ball_vspin = torch.zeros(self.num_envs, device=self.device, dtype=torch.float32)
         self._has_bounce = torch.zeros(self.num_envs, device=self.device, dtype=torch.bool)
         self._has_bounce_now = torch.zeros(self.num_envs, device=self.device, dtype=torch.bool)
+        # Every detected rebound, independently of the legacy first-bounce latch.
+        self._has_ground_impact_now = torch.zeros(self.num_envs, device=self.device, dtype=torch.bool)
         self._bounce_pos = torch.zeros((self.num_envs, 3), device=self.device, dtype=torch.float32)
+        self._ground_impact_pos = torch.zeros_like(self._bounce_pos)
         self._has_racket_ball_contact = torch.zeros(self.num_envs, device=self.device, dtype=torch.bool)
         self._has_racket_ball_contact_now = torch.zeros(self.num_envs, device=self.device, dtype=torch.bool)
         self._prev_target_rb_rot = self._rigid_body_rot[:, :self._num_humanoid_bodies].clone()
@@ -589,6 +592,8 @@ class HumanoidSMPLIMMVAE(HumanoidSMPL):
 
         self._has_bounce[env_ids] = 0
         self._has_bounce_now[env_ids] = 0
+        self._has_ground_impact_now[env_ids] = 0
+        self._ground_impact_pos[env_ids] = 0
         self._bounce_pos[env_ids] = 0
         self._has_racket_ball_contact[env_ids] = 0
         self._has_racket_ball_contact_now[env_ids] = 0
@@ -763,6 +768,7 @@ class HumanoidSMPLIMMVAE(HumanoidSMPL):
             
         self._save_prev_target_motion_state()
         self._has_bounce_now[:] = 0
+        self._has_ground_impact_now[:] = 0
         self._has_racket_ball_contact_now[:] = 0
         self._contact_forces_sum[:] = 0
         self._prev_rigid_body_ang_vel = self._rigid_body_ang_vel.clone()
@@ -797,8 +803,10 @@ class HumanoidSMPLIMMVAE(HumanoidSMPL):
             threshold = radius * (6 if self.cfg['sim'].get('substeps', 2) > 2 else 4)
             has_bounce_now = ~self._has_bounce & (pos[:, 2] <= threshold)
             self._has_bounce_now |= has_bounce_now
+            self._has_ground_impact_now |= has_bounce_now
             self._has_bounce |= has_bounce_now
             self._bounce_pos[has_bounce_now] = pos[has_bounce_now]
+            self._ground_impact_pos[has_bounce_now] = pos[has_bounce_now]
         self.forces[:, -1, :] = ball_forces 
     
     def _save_prev_target_motion_state(self):
@@ -834,6 +842,11 @@ class HumanoidSMPLIMMVAE(HumanoidSMPL):
                 ground_hit, impact_position = ground_impact(
                     previous_ball, self._ball_root_states, self._ball_physics.radius,
                     self.sim_params.dt)
+                # Preserve the first rebound in a control interval, even if the
+                # historic bounce latch was already set by the incoming ball.
+                first_ground = ground_hit & ~self._has_ground_impact_now
+                self._ground_impact_pos[first_ground] = impact_position[first_ground]
+                self._has_ground_impact_now |= ground_hit
                 impact = ground_hit & ~self._has_bounce
                 self._has_bounce_now |= impact
                 self._has_bounce |= impact
@@ -888,6 +901,7 @@ class HumanoidSMPLIMMVAE(HumanoidSMPL):
                 diagnostic['ball_contact_force_n'] = self._contact_forces[:, -1].clone()
                 diagnostic['racket_contact_force_n'] = self._contact_forces[
                     self._contact_env_ids, self._contact_racket_ids].clone()
+                diagnostic['body_contact_force_n'] = self._contact_forces[:, :-1].clone()
                 self._racket_diagnostic_samples.append(diagnostic)
 
             self._contact_forces_sum += self._contact_forces

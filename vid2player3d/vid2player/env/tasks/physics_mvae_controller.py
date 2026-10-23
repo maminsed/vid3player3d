@@ -425,7 +425,8 @@ class PhysicsMVAEController():
             player = self._physics_player.task
             events = self._return_curriculum.step(
                 self._ball_pos, self._ball_vel, player._has_racket_ball_contact_now,
-                player._has_bounce_now, player._bounce_pos, self._target_bounce_pos,
+                getattr(player, '_has_ground_impact_now', player._has_bounce_now),
+                getattr(player, '_ground_impact_pos', player._bounce_pos), self._target_bounce_pos,
                 self._est_bounce_valid)
             self._sub_rewards = torch.cat((reach[:, None], events), dim=-1)
             components = self._return_curriculum.components

@@ -121,7 +121,9 @@ class ReturnCurriculum:
         delta_y = ball[:, 1] - self.previous_ball[:, 1]
         fraction = (-self.previous_ball[:, 1] / delta_y.clamp_min(1e-6)).clamp(0, 1)
         crossing = self.previous_ball + fraction[:, None] * (ball - self.previous_ball)
-        net = (had_contact & ~self.landing_seen & ~self.crossed_net & finite
+        # If crossing and bounce share a recorded interval their order is unknown.
+        # Reject clearance conservatively rather than credit a bounced-over ball.
+        net = (had_contact & ~self.landing_seen & ~bounce_now & ~self.crossed_net & finite
                & (self.previous_ball[:, 1] < 0) & (ball[:, 1] >= 0)
                & (crossing[:, 0].abs() < 4.11)
                & (crossing[:, 2] > self.net_height + self.ball_radius))

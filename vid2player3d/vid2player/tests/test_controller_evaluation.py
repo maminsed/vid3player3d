@@ -225,6 +225,8 @@ class ControllerEvaluationTests(unittest.TestCase):
             self.assertEqual(report['steps'],4)
             self.assertEqual(report['contact_step'],2)
             self.assertEqual(data['racket_state'].shape,(4,13))
+            self.assertEqual(data['body_state'].shape,(4,1,13))
+            self.assertEqual(data['physics_pre_body_state'].shape,(8,1,13))
             self.assertEqual(data['physics_pre_ball_state'].shape,(8,13))
             np.testing.assert_array_equal(data['physics_control_step'],[1,1,2,2,3,3,4,4])
             np.testing.assert_array_equal(data['physics_interval_in_control_step'],[0,1]*4)

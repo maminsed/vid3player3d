@@ -36,6 +36,7 @@ class TestRacketDiagnostics(unittest.TestCase):
                        _ball_physics=NS(radius=.0335), sim_params=NS(dt=1/60), sim=None,
                        _is_train=True, _has_bounce=torch.tensor([False]),
                        _has_bounce_now=torch.tensor([False]), _bounce_pos=torch.zeros(1, 3),
+                       _has_ground_impact_now=torch.tensor([False]), _ground_impact_pos=torch.zeros(1, 3),
                        _has_racket_ball_contact=torch.tensor([False]),
                        _has_racket_ball_contact_now=torch.tensor([False]),
                        apply_external_force_to_ball=lambda *a: None, render=lambda: None)
@@ -60,6 +61,14 @@ class TestRacketDiagnostics(unittest.TestCase):
                 self.assertEqual(second['post_ball_state'][0, 8], 6.)
         for baseline, recorded in zip(*results):
             torch.testing.assert_close(baseline, recorded)
+        # An incoming bounce already latched must not hide an outgoing rebound.
+        state._has_bounce[:] = True
+        state._has_ground_impact_now[:] = False
+        position = torch.tensor([[2., 3., .0335]])
+        scope['ground_impact'] = lambda *args: (torch.tensor([True]), position)
+        scope['_physics_step'](state)
+        self.assertTrue(state._has_ground_impact_now[0])
+        torch.testing.assert_close(state._ground_impact_pos, position)
 
     def test_rotation_and_velocity_use_com_offset(self):
         racket = torch.zeros(1, 13)

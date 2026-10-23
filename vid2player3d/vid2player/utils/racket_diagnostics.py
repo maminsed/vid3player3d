@@ -12,7 +12,10 @@ def racket_ball_snapshot(physics):
     racket = torch.cat([field[indices] for field in (
         physics._rigid_body_pos_origin, physics._rigid_body_rot_origin,
         physics._rigid_body_vel_origin, physics._rigid_body_ang_vel_origin)], dim=-1)
-    return {'ball_state': physics._ball_root_states.clone(), 'racket_state': racket}
+    body = torch.cat((physics._rigid_body_pos_origin, physics._rigid_body_rot_origin,
+                      physics._rigid_body_vel_origin, physics._rigid_body_ang_vel_origin), dim=-1)
+    return {'ball_state': physics._ball_root_states.clone(), 'racket_state': racket,
+            'body_state': body}
 
 
 def rotate_vector_xyzw(quaternion, vector):

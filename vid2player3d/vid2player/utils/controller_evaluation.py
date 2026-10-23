@@ -309,7 +309,7 @@ def evaluate_controller(player, args, evaluation):
     grip = task.cfg_v2p.get('grip', 'eastern')
     normal_local = [0., 1., 0.] if grip == 'eastern' else [0., 2**-.5, 2**-.5]
     diagnostics_metadata = {
-        'schema_version': 2,
+        'schema_version': 3,
         'coordinates': 'Simulator world frame, meters; +Y toward opponent, +Z up.',
         'state_layout': 'XYZ position, XYZW quaternion, XYZ linear velocity m/s, XYZ angular velocity rad/s.',
         'frame_sampling': 'Post-control-step simulator state; original rollout arrays are preserved.',
@@ -333,6 +333,7 @@ def evaluate_controller(player, args, evaluation):
         'tennis_contacts': dict(vars(physics._tennis_contacts)),
     }
     names = physics.gym.get_asset_rigid_body_names(physics.humanoid_asset)
+    diagnostics_metadata['body_names'] = list(names)
     renderer = CourtRenderer(names,task.cfg_v2p['court_min'],task.cfg_v2p['court_max'])
     fps = 1./physics.dt
     set_seed(args.seed,False)

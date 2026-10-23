@@ -83,12 +83,12 @@ env:
       transverse_inertia: 0.0123
       normal_inertia: 0.01349
 
-    # New comparison from run 6, not a resume of 2_1. Retain reaching initially.
+    # Continue the completed 300-epoch 2_2 run with --resume --checkpoint latest.
     # Evaluation uses the final training weights below, independent of checkpoint age.
     # Training schedules override them from frame zero. Compare physical outcomes,
     # not total reward, against 2_1 (which has different evaluation weights).
     reward_type: return_curriculum
-    reward_weights: {pos: 0.5, contact: 1.0, forward: 2.0, net: 0.0, court: 0.0, target: 0.0, vertical: 0.0}
+    reward_weights: {pos: 0.5, contact: 1.0, forward: 2.0, net: 0.5, court: 0.0, target: 0.0, vertical: 0.2}
     reward_scales: {pos: 5.0, phase: 5.0, court: 0.02, target: 0.005}
     return_curriculum:
       forward_reward_mode: signed_linear  # 2_1 defaults to positive_linear, unchanged.
@@ -104,18 +104,16 @@ env:
         contact: {start: 0.25, end: 1.0, start_frame: 0, end_frame: 13107200}  # Epochs 0-100.
         forward: {start: 0.0, end: 2.0, start_frame: 1310720, end_frame: 13107200}  # 10-100.
         pos: {start: 1.0, end: 0.5, start_frame: 1310720, end_frame: 13107200}  # 10-100
-        # Resume unchanged rewards to epoch 300, inspect, then explicitly enable
-        # selected proposals and raise max_epochs. These are NOT automatic gates.
+        # Enable vertical/net now; hold their attained weights until reviewed.
+        # Inspect epochs 350/400 before any further objective or weight changes.
         vertical:
-          enabled: false
+          enabled: true
           segments:
             - {start: 0.0, end: 0.2, start_frame: 39321600, end_frame: 45875200} # 300-350.
-            - {start: 0.2, end: 0.0, start_frame: 52428800, end_frame: 58982400} # 400-450, if outcomes improve.
         net:
-          enabled: false
+          enabled: true
           segments:
             - {start: 0.0, end: 0.5, start_frame: 39321600, end_frame: 52428800} # 300-400.
-            - {start: 0.5, end: 1.0, start_frame: 52428800, end_frame: 58982400} # 400-450.
         court: {enabled: false, start: 0.0, end: 0.5, start_frame: 52428800, end_frame: 65536000} # 400-500, after useful net clearance.
         target: {enabled: false, start: 0.0, end: 0.5, start_frame: 65536000, end_frame: 78643200} # 500-600, after broad returns.
       scales_schedule:
@@ -226,7 +224,7 @@ params:
 
   config:
     name: high_level_2_2
-    description: "Continue 2_2 to 300 epochs with its trained rewards; optional reviewed net, bounded vertical, court and target schedules."
+    description: "Continue epoch 300: ramp vertical penalty to 0.2 by 350 and net reward to 0.5 by 400; hold both, review before enabling placement."
     protect_existing_checkpoints: True
     env_name: rlgpu
     multi_gpu: False
@@ -242,7 +240,7 @@ params:
     learning_rate: 2e-5
     lr_schedule: constant
     score_to_win: 20000
-    max_epochs: 300
+    max_epochs: 500
     save_best_after: 50
     save_frequency: 50
     print_stats: True
