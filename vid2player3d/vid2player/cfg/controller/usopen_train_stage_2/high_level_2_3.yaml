@@ -88,7 +88,7 @@ env:
     # Training schedules override them from frame zero. Compare physical outcomes,
     # not total reward, against 2_1 (which has different evaluation weights).
     reward_type: return_curriculum
-    reward_weights: {pos: 0.5, contact: 1.0, forward: 2.0, net: 0.0, court: 0.0, target: 0.0, vertical: 0.2}
+    reward_weights: {pos: 0.5, contact: 1.0, forward: 1.0, net: 0.0, court: 0.0, target: 0.0, vertical: 1.0}
     reward_scales: {pos: 5.0, phase: 5.0, court: 0.02, target: 0.005}
     return_curriculum:
       forward_reward_mode: signed_linear  # 2_1 defaults to positive_linear, unchanged.
@@ -102,7 +102,10 @@ env:
       # With 2048 environments x 64 steps, one epoch collects 131072 transitions.
       weights_schedule:
         contact: {start: 0.25, end: 1.0, start_frame: 0, end_frame: 13107200}  # Epochs 0-100.
-        forward: {start: 0.0, end: 2.0, start_frame: 1310720, end_frame: 13107200}  # 10-100.
+        forward:
+          segments: 
+            - {start: 0.0, end: 2.0, start_frame: 1310720, end_frame: 13107200}  # 10-100.
+            - {start: 2.0, end: 1.0, start_frame: 26214400, end_frame: 32768000}  # 200-250.
         pos: {start: 1.0, end: 0.5, start_frame: 1310720, end_frame: 13107200}  # 10-100
         # Give forward shaping a head start, then gently constrain vertical motion.
         # Hold vertical credit until outcome quality justifies removing the heuristic.
@@ -110,6 +113,7 @@ env:
           enabled: true
           segments:
             - {start: 0.0, end: 0.2, start_frame: 6553600, end_frame: 19660800} # 50-150.
+            - {start: 0.2, end: 1.0, start_frame: 26214400, end_frame: 32768000}  # 200-250.
         net:
           enabled: false
           segments:
@@ -240,8 +244,8 @@ params:
     learning_rate: 2e-5
     lr_schedule: constant
     score_to_win: 20000
-    max_epochs: 10000
-    save_best_after: 50
+    max_epochs: 500
+    save_best_after: 100
     save_frequency: 50
     print_stats: True
     entropy_coef: 0.0
