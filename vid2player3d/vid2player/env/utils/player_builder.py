@@ -183,12 +183,15 @@ class PlayerBuilder():
             cfg_train['params']['config']['dual_model_cp'] = self.physics_config['dual_model_cp']
         if self.physics_config.get('assetFileName'):
             cfg['env']['asset']['assetFileName'] = self.physics_config['assetFileName']
-        if self.physics_config.get('has_racket_collision'):
-            cfg['env']['has_racket_collision'] = self.physics_config['has_racket_collision']
-        if self.physics_config.get('controlFrequencyInv'):
-            cfg['env']['controlFrequencyInv'] = self.physics_config['controlFrequencyInv']
-        if self.physics_config.get('residual_force_scale'):
-            cfg['env']['residual_force_scale'] = self.physics_config['residual_force_scale']
+        # Test presence, so explicit False and zero overrides are honored.
+        for key in ('has_self_collision', 'has_racket_collision', 'controlFrequencyInv',
+                    'residual_force_scale', 'residual_torque_scale', 'kp_scale', 'kd_scale',
+                    'default_humanoid_mass', 'pd_tar_lim'):
+            if key in self.physics_config:
+                cfg['env'][key] = self.physics_config[key]
+        for key in ('assetRoot', 'angular_damping', 'max_angular_velocity'):
+            if key in self.physics_config:
+                cfg['env']['asset'][key] = self.physics_config[key]
         if self.physics_config.get('plane_restitution') is not None:
             cfg['env']['plane']['restitution'] = self.physics_config['plane_restitution']
 

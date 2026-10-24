@@ -157,6 +157,7 @@ def load_cfg(args):
     cfg_train['params']['config']['wandb_dir'] = cfg_dir
     cfg_train['params']['config']['train_dir'] = os.path.join(cfg_dir, 'train') 
     cfg_train['params']['config']['device'] = args.rl_device
+    cfg_train['params']['config']['device_name'] = args.rl_device
 
     os.makedirs(network_path, exist_ok=True)
     os.makedirs(log_path, exist_ok=True)

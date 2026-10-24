@@ -183,7 +183,7 @@ def main():
         evaluation_dir.mkdir(parents=True, exist_ok=True)
         cfg['env']['evaluation_dir'] = str(evaluation_dir)
         (evaluation_dir / 'config.json').write_text(json.dumps(
-            {'args': vars(args), 'env': cfg['env'], 'policy': cfg_train['params']},
+            {'args': vars(args), 'env': cfg['env'], 'sim': cfg['sim'], 'policy': cfg_train['params']},
             indent=2, default=str))
         if cfg['env'].get('headless_record') and args.rec_fname is None:
             cfg['env']['rec_fname'] = str(evaluation_dir / 'motion.mp4')

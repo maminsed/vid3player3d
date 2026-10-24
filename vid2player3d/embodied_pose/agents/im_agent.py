@@ -73,6 +73,9 @@ class ImitatorAgent(common_agent.CommonAgent):
             self.central_value_net = central_value.CentralValueTrain(**cv_config).to(self.ppo_device)
 
         self.use_experimental_cv = self.config.get('use_experimental_cv', True)
+        if self.minibatch_size > self.num_actors:
+            raise ValueError('Imitation minibatch_size counts environments, not transitions; '
+                             'it must be <= num_actors (reduce it for small CPU tests)')
         self.dataset = amp_datasets.AMPDataset(self.num_actors, self.minibatch_size, self.is_discrete, self.is_rnn, self.ppo_device, self.seq_len)
         self.algo_observer.after_init(self)
         
@@ -91,6 +94,15 @@ class ImitatorAgent(common_agent.CommonAgent):
                 self.load_pretrained(pretrained_model_cp)
         else:
             print(f"Not loading pretrained model from: {pretrained_model_cp} because {config.get('load_checkpoint', False)}")
+
+        prior_count = config.get('pretrained_running_obs_count')
+        if prior_count is not None and pretrained_model_cp is not None and not config.get('load_checkpoint', False):
+            if prior_count <= 0:
+                raise ValueError('pretrained_running_obs_count must be positive')
+            normalizer = self.model.a2c_network.running_obs
+            if not hasattr(normalizer, 'n'):
+                raise ValueError('pretrained_running_obs_count requires running_obs_type: ours')
+            normalizer.n.clamp_(max=int(prior_count))
 
         self.game_rewards = torch_ext.AverageMeter((self.value_size,), self.games_to_track).to(self.ppo_device)
 
@@ -111,11 +123,14 @@ class ImitatorAgent(common_agent.CommonAgent):
         return config
     
     def restore(self, cp_name):
-        cp_path = os.path.join(self.network_path, f"{self.config['name']}_{cp_name}.pth")
+        cp_path = (cp_name if os.path.isfile(cp_name) or str(cp_name).endswith('.pth')
+                   else os.path.join(self.network_path, f"{self.config['name']}_{cp_name}.pth"))
         checkpoint = torch.load(cp_path, map_location=self.device)
         self.set_full_state_weights(checkpoint)
 
     def load_pretrained(self, cp_path):
+        if not os.path.isfile(cp_path):
+            raise FileNotFoundError(f'Requested pretrained checkpoint does not exist: {cp_path}')
         checkpoint = torch.load(cp_path, map_location=self.device)
 
         if 'pytorch-lightning_version' in checkpoint:
@@ -124,9 +139,11 @@ class ImitatorAgent(common_agent.CommonAgent):
             print('Shared keys in model and lightning checkpoint:', [key for key in checkpoint['state_dict'] if key in model_state_dict])
             print('Lightning keys not found in current model:', [key for key in checkpoint['state_dict'] if key not in model_state_dict])
             print('Keys not found in lightning checkpoint:', [key for key in model_state_dict if key not in checkpoint['state_dict']])
-            self.model.a2c_network.load_state_dict(checkpoint['state_dict'], strict=False)
+            self.model.a2c_network.load_state_dict(checkpoint['state_dict'], strict=self.config.get('strict_pretrained', False))
         else:
             model_state_dict = self.model.state_dict()
+            if self.config.get('strict_pretrained', False):
+                self.model.load_state_dict(checkpoint['model'], strict=True)
             missing_checkpoint_keys = [key for key in model_state_dict if key not in checkpoint['model']]
             print('loading model from EmbodyPose checkpoint...')
             print('Shared keys in model and checkpoint:', [key for key in model_state_dict if key in checkpoint['model']])
@@ -241,6 +258,8 @@ class ImitatorAgent(common_agent.CommonAgent):
                 for i, name in enumerate(self.sub_rewards_names.split(',')):
                     self.log_dict.update({f'sub_rewards/{name}': self.step_sub_rewards.avg[i].item()})
 
+                for name, meter in self.tracking_meters.items():
+                    self.log_dict[f'tracking/{name}'] = meter.avg.item()
                 self.algo_observer.after_print_stats(frame, epoch_num, total_time)
                 
                 if self.game_rewards.current_size > 0:
@@ -331,6 +350,7 @@ class ImitatorAgent(common_agent.CommonAgent):
 
         self.step_rewards = AverageMeter()
         self.step_sub_rewards = AverageMeter()
+        self.tracking_meters = {}
 
         self.current_rewards[:] = 0
         self.current_lengths[:] = 0
@@ -392,6 +412,10 @@ class ImitatorAgent(common_agent.CommonAgent):
                 self.step_sub_rewards.update(sub_rewards_not_done.mean(dim=0), n)
                 self.sub_rewards_names = infos['sub_rewards_names']
 
+            for name, values in infos.get('tracking', {}).items():
+                if n > 0:
+                    meter = self.tracking_meters.setdefault(name, AverageMeter())
+                    meter.update(values[prev_dones == 0].mean(), n)
             self.algo_observer.process_infos(infos, done_indices)
 
             done_indices = done_indices[:, 0]

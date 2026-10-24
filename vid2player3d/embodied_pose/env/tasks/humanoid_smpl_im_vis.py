@@ -8,6 +8,7 @@
 import glfw
 import imageio
 from datetime import datetime
+from pathlib import Path
 
 from isaacgym.torch_utils import *
 
@@ -30,7 +31,7 @@ class HumanoidSMPLIMVis(HumanoidSMPLIM):
                          headless=headless or not show_gym_viewer)
         self.headless = headless
         self.cam_inited = False
-        self.max_episode_length = 3000
+        self.recording = False
         self.vis_mode = self.args.vis_mode
         if self.cfg['env'].get('record', False):
             if self.args.rec_once:
@@ -40,8 +41,11 @@ class HumanoidSMPLIMVis(HumanoidSMPLIM):
             self.start_recording()
 
     def start_recording(self):
-        filename = self.cfg['env'].get('rec_fname', self._video_path % datetime.now().strftime('%Y-%m-%d-%H:%M:%S'))
-        self.writer = imageio.get_writer(filename, fps=30, quality=8, macro_block_size=None)
+        filename = self.cfg['env'].get('rec_fname') or str(
+            Path(self.cfg['cfg_dir']) / 'recordings' / datetime.now().strftime('%Y-%m-%d_%H-%M-%S.mp4'))
+        Path(filename).parent.mkdir(parents=True, exist_ok=True)
+        self.writer = imageio.get_writer(filename, fps=self.cfg['env'].get('rec_fps', 1 / self.dt),
+                                         quality=8, macro_block_size=None)
         self.frame_index = 0
         print(f"============ Writing video to {filename} ============")
 

@@ -99,7 +99,9 @@ def resolve_settings(name):
     base_path = PROJECT / 'vid2player/cfg/im' / (physics['config'] + '.yaml')
     base = yaml.safe_load(base_path.read_text())
     asset = dict(base['env']['asset'])
-    asset['assetFileName'] = physics.get('assetFileName', asset['assetFileName'])
+    for key in ('assetRoot', 'assetFileName', 'angular_damping', 'max_angular_velocity'):
+        if key in physics:
+            asset[key] = physics[key]
     result['asset_path'] = str((PROJECT / asset['assetRoot'] / asset['assetFileName']).resolve())
     result['source_racket_dynamics'] = asdict(resolve_racket_dynamics(v2p.get('racket_dynamics')))
     # Keep custom numeric values in the source YAML, selecting the requested model.
@@ -108,7 +110,9 @@ def resolve_settings(name):
     result['racket_dynamics'] = asdict(resolve_racket_dynamics(racket))
     result['tennis_contacts'] = asdict(contact_materials(v2p))
     effective_env = copy.deepcopy(base['env'])
-    for key in ('controlFrequencyInv', 'residual_force_scale', 'has_racket_collision'):
+    for key in ('controlFrequencyInv', 'residual_force_scale', 'residual_torque_scale',
+                'has_self_collision', 'has_racket_collision', 'kp_scale', 'kd_scale',
+                'default_humanoid_mass', 'pd_tar_lim'):
         if key in physics:
             effective_env[key] = physics[key]
     effective_env['plane']['restitution'] = physics.get('plane_restitution', effective_env['plane']['restitution'])
@@ -136,8 +140,10 @@ def resolve_settings(name):
         'drive_scaling': 'XML stiffness/damping * actual humanoid mass / default_humanoid_mass * kp_scale/kd_scale',
         'has_self_collision': effective_env.get('has_self_collision', False),
         'has_racket_collision': effective_env.get('has_racket_collision', False),
-        'asset_angular_damping': .01,
-        'asset_max_angular_velocity_radps': result['racket_dynamics']['max_angular_velocity'],
+        'asset_angular_damping': asset.get('angular_damping', .01),
+        'asset_max_angular_velocity_radps': (result['racket_dynamics']['max_angular_velocity']
+                                            if result['racket_dynamics']['model'] != 'legacy'
+                                            else asset.get('max_angular_velocity', 100.)),
         'note': 'Recorded training target; no simulator properties were measured or modified',
     }
     result['physics_overrides'] = physics

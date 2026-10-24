@@ -25,6 +25,11 @@ from embodied_pose.env.tasks.humanoid_smpl import HumanoidSMPL, dof_to_obs
 from embodied_pose.utils.torch_transform import heading_to_vec, angle_axis_to_rot6d
 from embodied_pose.utils import torch_utils
 from uhc.smpllib.smpl_local_robot import Robot
+from uhc.smpllib.smpl_parser import SMPL_BONE_ORDER_NAMES
+from embodied_pose.utils.imitation_asset import read_fixed_asset, validate_motion_asset
+from vid2player.utils.racket_dynamics import resolve_racket_dynamics, configure_racket_body
+from vid2player.utils.tennis_contacts import contact_materials
+from vid2player.utils.tennis_materials import configure_racket_asset
 
 
 TMP_SMPL_DIR = f"/tmp/smpl_humanoid_{uuid4()}"
@@ -61,6 +66,21 @@ class HumanoidSMPLIM(HumanoidSMPL):
         if device_type == "cuda" or device_type == "GPU":
             self.device = "cuda" + ":" + str(device_id)
         
+        self.asset_mode = cfg['env'].get('asset_mode', 'generated')
+        if self.asset_mode not in ('generated', 'fixed'):
+            raise ValueError('env.asset_mode must be generated or fixed')
+        self.adjust_motion_height = cfg['env'].get('adjust_motion_height', True)
+        self.has_racket_collision = cfg['env'].get('has_racket_collision', False)
+        self._racket_dynamics = resolve_racket_dynamics(cfg['env'].get('racket_dynamics'))
+        self._tennis_contacts = contact_materials(cfg['env'])
+        if self._tennis_contacts.enabled:
+            cfg['env']['plane'].update(staticFriction=self._tennis_contacts.court_friction,
+                                      dynamicFriction=self._tennis_contacts.court_friction,
+                                      restitution=self._tennis_contacts.court_restitution)
+        if self.asset_mode == 'generated' and (self._racket_dynamics.enabled or self.has_racket_collision):
+            raise ValueError('Racket options require env.asset_mode: fixed')
+        self._racket_body_id = None
+        self._state_reset_happened = False
         self.has_shape_obs = cfg["env"].get("has_shape_obs", False)
         self.has_self_collision = cfg["env"].get("has_self_collision", False)
         self.residual_force_scale = cfg["env"].get("residual_force_scale", 0.0)
@@ -123,6 +143,34 @@ class HumanoidSMPLIM(HumanoidSMPL):
 
         return
 
+    def _setup_tensors(self):
+        if hasattr(self, '_physical_num_bodies'):
+            self.num_bodies = self._physical_num_bodies
+        super()._setup_tensors()
+        self._physical_num_bodies = self.num_bodies
+        self._physical_body_pos = self._rigid_body_pos
+        self._physical_body_rot = self._rigid_body_rot
+        self._physical_body_vel = self._rigid_body_vel
+        self._physical_body_ang_vel = self._rigid_body_ang_vel
+        if self.asset_mode == 'fixed':
+            self.num_bodies = 24
+            self._rigid_body_pos = self._rigid_body_pos[:, :24]
+            self._rigid_body_rot = self._rigid_body_rot[:, :24]
+            self._rigid_body_vel = self._rigid_body_vel[:, :24]
+            self._rigid_body_ang_vel = self._rigid_body_ang_vel[:, :24]
+            self._contact_forces = self._contact_forces[:, :24]
+
+    def _reset_racket_state(self, env_ids):
+        if self._racket_body_id is None or len(env_ids) == 0:
+            return
+        wrist = self.body_names.index('R_Wrist')
+        q = self._rigid_body_rot[env_ids, wrist]
+        offset = quat_rotate(q, self._racket_offset.expand(len(env_ids), -1))
+        self._physical_body_pos[env_ids, 24] = self._rigid_body_pos[env_ids, wrist] + offset
+        self._physical_body_rot[env_ids, 24] = q
+        self._physical_body_vel[env_ids, 24] = 0
+        self._physical_body_ang_vel[env_ids, 24] = 0
+
     def register_model(self, model):
         self.model = model
 
@@ -154,19 +202,25 @@ class HumanoidSMPLIM(HumanoidSMPL):
             res_force = torch_utils.my_quat_rotate(root_heading_q, res_force)
             res_torque = torch_utils.my_quat_rotate(root_heading_q, res_torque)
 
-            forces = torch.zeros((self.num_envs, self.num_bodies, 3), device=self.device, dtype=torch.float)
-            torques = torch.zeros((self.num_envs, self.num_bodies, 3), device=self.device, dtype=torch.float)
+            forces = torch.zeros((self.num_envs, self._physical_num_bodies, 3), device=self.device, dtype=torch.float)
+            torques = torch.zeros((self.num_envs, self._physical_num_bodies, 3), device=self.device, dtype=torch.float)
             forces[:, 0, :] = res_force
             torques[:, 0, :] = res_torque
             self.gym.apply_rigid_body_force_tensors(self.sim, gymtorch.unwrap_tensor(forces), gymtorch.unwrap_tensor(torques), gymapi.ENV_SPACE)
 
         self._save_prev_target_motion_state()
+        if self.cfg['env'].get('tracking_diagnostics', False):
+            wrist_chain = self.body_names.index('R_Thorax')
+            chest = self.body_names.index('Chest')
+            self._previous_collar_rot = quat_mul(quat_conjugate(self._rigid_body_rot[:, chest]),
+                                                 self._rigid_body_rot[:, wrist_chain]).clone()
         return
 
     def _setup_character_props(self, key_bodies):
         asset_file = self.cfg["env"]["asset"]["assetFileName"]
         num_key_bodies = len(key_bodies)
-        self.body_names = body_names = self.gym.get_asset_rigid_body_names(self.humanoid_asset)
+        body_names = self.gym.get_asset_rigid_body_names(self.humanoid_asset)
+        self.body_names = body_names = body_names[:24] if self.asset_mode == 'fixed' else body_names
         self.dof_names = dof_names = self.gym.get_asset_dof_names(self.humanoid_asset)
         self._dof_body_ids = []
         self._dof_offsets = []
@@ -279,24 +333,52 @@ class HumanoidSMPLIM(HumanoidSMPL):
         self.humanoid_rest_joints = dict()
 
         asset_options = gymapi.AssetOptions()
-        asset_options.angular_damping = 0.01
-        asset_options.max_angular_velocity = 100.0
+        asset_options.angular_damping = self.cfg['env']['asset'].get('angular_damping', 0.01)
+        asset_options.max_angular_velocity = (self._racket_dynamics.max_angular_velocity
+                                              if self._racket_dynamics.enabled else self.cfg['env']['asset'].get('max_angular_velocity', 100.0))
         asset_options.default_dof_drive_mode = gymapi.DOF_MODE_NONE
 
         t_start = time.time()
         res_acc = []
-        for _, idx in enumerate(tqdm(unique_motion_ids)):
-            res_acc += (_create_smpl_humanoid_xml([idx], None, smpl_robot, all_motion_bodies, all_motion_body_scales, 0))
+        if self.asset_mode == 'fixed':
+            asset_cfg = self.cfg['env']['asset']
+            asset_file = os.path.abspath(os.path.join(asset_cfg['assetRoot'], asset_cfg['assetFileName']))
+            names, parents, offsets, rest = read_fixed_asset(asset_file)
+            validate_motion_asset(self._motion_lib, names, parents, offsets,
+                                  asset_cfg['gender_beta'], asset_cfg.get('body_scale', 1.0))
+            self._racket_body_id = 24 if len(names) == 25 else None
+            if self._racket_body_id is None and (self._racket_dynamics.enabled or self.has_racket_collision):
+                raise ValueError('Configured racket options but fixed asset has no Racket body')
+            self._racket_offset = (torch.as_tensor(offsets[-1], device=self.device)
+                                   if self._racket_body_id is not None else None)
+            rest = rest[[names.index(n) for n in SMPL_BONE_ORDER_NAMES]]
+            res_acc = [(idx, asset_file, rest) for idx in unique_motion_ids]
+        else:
+            for _, idx in enumerate(tqdm(unique_motion_ids)):
+                res_acc += (_create_smpl_humanoid_xml([idx], None, smpl_robot, all_motion_bodies, all_motion_body_scales, 0))
         t_finish_gen = time.time()
         print(f"Finished generating {len(unique_motion_ids)} humanoids in {t_finish_gen - t_start:.3f}s!")
 
+        fixed_asset = None
         for humanoid_config in res_acc:
             humanoid_idx, asset_file_real, rest_joints = humanoid_config
+            if self.asset_mode == 'fixed' and fixed_asset is not None:
+                self.humanoid_assets[humanoid_idx] = fixed_asset
+                self.humanoid_files[humanoid_idx] = asset_file_real
+                self.humanoid_rest_joints[humanoid_idx] = rest_joints
+                continue
             humanoid_asset = self.gym.load_asset(self.sim, asset_root, asset_file_real, asset_options)
+            if self._racket_body_id is not None:
+                configure_racket_asset(self.gym, humanoid_asset, self._racket_body_id,
+                                       self._tennis_contacts.racket_restitution,
+                                       self._tennis_contacts.racket_friction,
+                                       self._tennis_contacts.racket_contact_offset if self._tennis_contacts.enabled else None)
+            if self.asset_mode == 'fixed':
+                fixed_asset = humanoid_asset
 
             # create force sensors at the feet
-            right_foot_idx = self.gym.find_asset_rigid_body_index(humanoid_asset, "right_foot")
-            left_foot_idx = self.gym.find_asset_rigid_body_index(humanoid_asset, "left_foot")
+            right_foot_idx = self.gym.find_asset_rigid_body_index(humanoid_asset, "R_Ankle" if self.asset_mode == 'fixed' else "right_foot")
+            left_foot_idx = self.gym.find_asset_rigid_body_index(humanoid_asset, "L_Ankle" if self.asset_mode == 'fixed' else "left_foot")
             sensor_pose = gymapi.Transform()
 
             self.gym.create_asset_force_sensor(humanoid_asset, right_foot_idx, sensor_pose)
@@ -331,8 +413,9 @@ class HumanoidSMPLIM(HumanoidSMPL):
             self.envs.append(env_ptr)
             self.smpl_rest_joints.append(self.humanoid_rest_joints[motion_ids[i]])
         self.smpl_rest_joints = torch.from_numpy(np.stack(self.smpl_rest_joints)).to(self.device)
-        self.smpl_parents = smpl_robot.smpl_parser.parents.to(self.device)
-        self.smpl_children = smpl_robot.smpl_parser.children_map.to(self.device)
+        parser = smpl_robot.smpl_parser_m if self.asset_mode == 'fixed' else smpl_robot.smpl_parser
+        self.smpl_parents = parser.parents.to(self.device)
+        self.smpl_children = parser.children_map.to(self.device)
         self.humanoid_masses = np.array(self.humanoid_masses)
         print("Humanoid weights:", np.array2string(self.humanoid_masses[:32], precision=2, separator=","))
 
@@ -364,7 +447,7 @@ class HumanoidSMPLIM(HumanoidSMPL):
     def _build_env(self, env_id, env_ptr, humanoid_asset):
         col_group = env_id
         col_filter = 0
-        if not self.has_self_collision:
+        if not self.has_self_collision and not self.has_racket_collision:
             col_filter = 1
 
         start_pose = gymapi.Transform()
@@ -374,6 +457,21 @@ class HumanoidSMPLIM(HumanoidSMPL):
 
         humanoid_handle = self.gym.create_actor(env_ptr, humanoid_asset, start_pose, "humanoid", col_group, col_filter)
 
+        if self._racket_body_id is not None:
+            configure_racket_body(self.gym, env_ptr, humanoid_handle, self._racket_body_id, self._racket_dynamics)
+            props = self.gym.get_actor_rigid_shape_properties(env_ptr, humanoid_handle)
+            if self.has_self_collision:
+                filters = [0, 1, 0, 0, 0, 1, 0, 0, 0, 32, 6, 120, 0, 64, 0, 20, 0, 0, 0, 0, 10, 0, 0, 0, 0, 0]
+            elif self.has_racket_collision:
+                filters = [1] * 24 + [0, 0]
+            else:
+                filters = None
+            if filters is not None:
+                if len(props) != len(filters):
+                    raise ValueError('Collision filtering requires the 26-shape SMPL/racket asset')
+                for prop, value in zip(props, filters):
+                    prop.filter = value
+                self.gym.set_actor_rigid_shape_properties(env_ptr, humanoid_handle, props)
         self.gym.enable_actor_dof_force_sensors(env_ptr, humanoid_handle)
         humanoid_mass = np.sum([prop.mass for prop in self.gym.get_actor_rigid_body_properties(env_ptr, humanoid_handle)])
         self.humanoid_masses.append(humanoid_mass)
@@ -418,6 +516,8 @@ class HumanoidSMPLIM(HumanoidSMPL):
         self.extras["terminate"] = self._terminate_buf
         self.extras["sub_rewards"] = self._sub_rewards
         self.extras["sub_rewards_names"] = self._sub_rewards_names
+        if self.cfg['env'].get('tracking_diagnostics', False):
+            self.extras['tracking'] = self._tracking_metrics()
 
         # debug viz
         if self.viewer and self.debug_viz:
@@ -500,6 +600,7 @@ class HumanoidSMPLIM(HumanoidSMPL):
             self._rigid_body_rot[env_ids] = self._reset_rb_rot
             self._rigid_body_vel[env_ids] = 0
             self._rigid_body_ang_vel[env_ids] = 0
+            self._reset_racket_state(env_ids)
             self._state_reset_happened = False
 
         self.gym.refresh_force_sensor_tensor(self.sim)
@@ -543,7 +644,7 @@ class HumanoidSMPLIM(HumanoidSMPL):
             assert(False), "Unsupported state initialization strategy: {:s}".format(str(self._state_init))
 
         root_pos, root_rot, dof_pos, root_vel, root_ang_vel, dof_vel, key_pos, rb_pos, rb_rot \
-               = self._motion_lib.get_motion_state(motion_ids, motion_times.to(self._motion_lib._device), return_rigid_body=True, device=self.device, adjust_height=True, ground_tolerance=self.ground_tolerance)
+               = self._motion_lib.get_motion_state(motion_ids, motion_times.to(self._motion_lib._device), return_rigid_body=True, device=self.device, adjust_height=self.adjust_motion_height, ground_tolerance=self.ground_tolerance)
 
         self._set_env_state(env_ids=env_ids, 
                             root_pos=root_pos, 
@@ -579,7 +680,7 @@ class HumanoidSMPLIM(HumanoidSMPL):
         all_motion_times_flat = all_motion_times.view(-1)
 
         root_pos, root_rot, dof_pos, root_vel, root_ang_vel, dof_vel, key_pos, rb_pos, rb_rot \
-               = self._motion_lib.get_motion_state(all_motion_ids_flat, all_motion_times_flat.to(self._motion_lib._device), return_rigid_body=True, device=self.device, adjust_height=True, ground_tolerance=self.ground_tolerance)
+               = self._motion_lib.get_motion_state(all_motion_ids_flat, all_motion_times_flat.to(self._motion_lib._device), return_rigid_body=True, device=self.device, adjust_height=self.adjust_motion_height, ground_tolerance=self.ground_tolerance)
 
         context_dict = {
             'body_pos': rb_pos,
@@ -656,7 +757,7 @@ class HumanoidSMPLIM(HumanoidSMPL):
             motion_ids = self._reset_ref_motion_ids[env_ids]
             motion_times = self._cur_ref_motion_times[env_ids] + self.dt     # next frame
         root_pos, root_rot, dof_pos, root_vel, root_ang_vel, dof_vel, key_pos, rb_pos, rb_rot \
-               = self._motion_lib.get_motion_state(motion_ids, motion_times.to(self._motion_lib._device), return_rigid_body=True, device=self.device, adjust_height=True, ground_tolerance=self.ground_tolerance)
+               = self._motion_lib.get_motion_state(motion_ids, motion_times.to(self._motion_lib._device), return_rigid_body=True, device=self.device, adjust_height=self.adjust_motion_height, ground_tolerance=self.ground_tolerance)
         # new target
         if env_ids is None:
             self._target_root_pos = root_pos
@@ -748,6 +849,23 @@ class HumanoidSMPLIM(HumanoidSMPL):
             self._sub_rewards[reset_mask] = 0
         return
 
+    def _tracking_metrics(self):
+        # Diagnostics only: keep the imitation objective unchanged.
+        collar = self.body_names.index('R_Thorax')
+        chest = self.body_names.index('Chest')
+        rot = quat_mul(quat_conjugate(self._rigid_body_rot[:, chest]), self._rigid_body_rot[:, collar])
+        ref = quat_mul(quat_conjugate(self._prev_target_rb_rot[:, chest]), self._prev_target_rb_rot[:, collar])
+        def angle(q):
+            return 2 * torch.atan2(q[:, :3].norm(dim=-1), q[:, 3].abs()) * (180 / np.pi)
+        feet = [self.body_names.index(n) for n in ('L_Ankle', 'L_Toe', 'R_Ankle', 'R_Toe')]
+        return {
+            'collar_error_deg': angle(quat_mul(quat_conjugate(ref), rot)),
+            'collar_speed_deg_s': angle(quat_mul(quat_conjugate(self._previous_collar_rot), rot)) / self.dt,
+            'joint_residual_rms_rad': (self.actions[:, :self._num_dof] - self._prev_target_dof_pos).square().mean(-1).sqrt(),
+            'foot_joint_height_error_m': (self._rigid_body_pos[:, feet, 2] - self._prev_target_rb_pos[:, feet, 2]).abs().mean(-1),
+            'reference_foot_joint_height_m': self._prev_target_rb_pos[:, feet, 2].amin(-1),
+        }
+
     def get_aux_losses(self, model_res_dict):
         aux_loss_specs = self.cfg['env'].get('aux_loss_specs', dict())
         context = model_res_dict['extra']['context']
@@ -804,6 +922,7 @@ class HumanoidSMPLIM(HumanoidSMPL):
         self._rigid_body_rot[env_ids] = rb_rot
         self._rigid_body_vel[env_ids] = 0
         self._rigid_body_ang_vel[env_ids] = 0
+        self._reset_racket_state(env_ids)
         self._reset_rb_pos = rb_pos.clone()
         self._reset_rb_rot = rb_rot.clone()
 

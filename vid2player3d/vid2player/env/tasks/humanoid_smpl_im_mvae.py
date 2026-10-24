@@ -269,9 +269,9 @@ class HumanoidSMPLIMMVAE(HumanoidSMPL):
         self.humanoid_files = dict()
 
         asset_options = gymapi.AssetOptions()
-        asset_options.angular_damping = 0.01
+        asset_options.angular_damping = self.cfg['env']['asset'].get('angular_damping', 0.01)
         asset_options.max_angular_velocity = (self._racket_dynamics.max_angular_velocity
-                                              if self._racket_dynamics.enabled else 100.0)
+                                              if self._racket_dynamics.enabled else self.cfg['env']['asset'].get('max_angular_velocity', 100.0))
         asset_options.default_dof_drive_mode = gymapi.DOF_MODE_NONE
 
         self._reset_ref_motion_bodies = torch.zeros((self.num_envs, self.cfg['env'].get('gender_beta_dim', 11)), device=self.device)
@@ -785,8 +785,9 @@ class HumanoidSMPLIMMVAE(HumanoidSMPL):
         else:
             pd_tar = base_dict[pd_target_base] + self._pd_action_scale * action
         
-        pd_lower = self._dof_pos - np.pi / 2
-        pd_upper = self._dof_pos + np.pi / 2
+        pd_limit = self.cfg['env'].get('pd_tar_lim', 0.5) * np.pi
+        pd_lower = self._dof_pos - pd_limit
+        pd_upper = self._dof_pos + pd_limit
         pd_tar = torch.maximum(torch.minimum(pd_tar, pd_upper), pd_lower)
         self._pd_target_dof_pos = pd_tar.clone()
         return pd_tar
