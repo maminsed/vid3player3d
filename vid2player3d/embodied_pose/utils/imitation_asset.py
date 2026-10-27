@@ -11,6 +11,8 @@ BODY_NAMES = [
     'L_Shoulder', 'L_Elbow', 'L_Wrist', 'L_Hand', 'R_Thorax', 'R_Shoulder',
     'R_Elbow', 'R_Wrist', 'R_Hand',
 ]
+BODY_PARENTS = [-1, 0, 1, 2, 3, 0, 5, 6, 7, 0, 9, 10,
+                11, 12, 11, 14, 15, 16, 17, 11, 19, 20, 21, 22]
 
 
 def read_fixed_asset(path):
@@ -36,9 +38,7 @@ def read_fixed_asset(path):
     expected_joints = [f'{name}_{axis}' for name in BODY_NAMES[1:] for axis in ('x', 'y', 'z')]
     if names not in (BODY_NAMES, BODY_NAMES + ['Racket']) or joints != expected_joints:
         raise ValueError('Expected 24 SMPL bodies / 69 ordered DOFs and optional final Racket')
-    expected_parents = [-1, 0, 1, 2, 3, 0, 5, 6, 7, 0, 9, 10,
-                        11, 12, 11, 14, 15, 16, 17, 11, 19, 20, 21, 22]
-    if parents[:24] != expected_parents:
+    if parents[:24] != BODY_PARENTS:
         raise ValueError('Fixed asset must preserve the canonical SMPL hierarchy')
     if len(names) == 25 and parents[-1] != BODY_NAMES.index('R_Wrist'):
         raise ValueError('Racket must be a fixed attachment to R_Wrist')

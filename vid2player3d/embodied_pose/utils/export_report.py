@@ -32,6 +32,9 @@ class ExportMotionMetrics:
             root_aligned_body_error_m=float(np.linalg.norm(diff - diff[:1], axis=-1).mean()),
             root_error_m=float(np.linalg.norm(diff[0])),
         )
+        for name, value in info.get('tracking', {}).items():
+            if name not in values:
+                values[name] = float(value[env])
         names = info.get('sub_rewards_names', '')
         if isinstance(names, str):
             names = names.split(',')

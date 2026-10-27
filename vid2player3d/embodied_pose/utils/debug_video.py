@@ -5,7 +5,7 @@ from pathlib import Path
 import imageio
 import numpy as np
 from PIL import Image, ImageDraw
-from embodied_pose.utils.racket_visual import racket_lines, transform_lines
+from embodied_pose.utils.racket_visual import racket_lines, wrist_racket_lines
 
 _recorders = []
 
@@ -94,17 +94,13 @@ class DebugVideo:
             for x, y in ends:
                 draw.ellipse((x-2, y-2, x+2, y+2), fill=color)
         if self.racket:
-            body = task._racket_body_id
-            pos = task._physical_body_pos[0, body].detach().cpu().numpy()
-            rot = task._physical_body_rot[0, body].detach().cpu().numpy()
-            rackets = [(transform_lines(self.racket, pos, rot), (35, 100, 220))]
+            wrist = task.body_names.index('R_Wrist')
+            offset = task._racket_offset.detach().cpu().numpy()
+            rot = task._rigid_body_rot[0, wrist].detach().cpu().numpy()
+            rackets = [(wrist_racket_lines(self.racket, actual[wrist], rot, offset), (35, 100, 220))]
             if target is not None:
-                wrist = task.body_names.index('R_Wrist')
                 ref_rot = task._prev_target_rb_rot[0, wrist].detach().cpu().numpy()
-                offset = task._racket_offset.detach().cpu().numpy()
-                # References have 24 bodies; derive the fixed racket from the wrist.
-                ref_pos = transform_lines([offset[None]], target[wrist], ref_rot)[0][0]
-                rackets.insert(0, (transform_lines(self.racket, ref_pos, ref_rot), (225, 140, 30)))
+                rackets.insert(0, (wrist_racket_lines(self.racket, target[wrist], ref_rot, offset), (225, 140, 30)))
             for lines, color in rackets:
                 for line in lines:
                     if np.isfinite(line).all():

@@ -30,6 +30,8 @@ from embodied_pose.utils.imitation_asset import read_fixed_asset, validate_motio
 from vid2player.utils.racket_dynamics import resolve_racket_dynamics, configure_racket_body
 from vid2player.utils.tennis_contacts import contact_materials
 from vid2player.utils.tennis_materials import configure_racket_asset
+from embodied_pose.utils.racket_visual import racket_face_normal
+from embodied_pose.utils.tracking_errors import body_tracking_errors, racket_tracking_errors
 
 
 TMP_SMPL_DIR = f"/tmp/smpl_humanoid_{uuid4()}"
@@ -351,6 +353,9 @@ class HumanoidSMPLIM(HumanoidSMPL):
                 raise ValueError('Configured racket options but fixed asset has no Racket body')
             self._racket_offset = (torch.as_tensor(offsets[-1], device=self.device)
                                    if self._racket_body_id is not None else None)
+            if self._racket_body_id is not None:
+                self._racket_face_normal = torch.as_tensor(
+                    racket_face_normal(asset_file), device=self.device, dtype=torch.float32)
             rest = rest[[names.index(n) for n in SMPL_BONE_ORDER_NAMES]]
             res_acc = [(idx, asset_file, rest) for idx in unique_motion_ids]
         else:
@@ -858,13 +863,22 @@ class HumanoidSMPLIM(HumanoidSMPL):
         def angle(q):
             return 2 * torch.atan2(q[:, :3].norm(dim=-1), q[:, 3].abs()) * (180 / np.pi)
         feet = [self.body_names.index(n) for n in ('L_Ankle', 'L_Toe', 'R_Ankle', 'R_Toe')]
-        return {
+        metrics = {
             'collar_error_deg': angle(quat_mul(quat_conjugate(ref), rot)),
             'collar_speed_deg_s': angle(quat_mul(quat_conjugate(self._previous_collar_rot), rot)) / self.dt,
             'joint_residual_rms_rad': (self.actions[:, :self._num_dof] - self._prev_target_dof_pos).square().mean(-1).sqrt(),
             'foot_joint_height_error_m': (self._rigid_body_pos[:, feet, 2] - self._prev_target_rb_pos[:, feet, 2]).abs().mean(-1),
             'reference_foot_joint_height_m': self._prev_target_rb_pos[:, feet, 2].amin(-1),
         }
+        metrics.update(body_tracking_errors(self._rigid_body_pos, self._rigid_body_rot,
+                                            self._prev_target_rb_pos, self._prev_target_rb_rot))
+        if self._racket_body_id is not None:
+            wrist = self.body_names.index('R_Wrist')
+            metrics.update(racket_tracking_errors(
+                self._rigid_body_pos[:, wrist], self._rigid_body_rot[:, wrist],
+                self._prev_target_rb_pos[:, wrist], self._prev_target_rb_rot[:, wrist],
+                self._racket_offset, self._racket_face_normal))
+        return metrics
 
     def get_aux_losses(self, model_res_dict):
         aux_loss_specs = self.cfg['env'].get('aux_loss_specs', dict())

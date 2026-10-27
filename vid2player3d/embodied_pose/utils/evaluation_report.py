@@ -30,6 +30,7 @@ class EvaluationReport:
         self.writer = None
         self.rows = []
         self.finished = set()
+        self.tracking_names = set()
 
     def append(self, game, step, reward, done, info):
         task = self.task
@@ -70,6 +71,10 @@ class EvaluationReport:
             for i, name in enumerate(names):
                 if name:
                     row[name] = float(info['sub_rewards'][env, i])
+            for name, values in info.get('tracking', {}).items():
+                if name not in row:
+                    row[name] = float(values[env])
+                    self.tracking_names.add(name)
             if self.writer is None:
                 self.writer = csv.DictWriter(self.file, fieldnames=list(row))
                 self.writer.writeheader()
@@ -94,6 +99,8 @@ class EvaluationReport:
                 max_body_position_error_m=max(r['body_position_error_m'] for r in rows),
                 mean_root_aligned_body_error_m=float(np.mean([r['root_aligned_body_error_m'] for r in rows])),
                 mean_root_error_m=float(np.mean([r['root_error_m'] for r in rows]))))
+            for name in self.tracking_names:
+                episodes[-1]['mean_' + name] = float(np.mean([r[name] for r in rows]))
         summary = dict(status=status, recorded_steps=len(self.rows), episodes=episodes,
                        metric_note='Position errors are unweighted mean body-origin distances in meters; root-aligned error removes pelvis translation only. Rewards are similarity scores, not error counts.')
         (self.directory / 'summary.json').write_text(json.dumps(summary, indent=2))
@@ -101,9 +108,11 @@ class EvaluationReport:
             # Explicit Agg canvas works over SSH without a display.
             from matplotlib.figure import Figure
             from matplotlib.backends.backend_agg import FigureCanvasAgg
-            figure = Figure(figsize=(10, 11), tight_layout=True)
+            angular_fields = [name for name in ('joint_rotation_error_deg', 'racket_face_error_deg',
+                                               'collar_error_deg') if name in self.tracking_names]
+            figure = Figure(figsize=(10, 14 if angular_fields else 11), tight_layout=True)
             FigureCanvasAgg(figure)
-            axes = figure.subplots(4, 1)
+            axes = figure.subplots(5 if angular_fields else 4, 1)
             for key, rows in groups.items():
                 times = [r['elapsed_s'] for r in rows]
                 label = f'game {key[0]}, env {key[1]}'
@@ -121,13 +130,20 @@ class EvaluationReport:
                 for field in ('dof_reward', 'vel_reward', 'body_pos_reward', 'body_rot_reward'):
                     if field in rows[0]:
                         axes[2].plot(times, [r[field] for r in rows], label=f'{label}: {field}')
-            for ax, title, ylabel in zip(axes, ['Total reward', 'Tracking errors', 'Reward components', 'Head height (world Z)'],
-                                        ['reward', 'meters', 'similarity', 'meters']):
+                for field in angular_fields:
+                    axes[4].plot(times, [r[field] for r in rows], label=f'{label}: {field}')
+            titles = ['Total reward', 'Tracking errors', 'Reward components', 'Head height (world Z)']
+            units = ['reward', 'meters', 'similarity', 'meters']
+            if angular_fields:
+                titles.append('Orientation tracking errors')
+                units.append('degrees')
+            for ax, title, ylabel in zip(axes, titles, units):
                 ax.set_title(title)
                 ax.set_ylabel(ylabel)
                 ax.set_xlabel('Episode elapsed time (s)')
                 ax.grid(alpha=0.3)
-                ax.legend(fontsize=6)
+                if ax.lines:
+                    ax.legend(fontsize=6)
             figure.savefig(str(self.directory / 'metrics.png'), dpi=110)
         print(f'Evaluation report: {self.directory.resolve()}')
         for episode in episodes:

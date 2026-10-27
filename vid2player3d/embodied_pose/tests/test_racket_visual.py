@@ -11,7 +11,7 @@ import torch
 
 PROJECT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT))
-from embodied_pose.utils.racket_visual import racket_lines, transform_lines
+from embodied_pose.utils.racket_visual import racket_lines, transform_lines, wrist_racket_lines, racket_face_normal
 from embodied_pose.utils.debug_video import DebugVideo, close_debug_videos
 from embodied_pose.utils.tools import create_vis_model_xml
 
@@ -47,17 +47,36 @@ class RacketVisualTests(unittest.TestCase):
             self.assertTrue(all(len(r.findall('geom')) == 2 for r in rackets))
             self.assertEqual(len(root.findall('.//joint')), 208)  # 69 per actor + default.
 
+    def test_fixed_racket_geometry_uses_same_wrist_frame_for_both_poses(self):
+        lines = racket_lines(ASSET)
+        normal = racket_face_normal(ASSET)
+        np.testing.assert_allclose(normal, [0, 2**-.5, 2**-.5])
+        wrist = np.array([1., 2., 3.])
+        wrist_q = np.array([0., 0., 0., 1.])
+        offset = np.array([-.5, 0, 0])
+        expected = wrist_racket_lines(lines, wrist, wrist_q, offset)
+        np.testing.assert_allclose(expected[0][0], wrist)  # Handle meets wrist.
+        # A rebased simulator frame must not rotate the XML outline by 90 deg.
+        imported_q = np.array([-2**-.5, 0, 0, 2**-.5])
+        old = transform_lines(lines, wrist + offset, imported_q)
+        self.assertFalse(np.allclose(old[1], expected[1]))
+        corrected = wrist_racket_lines(lines, wrist, -wrist_q, offset)
+        for actual, reference in zip(corrected, expected):
+            np.testing.assert_allclose(actual, reference)
+
     def test_headless_uses_physical_and_reference_rackets_only_when_present(self):
         task = SimpleNamespace(
             cfg={'env': {'num_rec_frames': 1}}, args=SimpleNamespace(rec_once=False),
             dt=1/30, body_names=NAMES, _racket_body_id=24,
             humanoid_files={0: str(ASSET)}, _racket_offset=torch.tensor([-.5, 0, 0]),
             _rigid_body_pos=torch.tensor([[[0., 0., 1.], [0., 0., 1.]]]),
+            _rigid_body_rot=torch.tensor([0., 0., 0., 1.]).expand(1, 2, 4),
             _prev_target_rb_pos=torch.tensor([[[0., 0., 1.], [0., 0., 1.]]]),
             _prev_target_rb_rot=torch.tensor([[[0., 0., 0., 1.], [0., 0., 0., 1.]]]),
             _physical_body_pos=torch.zeros(1, 25, 3),
             _physical_body_rot=torch.tensor([0., 0., 0., 1.]).expand(1, 25, 4))
         task._physical_body_pos[0, 24] = torch.tensor([.75, 0, 1.])
+        task._rigid_body_pos[0, 1, 0] = .75
         with tempfile.TemporaryDirectory() as tmp, patch('embodied_pose.utils.debug_video.imageio.get_writer') as writer:
             task.cfg['env']['rec_fname'] = str(Path(tmp)/'test.mp4')
             video = DebugVideo(task)
