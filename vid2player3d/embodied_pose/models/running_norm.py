@@ -14,6 +14,8 @@ class RunningNorm(nn.Module):
         self.demean = demean
         self.destd = destd
         self.clip = clip
+        # Runtime option, deliberately absent from state_dict for old checkpoints.
+        self.update_on_forward = True
         self.register_buffer('n', torch.tensor(0, dtype=torch.long))
         self.register_buffer('mean', torch.zeros(dim))
         self.register_buffer('var', torch.zeros(dim))
@@ -29,7 +31,7 @@ class RunningNorm(nn.Module):
         self.n += m
     
     def forward(self, x):
-        if self.training:
+        if self.training and self.update_on_forward:
             with torch.no_grad():
                 self.update(x)
         if self.n > 0:

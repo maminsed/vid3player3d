@@ -1,7 +1,7 @@
 name: HumanoidSMPLIM
 test_name: HumanoidSMPLIMVis
 env: 
-  numEnvs: 8192
+  numEnvs: 1
   envSpacing: 5
   episodeLength: 450
   # episodeLength: 900 # For export dataset
@@ -22,9 +22,9 @@ env:
   terminationHeadHeight: 0.6
   enableEarlyTermination: True
   # Create this manifest from the retargeted libraries before full training.
-  motion_file: data/motion_lib_updated_asset/Aryna_Sabalenka_vs._Jessica_Pegula_reencoded-scene004-000/mlib_part_00000.pth
+  motion_file: data/motion_lib_updated_asset/Adrian_Mannarino_vs._Jiri_Lehecka_reencoded-scene000-001/mlib_part_00000.pth
   asset_mode: fixed
-  adjust_motion_height: False  # A/B against True with identical seeds/motions.
+  adjust_motion_height: True  # A/B against True with identical seeds/motions.
   gpu_motion_lib: True
   tracking_diagnostics: True
   has_self_collision: False
@@ -149,7 +149,7 @@ params:
   load_checkpoint: False
 
   config:
-    pretrained_model_cp: output/tennis_im_training_2_ft/models/tennis_motion_2_latest.pth
+    pretrained_model_cp: output/tennis_im_training_2_ft/models/tennis_motion_2_ft_latest.pth
     strict_pretrained: True
     # Retain moments but let new body/target statistics adapt during PPO updates.
     pretrained_running_obs_count: 10000

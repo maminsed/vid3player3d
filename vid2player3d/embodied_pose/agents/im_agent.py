@@ -14,6 +14,8 @@ from rl_games.algos_torch.running_mean_std import RunningMeanStd
 import embodied_pose.learning.common_agent as common_agent
 import embodied_pose.learning.amp_datasets as amp_datasets
 from embodied_pose.utils.tools import AverageMeter, get_eta_str
+from embodied_pose.models.running_norm import RunningNorm
+from embodied_pose.utils.rollout_normalization import RolloutNormalization
 
 
 def swap01(arr):
@@ -94,6 +96,24 @@ class ImitatorAgent(common_agent.CommonAgent):
                 self.load_pretrained(pretrained_model_cp)
         else:
             print(f"Not loading pretrained model from: {pretrained_model_cp} because {config.get('load_checkpoint', False)}")
+
+        self.rollout_normalization = None
+        norm_cfg = config.get('observation_normalization', {})
+        norm_mode = norm_cfg.get('mode', 'legacy')
+        if norm_mode not in ('legacy', 'rollout_ema'):
+            raise ValueError('observation_normalization.mode must be legacy or rollout_ema')
+        if norm_mode == 'rollout_ema':
+            if config.get('pretrained_running_obs_count') is not None:
+                raise ValueError('rollout_ema preserves prior statistics; remove pretrained_running_obs_count')
+            normalizer = getattr(self.model.a2c_network, 'running_obs', None)
+            if not isinstance(normalizer, RunningNorm):
+                raise ValueError('rollout_ema requires use_running_obs and running_obs_type: ours')
+            if self.multi_gpu or self.is_rnn:
+                raise ValueError('rollout_ema currently requires single-process, non-RNN PPO')
+            self.rollout_normalization = RolloutNormalization(
+                normalizer, **{k: v for k, v in norm_cfg.items() if k != 'mode'})
+        self._normalization_metrics = {}
+        self.checkpoint_epochs = set(config.get('checkpoint_epochs', []))
 
         prior_count = config.get('pretrained_running_obs_count')
         if prior_count is not None and pretrained_model_cp is not None and not config.get('load_checkpoint', False):
@@ -197,6 +217,9 @@ class ImitatorAgent(common_agent.CommonAgent):
 
         self._init_train()
 
+        if self.epoch_num == 0 and 0 in self.checkpoint_epochs and self.rank == 0:
+            self.save(os.path.join(self.network_path, f"{self.config['name']}_epoch00000"))
+
         while True:
             if hasattr(self.task, 'pre_epoch'):
                 self.task.pre_epoch(self.epoch_num)
@@ -260,6 +283,7 @@ class ImitatorAgent(common_agent.CommonAgent):
 
                 for name, meter in self.tracking_meters.items():
                     self.log_dict[f'tracking/{name}'] = meter.avg.item()
+                self.log_dict.update(self._normalization_metrics)
                 self.algo_observer.after_print_stats(frame, epoch_num, total_time)
                 
                 if self.game_rewards.current_size > 0:
@@ -288,6 +312,8 @@ class ImitatorAgent(common_agent.CommonAgent):
 
                 # save models
                 latest_model_file = os.path.join(self.network_path, f"{self.config['name']}_latest")
+                if epoch_num in self.checkpoint_epochs:
+                    self.save(os.path.join(self.network_path, f"{self.config['name']}_epoch{epoch_num:05d}"))
                 if self.save_freq > 0:
                     if (epoch_num % self.save_freq == 0):
                         epoch_model_file = os.path.join(self.network_path, f"{self.config['name']}_epoch{epoch_num:05d}")
@@ -315,6 +341,8 @@ class ImitatorAgent(common_agent.CommonAgent):
 
         with torch.no_grad():
             res_dict = self.model(input_dict)
+            if self.rollout_normalization is not None:
+                self.rollout_normalization.observe(input_dict['human_obs'][self.dones == 0])
             if self.has_central_value:
                 states = obs['states']
                 input_dict = {
@@ -326,6 +354,31 @@ class ImitatorAgent(common_agent.CommonAgent):
         if self.normalize_value:
             res_dict['values'] = self.value_mean_std(res_dict['values'], True)
         return res_dict
+
+    def train_epoch(self):
+        if self.rollout_normalization is not None:
+            self.rollout_normalization.begin()
+        train_info = super().train_epoch()
+        if self.rollout_normalization is not None:
+            adaptation_start = time.time()
+            was_training = self.model.training
+            self.model.eval()
+            try:
+                self._normalization_metrics = self.rollout_normalization.commit(self._normalization_policy)
+            finally:
+                self.model.train(was_training)
+            adaptation_time = time.time() - adaptation_start
+            train_info['update_time'] += adaptation_time
+            train_info['total_time'] += adaptation_time
+        return train_info
+
+    def _normalization_policy(self, observations):
+        network = self.model.a2c_network
+        # Reference joint positions are added to both Gaussian means, so they
+        # cancel in this KL comparison. An empty target leaves the residuals.
+        return network.eval_actor({
+            'obs_processed': network.running_obs(observations),
+            'cur_context': {'dof_pos': observations.new_zeros((observations.shape[0], 0))}})
 
     def _eval_critic(self, obs_dict):
         self.model.eval()

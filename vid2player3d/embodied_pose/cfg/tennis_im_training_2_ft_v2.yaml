@@ -1,0 +1,196 @@
+name: HumanoidSMPLIM
+test_name: HumanoidSMPLIMVis
+env: 
+  numEnvs: 8192
+  envSpacing: 5
+  episodeLength: 450
+  # episodeLength: 900 # For export dataset
+  isFlagrun: False
+  enableDebugVis: False
+  pdControl: True
+  powerScale: 1.0
+  controlFrequencyInv: 2
+  stateInit: "Hybrid"
+  test_state_init: "Start"
+  hybridInitProb: 1.0
+  numAMPObsSteps: 10
+  enableHistObs: False
+  pd_use_ref_pos: True
+  localRootObs: True
+  keyBodies: ["R_Ankle", "L_Ankle", "L_Hand", "R_Hand"]
+  contactBodies: ["R_Ankle", "L_Ankle"]
+  terminationBodyHeight: -0.5
+  terminationHeadHeight: 0.6
+  enableEarlyTermination: True
+  # Create this manifest from the retargeted libraries before full training.
+  motion_file: embodied_pose/cfg/tennis_motion_lib_2_ft.yaml
+  asset_mode: fixed
+  adjust_motion_height: True  # Match ft v1 for this normalization comparison; also use True for evaluation.
+  gpu_motion_lib: True
+  tracking_diagnostics: True
+  has_self_collision: False
+  has_racket_collision: False
+  kp_scale: 1.0
+  kd_scale: 1.0
+  default_humanoid_mass: 90.0
+  pd_tar_lim: 0.5  # pi radians, matching deployed target clipping.
+  racket_dynamics:
+    model: published_reference_v1
+    max_angular_velocity: 1000.0
+    mass: 0.270
+    com_x: 0.180
+    long_axis_inertia: 0.0012
+    transverse_inertia: 0.0123
+    normal_inertia: 0.01349
+  tennis_contacts:
+    model: hardcourt_v1
+    ball_restitution: 1.0
+    court_restitution: 0.5
+    racket_restitution: 0.7
+    ball_friction: 0.4
+    court_friction: 1.0
+    racket_friction: 0.6
+    ball_contact_offset: 0.02
+    racket_contact_offset: 0.05
+  # motion_file: embodied_pose/cfg/tennis_motion_lib_2_export.yaml # only for exporting. the data was not trained on this. 
+  residual_force_scale: 31.85
+  context_length: 32
+  context_padding: 8
+
+  asset:
+    # Gender code 1 = male; conditioning must match the retargeted library.
+    gender_beta: [1, -0.9807, 1.4050, -0.4144, 1.4028, -1.3299, 2.0045, -1.3108, 0.7475, -0.0924, -0.3262]
+    body_scale: 1.0
+    angular_damping: 0.01
+    assetRoot: vid2player/data/assets
+    assetFileName: smpl_mesh_humanoid_djokovic.xml
+
+  plane:
+    staticFriction: 1.0
+    dynamicFriction: 1.0
+    restitution: 0.5
+  
+sim:
+  dt: 0.016666666666666666
+  substeps: 12
+  physx:
+    num_threads: 4
+    solver_type: 1
+    num_position_iterations: 4
+    num_velocity_iterations: 0
+    contact_offset: 0.02
+    rest_offset: 0.0
+    bounce_threshold_velocity: 0.2
+    max_depenetration_velocity: 10.0
+    friction_offset_threshold: 0.02
+    friction_correlation_distance: 0.025
+    default_buffer_size_multiplier: 10.0
+
+  flex:
+    num_inner_iterations: 10
+    warm_start: 0.25
+
+
+params:
+  seed: 7
+
+  algo:
+    name: pose_im_rnn
+
+  model:
+    name: pose_im
+
+  network:
+    name: pose_im_rnn
+    separate: True
+    actor_net_type: 'style_cat1'
+    latent_type: 'sphere'
+    use_running_obs: True
+    running_obs_type: ours
+
+    context_padding: 8
+
+    space:
+      continuous:
+        mu_activation: None
+        sigma_activation: None
+        mu_init:
+          name: default
+        sigma_init:
+          name: const_initializer
+          val: -1.756
+        fixed_sigma: True
+        learn_sigma: False
+
+    mlp:
+      units: [1024, 1024, 512]
+      activation: relu
+      d2rl: False
+
+      initializer:
+        name: default
+      regularizer:
+        name: None
+
+    disc:
+      units: [1024, 1024, 512]
+      activation: relu
+
+      initializer:
+        name: default
+
+    enc:
+      units: [1024, 512]
+      activation: relu
+      separate: False
+
+      initializer:
+        name: default
+
+  load_checkpoint: False
+
+  config:
+    pretrained_model_cp: output/tennis_im_training_2/models/tennis_motion_2_latest.pth
+    strict_pretrained: True
+    # Restart from the original checkpoint, preserving all normalization buffers.
+    # Statistics stay fixed during rollout + PPO, then adapt once between epochs.
+    observation_normalization:
+      mode: rollout_ema
+      rate: 0.01
+      max_policy_kl: 0.001
+      max_probe_kl: 0.05
+      probe_envs_per_step: 64
+      max_backtracks: 12
+    name: tennis_motion_2_ft_v2
+    player:
+      games_num: 1
+      determenistic: True
+    env_name: rlgpu
+    multi_gpu: False
+    ppo: True
+    mixed_precision: False
+    normalize_input: False
+    normalize_value: True
+    reward_shaper:
+      scale_value: 1
+    normalize_advantage: True
+    gamma: 0.99
+    tau: 0.95
+    learning_rate: 1e-6
+    lr_schedule: constant
+    score_to_win: 20000
+    max_epochs: 400
+    save_best_after: 50
+    save_frequency: 200
+    print_stats: True
+    entropy_coef: 0.0
+    truncate_grads: True
+    grad_norm: 50.0
+    e_clip: 0.2
+    horizon_length: 32
+    minibatch_size: 512
+    mini_epochs: 6
+    critic_coef: 5
+    clip_value: False
+    seq_len: 4
+    clip_actions: False
