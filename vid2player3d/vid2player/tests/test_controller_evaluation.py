@@ -11,10 +11,11 @@ from unittest.mock import patch
 import numpy as np
 import torch
 import imageio.v2 as imageio
+from vid2player.utils import controller_viewer
 
 from vid2player.utils.controller_evaluation import (
     configure_eval_args, prepare_evaluation, select_ball_case, CourtRenderer, evaluate_controller, phase_metrics,
-    save_metrics_plot)
+    save_metrics_plot, contact_interval_events)
 
 
 def offline_generator_class():
@@ -28,6 +29,45 @@ def offline_generator_class():
 
 
 class ControllerEvaluationTests(unittest.TestCase):
+    def test_multiple_contact_evidence_intervals_keep_registration_and_rejection(self):
+        candidate = dict(proximity_pass=True, impulse_evidence=True, sensor_evidence=False)
+        samples = [dict(candidate, accepted_contact=True),
+                   dict(candidate, accepted_contact=False, contact_already_latched=True),
+                   dict(candidate, accepted_contact=False, ground_impact=True),
+                   dict(proximity_pass=False, impulse_evidence=True)]
+        events = contact_interval_events(samples, 3, 1/30, 1/120, 7)
+        self.assertEqual([e['id'] for e in events], [7,8,9])
+        self.assertEqual([e['status'] for e in events],
+                         ['registered','ignored_already_latched','rejected_ground_impact'])
+        self.assertEqual(sum(e['registered'] for e in events),1)
+        self.assertAlmostEqual(events[0]['time_start_s'],2/30)
+        self.assertAlmostEqual(events[1]['time_end_s'],2/30+2/120)
+
+    def test_low_level_player_preserves_evaluation_display_settings(self):
+        from vid2player.utils.tennis_contacts import resolve_tennis_contacts
+        path = Path(__file__).resolve().parents[1]/'env/utils/player_builder.py'
+        definition = next(node for node in ast.parse(path.read_text()).body
+                          if isinstance(node, ast.ClassDef) and node.name == 'PlayerBuilder')
+        for validation, headless, graphics in [(False, False, 0), (False, True, -1), (True, True, -1)]:
+            with self.subTest(validation=validation, headless=headless):
+                outer = SimpleNamespace(eval_controller=not validation, validation=validation,
+                                        headless=headless, graphics_device_id=graphics)
+                high = {'args': outer, 'env': {'physics': {'config': 'low', 'test_name': 'HumanoidSMPLIMMVAE'},
+                        'numEnvs': 1, 'vid2player': {}, 'controller_cfg_name': 'test'}}
+                # The nested builder reparses CLI, so start with intentionally
+                # different display settings and verify the outer settings win.
+                parsed = SimpleNamespace(test=False, play=False, rl_device='cpu',
+                                         headless=not headless, graphics_device_id=3)
+                low = {'env': {}, 'sim': {}}
+                namespace = {'get_args': lambda: parsed,
+                             'load_cfg': lambda args: (low, {'params': {'config': {}}}),
+                             'resolve_tennis_contacts': resolve_tennis_contacts}
+                exec(compile(ast.Module(body=[definition], type_ignores=[]), str(path), 'exec'), namespace)
+                args, cfg, _ = namespace['PlayerBuilder'](SimpleNamespace(device_id=0), high).build_player_cfg()
+                self.assertEqual(args.headless, headless)
+                self.assertEqual(args.graphics_device_id, graphics)
+                self.assertEqual(cfg['env'].get('viewerFollow', True), validation)
+
     def test_plot_marks_contact_or_explicitly_reports_none(self):
         from matplotlib.figure import Figure
         rows = [dict(time_s=(i+1)/30, reward=.1, cumulative_reward=.1*(i+1), phase_rad=3.,
@@ -104,10 +144,16 @@ class ControllerEvaluationTests(unittest.TestCase):
             self.assertEqual(case['source_row'],5)
             args = SimpleNamespace(eval_checkpoint=str(root/'policy.pth'),eval_steps=4,
                 seed=None,eval_output=str(root/'eval'),cfg='test',eval_ball='center_low',
-                eval_ball_x=None,eval_ball_height=None,eval_target='center')
+                eval_ball_x=None,eval_ball_height=None,eval_target='center',
+                headless=True,graphics_device_id=0)
             (root/'policy.pth').write_bytes(b'placeholder')
             configure_eval_args(args)
             self.assertTrue(args.headless and args.test and not args.train)
+            self.assertEqual(args.graphics_device_id,-1)
+            args.headless,args.graphics_device_id = False,0
+            configure_eval_args(args)
+            self.assertFalse(args.headless)
+            self.assertEqual(args.graphics_device_id,0)
             self.assertEqual(args.num_envs,1)
             cfg = {'name':'MVAEControllerVis','env':{'vid2player':{'ball_traj_file':str(path)}}}
             training = {'params':{'config':{}}}
@@ -135,6 +181,17 @@ class ControllerEvaluationTests(unittest.TestCase):
         self.assertEqual(camera.background.size,(768,720))
 
     def test_recording_loop(self):
+        self.recording_loop()
+
+    def test_live_recording_defers_video_and_preserves_samples(self):
+        self.recording_loop(viewer_steps=4)
+
+    def test_viewer_close_saves_partial_and_empty_rollouts(self):
+        for count in (0, 2):
+            with self.subTest(count=count):
+                self.recording_loop(viewer_steps=count)
+
+    def recording_loop(self, viewer_steps=None):
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory);output=root/'eval';output.mkdir()
             model=torch.nn.Linear(1,1)
@@ -217,11 +274,43 @@ class ControllerEvaluationTests(unittest.TestCase):
             case={'preset':'right_high','source_row':0,'source_file':str(source)}
             temporary=SimpleNamespace(cleanup=lambda:cleanups.append(True))
             config_stub=SimpleNamespace(set_seed=lambda *args:torch.manual_seed(args[0]))
-            with patch.dict(sys.modules,{'vid2player.utils.config':config_stub}):
+            modules = {'vid2player.utils.config':config_stub}
+            if viewer_steps is not None:
+                physics.viewer = object()
+                physics.gym.viewer_camera_look_at = lambda *a: None
+                modules['isaacgym'] = SimpleNamespace(gymapi=SimpleNamespace(Vec3=vector))
+            render = CourtRenderer.render
+            rendered_after_steps = []
+            def render_frame(*args):
+                rendered_after_steps.append(len(steps))
+                return render(*args)
+            with patch.dict(sys.modules,modules), \
+                 patch.object(controller_viewer, 'EvaluationViewer') as viewer_type, \
+                 patch.object(CourtRenderer,'render',side_effect=render_frame,autospec=True):
+                viewer_type.return_value.wait_for_step.side_effect = [True] * (viewer_steps or 0) + [False]
                 evaluate_controller(player,args,(output,case,temporary))
             report=json.loads((output/'evaluation_config.json').read_text())['evaluation_results']
             data=np.load(output/'rollout.npz')
+            if viewer_steps is not None:
+                self.assertEqual(rendered_after_steps, [viewer_steps] * viewer_steps)
+                self.assertFalse(physics._evaluation_viewer_active)
+                if viewer_steps < 4:
+                    self.assertEqual(report['steps'],viewer_steps)
+                    self.assertEqual(report['end_reason'],'viewer_closed')
+                    self.assertEqual(len(steps),viewer_steps)
+                    self.assertEqual(data['metrics'].shape[0],viewer_steps)
+                    self.assertEqual(cleanups,[True])
+                    self.assertTrue((output/'metrics.png').is_file())
+                    return
             first=dict(zip(data['metric_names'].tolist(),data['metrics'][0]))
+            metric_columns = dict(zip(data['metric_names'].tolist(), data['metrics'].T))
+            np.testing.assert_array_equal(metric_columns['registered_contacts_this_step'], [0,1,0,0])
+            np.testing.assert_array_equal(metric_columns['registered_contacts_total'], [0,1,1,1])
+            self.assertEqual(report['registered_contacts_total'], 1)
+            self.assertEqual(report['contact_evidence_intervals'][0]['id'], 1)
+            self.assertEqual(report['contact_evidence_intervals'][0]['status'], 'registered')
+            self.assertAlmostEqual(report['contact_evidence_intervals'][0]['time_end_s'], .05)
+            np.testing.assert_allclose(data['physics_time_end_s'], np.arange(1,9)/60)
             self.assertEqual(report['steps'],4)
             self.assertEqual(report['contact_step'],2)
             self.assertEqual(data['racket_state'].shape,(4,13))

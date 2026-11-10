@@ -305,7 +305,7 @@ def get_args(benchmark=False):
         {"name": "--ball_traj_file_test", "type": str, "default": None},
         {"name": "--max_test_steps", "type": int, "default": 27000},
         {"name": "--eval_controller", "action": "store_true", "default": False,
-            "help": "Evaluate the physics controller headlessly and save court videos/reports."},
+            "help": "Evaluate the physics controller and save court videos/reports; pass --headless to disable the native viewer."},
         {"name": "--validation", "action": "store_true", "default": False,
             "help": "Run a fixed multi-shot high-level benchmark; save config JSON, metrics.png and values.json."},
         {"name": "--validation_shots_per_preset", "type": int, "default": 5,

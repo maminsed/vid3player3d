@@ -96,6 +96,10 @@ eye `[0,-28,9]`, target `[0,-1,0]`, vertical field of view 45 degrees, image 768
 There is one view, no inset, and no saved screenshots. Rendering is CPU/PIL/ffmpeg
 with no display server; IsaacGym physics still needs the configured GPU.
 
+Omit `--headless` to also open the native Isaac Gym physics viewer. Evaluation
+still writes the same artifacts. See [SSH viewer notes](ssh_viewer.md) for the
+tested MobaXterm setup and current viewer limitations.
+
 Incoming ball preset mapping (`--eval_ball`):
 
 | Preset | Requested X at Y=-13 m | Requested height |

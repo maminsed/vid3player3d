@@ -523,7 +523,7 @@ class HumanoidSMPL(BaseTask):
         return
 
     def render(self, sync_frame_time=False):
-        if self.viewer:
+        if self.viewer and self.cfg['env'].get('viewerFollow', True):
             self._update_camera()
 
         super().render(sync_frame_time)

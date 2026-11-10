@@ -134,10 +134,10 @@ class PlayerBuilder():
         evaluation = (getattr(self.config.get('args'), 'eval_controller', False)
                       or getattr(self.config.get('args'), 'validation', False))
         if evaluation:
-            # get_args reparses CLI here; retain the evaluator's forced display
-            # settings even if --headless was omitted from the user's command.
-            args.headless = True
-            args.graphics_device_id = -1
+            # get_args reparses CLI here. Validation stays headless; controller
+            # evaluation follows the outer evaluator's --headless setting.
+            args.headless = self.config['args'].headless
+            args.graphics_device_id = self.config['args'].graphics_device_id
             args.record = args.record_scenepic = False
             if args.rl_device == 'cpu':
                 args.use_gpu = args.use_gpu_pipeline = False
@@ -163,6 +163,8 @@ class PlayerBuilder():
         args.num_envs = self.config['env']['numEnvs']
         args.compute_device_id = self.task.device_id
         cfg, cfg_train = load_cfg(args)
+        if getattr(self.config.get('args'), 'eval_controller', False):
+            cfg['env']['viewerFollow'] = False
         if evaluation:
             cfg_train['params']['config']['device_name'] = args.rl_device
         if not test_controller:

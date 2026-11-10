@@ -1,6 +1,7 @@
 """Small, repeatable physics evaluations with CPU-rendered court videos.
 
-Rendering uses PIL and ffmpeg; no viewer, OpenGL or display server is required.
+Video rendering uses PIL and ffmpeg. Pass --headless to run without a viewer
+or display server; otherwise evaluation also opens the native physics viewer.
 Simulation and policy inference still use the configured IsaacGym device.
 """
 import json
@@ -38,7 +39,8 @@ def configure_eval_args(args):
         raise ValueError('--eval_ball_height must be positive.')
     args.test, args.play, args.train = True, True, False
     args.resume = False
-    args.headless, args.graphics_device_id = True, -1
+    if args.headless:
+        args.graphics_device_id = -1
     args.num_envs = 1
     args.record = args.record_scenepic = False
     if args.seed is None:
@@ -75,7 +77,7 @@ def select_ball_case(filename, preset='center_low', x=None, height=None):
 
 def prepare_evaluation(args, cfg, cfg_train):
     if cfg['name'] not in ('MVAEControllerVis','PhysicsMVAEController') or cfg['env']['vid2player'].get('dual_mode'):
-        raise ValueError('Headless evaluation supports single-player PhysicsMVAEController configs.')
+        raise ValueError('Evaluation supports single-player PhysicsMVAEController configs.')
     rows,case = select_ball_case(cfg['env']['vid2player']['ball_traj_file'],args.eval_ball,
                                 args.eval_ball_x,args.eval_ball_height)
     stamp = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
@@ -260,7 +262,7 @@ def save_metrics_plot(filename, metrics, fps):
               ('Phase reward factor: exp(-scale * error²)', 'Multiplier / reaction mask',
                [('phase factor',[row['phase_reward_factor'] for row in metrics]),
                 ('incoming-ball attempt active',[float(row['is_reaction']) for row in metrics])])]
-    if 'interception_window_active' in metrics[0]:
+    if metrics and 'interception_window_active' in metrics[0]:
         panels.append(('Interception window and racket preset gate', 'Activation / weight',
                        [('interception window',[float(row['interception_window_active']) for row in metrics]),
                         ('preset gate',[row['racket_preset_gate'] for row in metrics])]))
@@ -278,14 +280,42 @@ def save_metrics_plot(filename, metrics, fps):
             axis.axvline(contact,color='crimson',linewidth=2.2,linestyle='--',
                          label=f'first racket contact: {contact:.2f}s',zorder=5)
         axis.set(title=title,xlabel='Time (s)',ylabel=label)
-        axis.set_xlim(0,max(float(times[-1]),1/fps))
+        axis.set_xlim(0,max(float(times[-1]) if len(times) else 0.,1/fps))
         axis.grid(True,alpha=.25)
         if curves or contact is not None:
             axis.legend(fontsize=8)
     contact_text = 'No racket contact detected' if contact is None else f'First racket contact: {contact:.2f}s'
-    figure.suptitle(f"Evaluation | total reward {metrics[-1]['cumulative_reward']:.3f} | {contact_text}\n"
+    total_reward = metrics[-1]['cumulative_reward'] if metrics else 0.
+    figure.suptitle(f"Evaluation | total reward {total_reward:.3f} | {contact_text}\n"
                    'Phase factor multiplies proximity reward; attempt mask is 0 during recovery',fontsize=12)
     figure.savefig(filename,dpi=150)
+
+
+def contact_interval_events(samples, step, control_dt, physics_dt, first_id):
+    """Report every evidence-bearing interval, including latched/ground rejects.
+
+    Adjacent evidence intervals are not necessarily distinct physical impacts.
+    Timing brackets gym.simulate calls, not internal PhysX contact timestamps.
+    """
+    events = []
+    for interval, sample in enumerate(samples):
+        registered = bool(sample.get('accepted_contact', False))
+        sensor = bool(sample.get('sensor_evidence', False))
+        impulse = bool(sample.get('impulse_evidence', False))
+        candidate = bool(sample.get('proximity_pass', False)) and (sensor or impulse)
+        if not registered and not candidate:
+            continue
+        ground = bool(sample.get('ground_impact', False))
+        latched = bool(sample.get('contact_already_latched', False))
+        status = ('registered' if registered else 'rejected_ground_impact' if ground
+                  else 'ignored_already_latched' if latched else 'not_registered')
+        events.append({'id': first_id + len(events), 'control_step': step,
+                       'physics_interval': interval,
+                       'time_start_s': (step-1)*control_dt + interval*physics_dt,
+                       'time_end_s': (step-1)*control_dt + (interval+1)*physics_dt,
+                       'registered': registered, 'status': status,
+                       'sensor_evidence': sensor, 'impulse_evidence': impulse})
+    return events
 
 
 def evaluate_controller(player, args, evaluation):
@@ -301,6 +331,10 @@ def evaluate_controller(player, args, evaluation):
     player.model.eval()
     task = player.task
     physics = task._physics_player.task
+    if getattr(physics, 'viewer', None) is not None:
+        from isaacgym import gymapi
+        physics.gym.viewer_camera_look_at(
+            physics.viewer, None, gymapi.Vec3(10., -23., 6.), gymapi.Vec3(0., -11., 1.))
     # Read actual simulator properties, including density-derived legacy COM.
     racket_id = int(physics._contact_racket_ids.reshape(-1)[0].item())
     racket_prop = physics.gym.get_actor_rigid_body_properties(
@@ -350,12 +384,24 @@ def evaluate_controller(player, args, evaluation):
     obs = player.obs_to_torch(task.obs_buf.to(player.device))
     cumulative,closest,contact_step = 0.,None,None
     metrics,states,trail,physics_samples = [],[],[],[]
+    contact_history = []
+    registered_total = 0
+    last_registered = None
+    viewer = None
+    if getattr(physics, 'viewer', None) is not None:
+        from vid2player.utils.controller_viewer import EvaluationViewer
+        viewer = EvaluationViewer(physics, fps, gymapi)
+        physics._evaluation_viewer_active = True
+    video_frames = []
     end_reason = 'step_limit'
     bounds_weight = player.config.get('bounds_loss_coef',0.) or 0.
     aux_weight = task.cfg_v2p.get('aux_loss_specs',{}).get('dof_res',0.)
     writer = imageio.get_writer(str(output/'video.mp4'),fps=fps,codec='libx264',quality=7,macro_block_size=16)
     try:
         for step in range(args.eval_steps):
+            if viewer is not None and not viewer.wait_for_step():
+                end_reason = 'viewer_closed'
+                break
             physics._record_racket_diagnostics = True
             physics._racket_diagnostic_samples = []
             action = player.get_action(obs,is_determenistic=True)
@@ -366,14 +412,18 @@ def evaluate_controller(player, args, evaluation):
             obs,reward,done,info = player.env_step(player.env,action)
             snapshot = racket_ball_snapshot(physics)
             snapshot.update(racket_geometry(snapshot, com_local, normal_local))
+            current_samples = []
             for interval, sample in enumerate(physics._racket_diagnostic_samples):
                 for prefix in ('pre_', 'post_'):
                     geometry = racket_geometry({key: sample[prefix + key]
                                                 for key in ('ball_state', 'racket_state')},
                                                com_local, normal_local)
                     sample.update({prefix + key: value for key, value in geometry.items()})
-                physics_samples.append({'control_step': step+1, 'interval_in_control_step': interval,
+                current_samples.append({'control_step': step+1, 'interval_in_control_step': interval,
+                                        'time_start_s': step/fps + interval*physics.sim_params.dt,
+                                        'time_end_s': step/fps + (interval+1)*physics.sim_params.dt,
                                         **{key: _cpu(value)[0].copy() for key, value in sample.items()}})
+            physics_samples.extend(current_samples)
             bodies,ball,racket,normal,target,root = [ _cpu(value)[0] for value in
                 [physics._rigid_body_pos,task._ball_pos,task._racket_pos,task._racket_normal,
                  task._target_bounce_pos,task._root_pos] ]
@@ -384,6 +434,19 @@ def evaluate_controller(player, args, evaluation):
             if distance is not None:
                 closest = distance if closest is None else min(closest,distance)
             contact = bool(physics._has_racket_ball_contact[0].item())
+            events = contact_interval_events(current_samples, step+1, 1/fps,
+                                             physics.sim_params.dt, len(contact_history)+1)
+            if contact and contact_step is None and not any(event['registered'] for event in events):
+                # Legacy detectors have no interval-resolved acceptance evidence.
+                events.append({'id': len(contact_history)+len(events)+1, 'control_step': step+1,
+                               'physics_interval': None, 'time_start_s': step/fps,
+                               'time_end_s': (step+1)/fps, 'registered': True,
+                               'status': 'registered_control_step_only'})
+            contact_history.extend(events)
+            registered_total += sum(event['registered'] for event in events)
+            for event in events:
+                if event['registered']:
+                    last_registered = event
             if contact and contact_step is None:
                 contact_step = step+1
             finite = np.isfinite(bodies).all() and np.isfinite(ball).all()
@@ -406,6 +469,10 @@ def evaluate_controller(player, args, evaluation):
                    'bounds_loss':_number(bounds_loss),'weighted_bounds_loss':_number(bounds_weight*bounds_loss),
                    'total_regularization_loss':_number(aux_weight*aux_loss+bounds_weight*bounds_loss),
                    'ball_racket_distance_m':distance,'has_contact':contact,
+                   'registered_contacts_this_step':sum(event['registered'] for event in events),
+                   'registered_contacts_total':registered_total,
+                   'contact_evidence_intervals':len(events),
+                   'last_registered_time_s':None if last_registered is None else last_registered['time_end_s'],
                    'estimated_in':bool(task._est_bounce_in[0].item()),
                    'root_xyz_m':[_number(x) for x in root], 'ball_xyz_m':[_number(x) for x in ball],
                    'terminated':ended}
@@ -413,6 +480,8 @@ def evaluate_controller(player, args, evaluation):
                 eta = row['interception_eta_at_action_s']
                 row['interception_contact_error_s'] = None if contact_step != step+1 or eta is None else 1/fps - eta
             metrics.append(row)
+            if viewer is not None:
+                viewer.update_metrics(row, events, registered_total, len(contact_history), last_registered)
             states.append({'body_xyz':bodies,'ball_xyz':ball,'racket_xyz':racket,'policy_mean':means,
                            **{key: _cpu(value)[0].copy() for key, value in snapshot.items()}})
             trail.append(ball)
@@ -433,8 +502,12 @@ def evaluate_controller(player, args, evaluation):
                 lines.append('Intercept {} | window {} | preset gate {:.2f}'.format(
                     'n/a' if eta is None else f'{eta:.2f}s',
                     'ON' if row['interception_window_active'] else 'off',row['racket_preset_gate']))
-            frame = renderer.render(bodies,ball,racket,normal,target,trail[-12:],lines)
-            writer.append_data(np.asarray(frame))
+            frame_args = (bodies,ball,racket,normal,target,trail[-12:],lines)
+            if viewer is not None:
+                # Keep CPU video rendering/encoding off the interactive path.
+                video_frames.append(frame_args)
+            else:
+                writer.append_data(np.asarray(renderer.render(*frame_args)))
             if ended:
                 break
             task._reset_reaction_buf[:] = False
@@ -442,11 +515,21 @@ def evaluate_controller(player, args, evaluation):
     finally:
         physics._record_racket_diagnostics = False
         physics._racket_diagnostic_samples = []
-        writer.close()
-        temporary.cleanup()
+        try:
+            if viewer is not None:
+                viewer.render()
+                print('Saving evaluation video...')
+                for frame_args in video_frames:
+                    writer.append_data(np.asarray(renderer.render(*frame_args)))
+        finally:
+            physics._evaluation_viewer_active = False
+            writer.close()
+            temporary.cleanup()
     # One accompanying data file: actual motion and the paired launch/preview.
     source = np.load(case['source_file'],mmap_mode='r')
     report = {'fps':fps,'total_reward':cumulative,'steps':len(metrics),'contact_step':contact_step,
+              'registered_contacts_total':registered_total, 'contact_evidence_intervals':contact_history,
+              'contact_interval_definition':'Evidence-bearing gym.simulate intervals, not a count of distinct impacts; times bracket the interval. Later evidence may be ignored by the contact latch.',
               'min_ball_racket_distance_m':closest,'end_reason':end_reason,
               'loss_definitions':{'aux_dof_res_loss':'Squared residual action means, summed over elbow/wrist outputs.',
                                   'bounds_loss':'Squared excess of action means beyond +/-1, summed over actions.',
@@ -470,7 +553,9 @@ def evaluate_controller(player, args, evaluation):
                'total_regularization_loss','ball_racket_distance_m','has_contact','estimated_in','terminated']
     columns += ['phase_rad','phase_target_rad','phase_error_rad','phase_reward_factor',
                 'phase_scale','swing_type','is_reaction','phase_enabled']
-    columns += [key for key in metrics[0] if key.startswith(('interception_', 'racket_'))]
+    columns += ['registered_contacts_this_step','registered_contacts_total',
+                'contact_evidence_intervals','last_registered_time_s']
+    columns += [key for key in (metrics[0] if metrics else {}) if key.startswith(('interception_', 'racket_'))]
     component_names = sorted({name for row in metrics for name in row['reward_components']})
     metric_values = [[np.nan if row[key] is None else row[key] for key in columns]+
                      [row['reward_components'].get(name,np.nan) for name in component_names]+
@@ -478,11 +563,11 @@ def evaluate_controller(player, args, evaluation):
                      for row in metrics]
     metric_names = columns+['raw/'+name for name in component_names]+['weighted/'+name for name in component_names]
     np.savez_compressed(output/'rollout.npz',launch_row=np.asarray(source[case['source_row']]),
-                        metrics=np.asarray(metric_values,dtype=float),metric_names=np.asarray(metric_names),
+                        metrics=np.asarray(metric_values,dtype=float).reshape(-1,len(metric_names)),metric_names=np.asarray(metric_names),
                         diagnostics_metadata_json=np.asarray(json.dumps(diagnostics_metadata)),
                         **({'physics_' + key: np.stack([sample[key] for sample in physics_samples])
                             for key in physics_samples[0]} if physics_samples else {}),
-                        **{key:np.stack([state[key] for state in states]) for key in states[0]})
+                        **{key:np.stack([state[key] for state in states]) for key in (states[0] if states else {})})
     config_path = output/'evaluation_config.json'
     config = json.loads(config_path.read_text())
     config['evaluation_results'] = report

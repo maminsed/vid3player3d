@@ -22,6 +22,9 @@ def configure_validation_args(args):
         raise ValueError('--validation_num_envs must be nonnegative (0 means automatic).')
     if args.eval_ball_x is not None or args.eval_ball_height is not None:
         raise ValueError('--validation uses its complete suite; omit single-ball overrides.')
+    # Validation is a headless suite even when the single-ball evaluator opens
+    # a viewer by default.
+    args.headless = True
     configure_eval_args(args)
     limit = args.validation_num_envs or (8 if args.rl_device == 'cpu' else 90)
     args.num_envs = min(limit, 18*args.validation_shots_per_preset)

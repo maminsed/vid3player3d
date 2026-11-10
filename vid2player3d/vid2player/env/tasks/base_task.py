@@ -93,6 +93,8 @@ class BaseTask():
             # subscribe to keyboard shortcuts
             self.viewer = self.gym.create_viewer(
                 self.sim, gymapi.CameraProperties())
+            if self.viewer is None:
+                raise RuntimeError('Failed to create Isaac Gym viewer. Check DISPLAY/graphics support or pass --headless.')
             self.gym.subscribe_viewer_keyboard_event(
                 self.viewer, gymapi.KEY_ESCAPE, "QUIT")
             self.gym.subscribe_viewer_keyboard_event(

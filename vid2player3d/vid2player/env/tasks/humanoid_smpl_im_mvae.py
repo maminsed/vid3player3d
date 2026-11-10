@@ -97,7 +97,7 @@ class HumanoidSMPLIMMVAE(HumanoidSMPL):
                          physics_engine=physics_engine,
                          device_type=device_type,
                          device_id=device_id,
-                         headless=True)
+                         headless=headless if getattr(self.args, 'eval_controller', False) else True)
 
         self._contact_env_ids = torch.arange(self.num_envs, device=self.device)
         self._contact_racket_ids = torch.as_tensor(self._racket_body_id_true, device=self.device)
@@ -471,7 +471,8 @@ class HumanoidSMPLIMMVAE(HumanoidSMPL):
         start_pose.p = gymapi.Vec3(0, 0, 1)
         start_pose.r = gymapi.Quat(0.0, 0.0, 0.0, 1.0)
         ball_handle = self.gym.create_actor(env_ptr, ball_asset, start_pose, "ball", col_group, col_filter_ball)
-        self.gym.set_rigid_body_color(env_ptr, ball_handle, 0, gymapi.MESH_VISUAL, gymapi.Vec3(0.8, 1.0, 0.0))
+        ball_color = (1., .05, .65) if getattr(self.args, 'eval_controller', False) else (.8, 1., 0.)
+        self.gym.set_rigid_body_color(env_ptr, ball_handle, 0, gymapi.MESH_VISUAL, gymapi.Vec3(*ball_color))
     
         props = self.gym.get_actor_rigid_shape_properties(env_ptr, ball_handle)
         props[0].restitution = self._tennis_contacts.ball_restitution
@@ -907,7 +908,10 @@ class HumanoidSMPLIMMVAE(HumanoidSMPL):
 
             self._contact_forces_sum += self._contact_forces
 
-            self.render()
+            # The evaluator draws at control boundaries and owns event polling
+            # so pause/step cannot be consumed by the generic viewer handler.
+            if not getattr(self, '_evaluation_viewer_active', False):
+                self.render()
         
     def post_physics_step(self):
         self.progress_buf += 1
