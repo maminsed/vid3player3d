@@ -1,0 +1,266 @@
+name: PhysicsMVAEController
+test_name: MVAEControllerVis
+env: 
+  numEnvs: 2048  # Conservative starting point for a 16 GiB GPU.
+  episodeLength: 600
+  envSpacing: 5
+  isFlagrun: False
+  enableDebugVis: False
+  powerScale: 1.0
+  numAMPObsSteps: 10
+  enableHistObs: False
+  enableEarlyTermination: False
+
+  physics:
+    config: usopen_im_v2
+    pretrained_model_cp: output/tennis_im_training_2_ft_v2/models/tennis_motion_2_ft_v2_latest.pth
+    name: HumanoidSMPLIMMVAE
+    test_name: HumanoidSMPLIMMVAE
+    assetFileName: smpl_mesh_humanoid_djokovic.xml
+    residual_force_scale: 31.85
+    # Training baseline: 60 Hz physics calls, 30 Hz policy; original humanoid solver.
+    # Optional expensive preset: general_calibration_experimental_overrides.yaml.
+    dt: 0.016666666666666666
+    controlFrequencyInv: 2
+    substeps: 12  # Retain tested head-hit coverage; 2 restores original low-level substeps.
+    solver_type: 1  # TGS, as used by the pretrained low-level policy.
+    num_position_iterations: 4
+    num_velocity_iterations: 0
+    contact_offset: 0.02  # Restore the normal humanoid/ground contact neighborhood.
+    rest_offset: 0.0
+    bounce_threshold_velocity: 0.2
+    max_depenetration_velocity: 10.0
+    friction_offset_threshold: 0.02
+    friction_correlation_distance: 0.025
+    # Shared ground plane also affects the feet; keep the pre-calibration value.
+    plane_restitution: 0.5
+
+  vid2player:
+    mvae_ver: usopen_6_3
+    mvae_inference_batch_size: 512  # Bound per-environment mixed decoder weights.
+    predict_phase: True
+    righthand: True
+    player: djokovic
+    grip: semi_western  # Matches the Djokovic asset's physical racket head.
+    # Allowed root XY (meters); crossing a bound ends the episode.
+    court_min: [-5, -16]
+    court_max: [5, -10]
+    # Legacy material values; the enabled contact profile overrides these.
+    racket_friction: 0.8
+    ball_friction: 0.2
+    restitution: 0.9
+    spin_scale: 5  # Used only when ball_physics.model is legacy.
+    ball_physics:
+      # Set model: legacy to restore the old forces, radius, and asset defaults.
+      # Regenerate incoming previews AND outgoing reward data before training.
+      model: aerodynamic_v2
+      angular_damping: 0.0  # Explicit provisional baseline; decay needs calibration.
+      max_angular_velocity: 1000.0  # rad/s; ball only, supports the intended spin range.
+
+    tennis_contacts:
+      # Set legacy to restore old materials and proximity-based bounce events.
+      # Practical rigid baseline; keeps shared rebound/contact event fixes.
+      # Court material is shared with the feet: preserve restitution 0.5 / friction 1.
+      # hardcourt_v2 plus tiny explicit offsets is available in the experimental preset.
+      model: hardcourt_v1
+      ball_restitution: 1.0
+      court_restitution: 0.5  # Ball/court pair average 0.75; original foot material.
+      racket_restitution: 0.7  # Ball/string-bed pair average remains 0.85.
+      ball_friction: 0.4
+      court_friction: 1.0     # Ball/court pair average 0.7; foot friction retained.
+      racket_friction: 0.6   # Ball/string-bed pair average 0.5.
+      ball_contact_offset: 0.02
+      racket_contact_offset: 0.05  # Earlier tested head-hit coverage at 12 substeps.
+
+    # Preserve the mass/COM/inertia and body angular cap used by the frozen player.
+    # Set published_reference_v1 to opt into the reference inertia values below.
+    racket_dynamics:
+      model: published_reference_v1
+      max_angular_velocity: 1000.0  # Ignored in legacy mode; original body cap is 100 rad/s.
+      mass: 0.270
+      com_x: 0.180
+      long_axis_inertia: 0.0012
+      transverse_inertia: 0.0123
+      normal_inertia: 0.01349
+
+    # Optional fresh stage-2 run from stage-1 run 6; do not resume 2_2 here.
+    # Evaluation uses the final training weights below, independent of checkpoint age.
+    # Training schedules override them from frame zero. Compare physical outcomes,
+    # not total reward, against 2_1 (which has different evaluation weights).
+    reward_type: return_curriculum
+    reward_weights: {pos: 0.5, contact: 1.0, forward: 1.0, net: 0.0, court: 0.0, target: 0.0, vertical: 1.0}
+    reward_scales: {pos: 5.0, phase: 5.0, court: 0.02, target: 0.005}
+    return_curriculum:
+      forward_reward_mode: signed_linear  # 2_1 defaults to positive_linear, unchanged.
+      forward_speed_mps: 10.0  # Normalize outgoing vy; saturate at +/-10 m/s, not a contact gate.
+      backward_penalty_scale: 0.5  # Preserve the trained value; raw forward range [-0.5, +1].
+      # Optional contact-time penalty: zero in this broad band, bounded below by -1.
+      # Not an exact launch-velocity target or a substitute for measured outcomes.
+      vertical_velocity: {min_mps: 0.0, max_mps: 8.0, falloff_mps: 8.0}
+      max_post_contact_s: 3.0 # Delay timed relaunch while observing a contacted flight.
+      # Total environment transitions SINCE this stage starts, not physics steps.
+      # With 2048 environments x 64 steps, one epoch collects 131072 transitions.
+      weights_schedule:
+        contact: {start: 0.25, end: 1.0, start_frame: 0, end_frame: 13107200}  # Epochs 0-100.
+        forward:
+          segments: 
+            - {start: 0.0, end: 2.0, start_frame: 1310720, end_frame: 13107200}  # 10-100.
+            - {start: 2.0, end: 1.0, start_frame: 26214400, end_frame: 32768000}  # 200-250.
+        pos: {start: 1.0, end: 0.5, start_frame: 1310720, end_frame: 13107200}  # 10-100
+        # Give forward shaping a head start, then gently constrain vertical motion.
+        # Hold vertical credit until outcome quality justifies removing the heuristic.
+        vertical:
+          enabled: true
+          segments:
+            - {start: 0.0, end: 0.2, start_frame: 6553600, end_frame: 19660800} # 50-150.
+            - {start: 0.2, end: 1.0, start_frame: 26214400, end_frame: 32768000}  # 200-250.
+        net:
+          enabled: false
+          segments:
+            - {start: 0.0, end: 0.5, start_frame: 39321600, end_frame: 52428800} # 300-400.
+        court: {enabled: false, start: 0.0, end: 0.5, start_frame: 52428800, end_frame: 65536000} # 400-500, after useful net clearance.
+        target: {enabled: false, start: 0.0, end: 0.5, start_frame: 65536000, end_frame: 78643200} # 500-600, after broad returns.
+      scales_schedule:
+        target: {enabled: false, start: 0.005, end: 0.05, start_frame: 78643200, end_frame: 91750400} # 600-700, only after target coverage.
+    ball_traj_out_x_file: data/ball_traj/usopen_v2/ball_traj_out_x.npy
+    ball_traj_out_y_file: data/ball_traj/usopen_v2/ball_traj_out_y.npy
+
+    # Offline --resample launch proposal; does not alter live dynamics or old pools.
+    # Retargeted for the current ball model; acceptance checks net, landing, rebound.
+    # See doc/ball_preview_regeneration.md. --test-only writes an MP4 without a pool.
+    origin_min: [-4, 12, 1]
+    origin_max: [4, 13, 1.5]
+    bounce_min: [-3, -10, 0]
+    bounce_max: [3, -7, 0]
+    vel_range: [24, 28]  # m/s
+    theta_range: [5, 12]  # degrees above horizontal
+    vspin_range: [5, 10]  # signed rev/s
+
+    obs_ball_traj_length: 10
+    use_history_ball_obs: True
+    ball_traj_file: data/ball_traj/usopen_v2/ball_traj_in.npy
+    use_random_ball_target: True
+
+    vae_action_scale: 1.5
+    add_residual_dof: euler
+    residual_dof_scale: 0.4
+    aux_loss_specs: {'dof_res': 0.01}
+    fix_head_orientation: True
+
+    # Optional controller uses the cached incoming preview; actor still sees history.
+    # Geometry and timing are provisional, configurable interception heuristics.
+    racket_phase_correction:
+      mode: none
+      blend_s: 0.10
+      prediction:
+        enabled: True
+        update_interval: 3  # Re-select candidates at 10 Hz; gate/blend updates at 30 Hz.
+        preparation_s: 0.45
+        late_tolerance_s: 0.10
+        forward_m: 0.60
+        forward_tolerance_m: 0.60
+        lateral_reach_m: 1.20
+        movement_speed_mps: 4.0
+        min_height_m: 0.45
+        max_height_m: 2.50
+        max_preview_error_m: 1.0
+
+
+    vae_init_conditions: data/vae/vae_init_condition_usopen_2.pt
+    reset_reaction_nframes: 70
+    random_walk_in_recovery: False
+    
+sim:
+  none: 0
+
+params:
+  seed: 10
+
+  algo:
+    name: vid2player
+
+  model:
+    name: vid2player
+
+  network:
+    name: vid2player
+    separate: True
+    actor_net_type: 'style_cat1'
+    latent_type: 'sphere'
+
+    space:
+      continuous:
+        mu_activation: None
+        sigma_activation: None
+        mu_init:
+          name: default
+        sigma_init:
+          name: const_initializer
+          val: -0.69
+        fixed_sigma: True
+
+    mlp:
+      units: [1024, 1024, 512]
+      activation: relu
+      d2rl: False
+
+      initializer:
+        name: default
+      regularizer:
+        name: None
+
+    disc:
+      units: [1024, 1024, 512]
+      activation: relu
+
+      initializer:
+        name: default
+
+    enc:
+      units: [1024, 512]
+      activation: relu
+      separate: False
+
+      initializer:
+        name: default
+
+  load_checkpoint: False
+
+  config:
+    name: high_level_2_4
+    description: "Updated racket and stage 1 backbone and low level policy"
+    protect_existing_checkpoints: True
+    env_name: rlgpu
+    multi_gpu: False
+    ppo: True
+    mixed_precision: False
+    normalize_input: True
+    normalize_value: True
+    reward_shaper:
+      scale_value: 1
+    normalize_advantage: True
+    gamma: 0.99
+    tau: 0.95
+    learning_rate: 2e-5
+    lr_schedule: constant
+    score_to_win: 20000
+    max_epochs: 500
+    save_best_after: 100
+    save_frequency: 50
+    print_stats: True
+    entropy_coef: 0.0
+    truncate_grads: True
+    grad_norm: 50.0
+    e_clip: 0.2
+    horizon_length: 64
+    minibatch_size: 4096
+    mini_epochs: 3
+    critic_coef: 5
+    clip_value: False
+    seq_len: 4
+    bounds_loss_coef: 10
+    clip_actions_val: 5.0
+    # New stage: load policy and normalization, start curriculum clock at zero.
+    # Later continuation of THIS stage should use --resume --checkpoint latest.
+    pretrained_model_cp: results/usopen_train_stage_1__high_level_7/models/high_level_7_latest.pth
+    discard_pretrained_sigma: False
