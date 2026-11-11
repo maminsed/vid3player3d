@@ -83,11 +83,12 @@ env:
       transverse_inertia: 0.0123
       normal_inertia: 0.01349
 
-    # Fresh 200-epoch clean-contact experiment from stage 1_7.
+    # Continue the completed 200-epoch experiment through epoch 350.
+    # Resume 2_5 with --resume --checkpoint epoch00200; angle ramps over 200-250.
     # Evaluation uses the fixed weights below; training overrides them by schedule.
     # Keep generic contact independent; the new quality terms are additive bonuses.
     reward_type: return_curriculum
-    reward_weights: {pos: 0.5, contact: 1.0, forward: 2.0, net: 0.0, court: 0.0, target: 0.0, vertical: 0.0, clean_contact: 0.5, contact_angle: 0.0}
+    reward_weights: {pos: 0.5, contact: 1.0, forward: 2.0, net: 0.0, court: 0.0, target: 0.0, vertical: 0.0, clean_contact: 0.5, contact_angle: 1.0}
     reward_scales: {pos: 5.0, phase: 5.0, court: 0.02, target: 0.005}
     return_curriculum:
       forward_reward_mode: signed_linear  # 2_1 defaults to positive_linear, unchanged.
@@ -103,7 +104,7 @@ env:
         zero_credit_radius_fraction: 1.0
         # Angle to either face normal, using pre-impact ball/surface relative
         # velocity. 0..30 degrees all score 1; linear falloff to zero at 90.
-        # Angle bonus also requires clean-contact quality; weight is zero below.
+        # Angle bonus also requires clean-contact quality; its weight ramps below.
         angle_tolerance_deg: 30.0
         angle_falloff_deg: 60.0
       max_post_contact_s: 3.0 # Delay timed relaunch while observing a contacted flight.
@@ -114,10 +115,10 @@ env:
         forward: {start: 0.0, end: 2.0, start_frame: 1310720, end_frame: 13107200}  # 10-100, then hold.
         pos: {start: 1.0, end: 0.5, start_frame: 1310720, end_frame: 13107200}  # 10-100
         clean_contact: {start: 0.0, end: 0.5, start_frame: 0, end_frame: 13107200}  # 0-100, then hold.
-        # Disabled proposals for a later continuation after inspecting epoch 200.
-        # Disabled schedules do NOT override fixed weights: keep both weights 0
-        # above until deliberately enabling a ramp. Schedules can also fade to 0.
-        contact_angle: {enabled: false, start: 0.0, end: 0.25, start_frame: 26214400, end_frame: 32768000}  # 200-250.
+        # Enable angle shaping only for this continuation; keep vertical/placement off.
+        # Disabled schedules do NOT override fixed weights: vertical/net/court/target
+        # must also retain fixed weight 0 above. Schedules can later fade to 0.
+        contact_angle: {start: 0.0, end: 1.0, start_frame: 26214400, end_frame: 32768000}  # 200-250.
         vertical: {enabled: false, start: 0.0, end: 0.2, start_frame: 26214400, end_frame: 32768000}  # 200-250.
         net:
           enabled: false
@@ -229,11 +230,11 @@ params:
       initializer:
         name: default
 
-  load_checkpoint: False
+  load_checkpoint: False  # --resume overrides this; use the resume command above.
 
   config:
     name: high_level_2_5
-    description: "Stage 1_7 initialization: clean string-bed contact plus forward shaping; vertical and angle rewards disabled for first 200 epochs."
+    description: "Continue 2_5 from epoch 200 to 350: angle weight ramps 0 to 1 over epochs 200-250; forward=2, clean_contact=0.5, vertical/placement disabled."
     protect_existing_checkpoints: True
     env_name: rlgpu
     multi_gpu: False
@@ -249,7 +250,7 @@ params:
     learning_rate: 2e-5
     lr_schedule: constant
     score_to_win: 20000
-    max_epochs: 200
+    max_epochs: 350
     save_best_after: 100
     save_frequency: 50
     print_stats: True
@@ -265,7 +266,7 @@ params:
     seq_len: 4
     bounds_loss_coef: 10
     clip_actions_val: 5.0
-    # New stage: load policy and normalization, start curriculum clock at zero.
-    # Later continuation of THIS stage should use --resume --checkpoint latest.
+    # Original fresh-run initialization only; ignored during --resume.
+    # Resume 2_5 to restore its policy, normalization, optimizer and curriculum clock.
     pretrained_model_cp: results/usopen_train_stage_1__high_level_7/models/high_level_7_latest.pth
     discard_pretrained_sigma: False
