@@ -396,7 +396,8 @@ class ReturnCurriculumTests(unittest.TestCase):
         cfg = yaml.safe_load(path.read_text())
         v = cfg['env']['vid2player']
         obj, _ = self.make(config=v['return_curriculum'], weights=v['reward_weights'].copy())
-        for epoch, expected in [(0, 0.), (10, 0.), (50, 0.), (75, .05), (100, .1), (150, .2), (300, .2)]:
+        for epoch, expected in [(0, 0.), (10, 0.), (50, 0.), (75, .05), (100, .1),
+                                (150, .2), (200, .2), (225, .6), (250, 1.), (300, 1.)]:
             obj.set_progress(epoch * 2048 * 64)
             self.assertAlmostEqual(obj.weights['vertical'], expected)
             self.assertEqual([obj.weights[k] for k in ('net', 'court', 'target')], [0., 0., 0.])

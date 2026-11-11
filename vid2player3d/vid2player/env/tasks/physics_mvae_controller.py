@@ -115,6 +115,8 @@ class PhysicsMVAEController():
                 self.num_envs, self.device, self.cfg_v2p.get('return_curriculum', {}),
                 self._reward_weights, self._reward_scales, self._physics_player.task.dt,
                 ball_radius=self._physics_player.task._ball_physics.radius)
+            if self._return_curriculum.needs_contact_quality:
+                self._physics_player.task.configure_contact_quality(self._return_curriculum.contact_quality)
             self.set_reward_schedule_progress(0)
 
         self._sub_rewards = [None] * self.num_envs
@@ -423,11 +425,13 @@ class PhysicsMVAEController():
                 self._phase_pred, self._tar_action, self._racket_pos, self._ball_pos,
                 self._mvae_player._swing_type, self._reward_scales, {'pos': 1.})
             player = self._physics_player.task
+            quality = ({'contact_quality': player._contact_quality.scores}
+                       if self._return_curriculum.needs_contact_quality else {})
             events = self._return_curriculum.step(
                 self._ball_pos, self._ball_vel, player._has_racket_ball_contact_now,
                 getattr(player, '_has_ground_impact_now', player._has_bounce_now),
                 getattr(player, '_ground_impact_pos', player._bounce_pos), self._target_bounce_pos,
-                self._est_bounce_valid)
+                self._est_bounce_valid, **quality)
             self._sub_rewards = torch.cat((reach[:, None], events), dim=-1)
             components = self._return_curriculum.components
             weights = self._sub_rewards.new_tensor([reward_weights[k] for k in components])

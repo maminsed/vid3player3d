@@ -482,4 +482,8 @@ def summarize_task_stats(totals):
         result['return/target_landings'] = values['return_target_landings']
     if 'return_vertical_outside_band' in values and values.get('return_hits', 0) > 0:
         result['return/vertical_outside_band_per_contact'] = values['return_vertical_outside_band'] / values['return_hits']
+    for name in ('clean_contact', 'contact_angle'):
+        key = 'return_' + name + '_sum'
+        if key in values and values.get('return_hits', 0) > 0:
+            result['return/' + name + '_per_contact'] = values[key] / values['return_hits']
     return result

@@ -9,10 +9,11 @@ import torch
 
 from vid2player.utils.reward_schedule import LinearRewardSchedule, PiecewiseRewardSchedule
 from vid2player.utils.tennis_court import NET_HEIGHT_M
+from vid2player.utils.contact_quality import QUALITY_COMPONENTS, resolve_contact_quality
 
 
 COMPONENTS = ('pos', 'contact', 'forward', 'net', 'court', 'target')
-OPTIONAL_COMPONENTS = ('vertical',)
+OPTIONAL_COMPONENTS = ('vertical',) + QUALITY_COMPONENTS
 
 
 class ReturnCurriculum:
@@ -24,6 +25,9 @@ class ReturnCurriculum:
         # Append opt-in terms so older configs retain their exact component arrays.
         self.components = COMPONENTS + tuple(k for k in OPTIONAL_COMPONENTS
             if k in weights or k in config.get('weights_schedule', {}))
+        self.needs_contact_quality = any(k in self.components for k in QUALITY_COMPONENTS)
+        self.contact_quality = (resolve_contact_quality(config.get('contact_quality'))
+                                if self.needs_contact_quality or 'contact_quality' in config else None)
         unknown = set(weights) - set(self.components)
         if unknown:
             raise ValueError('Unknown return reward weights: ' + str(sorted(unknown)))
@@ -79,6 +83,8 @@ class ReturnCurriculum:
         self.contact_vy = torch.zeros(count, device=device)
         self.contact_age = torch.zeros(count, device=device, dtype=torch.long)
         self.target_error = torch.zeros(count, device=device)
+        self.quality_totals = {k: torch.zeros(count, device=device)
+                               for k in QUALITY_COMPONENTS if k in self.components}
 
     def set_progress(self, frame):
         for group, destination in [('weights', self.weights), ('scales', self.scales)]:
@@ -97,12 +103,18 @@ class ReturnCurriculum:
             getattr(self, name)[ids] = False
         self.contact_vy[ids] = self.target_error[ids] = 0
         self.contact_age[ids] = 0
+        for value in self.quality_totals.values():
+            value[ids] = 0
 
     def waiting_for_landing(self):
         return self.hit & ~self.landing_seen & (self.contact_age * self.dt < self.max_post_contact_s)
 
-    def step(self, ball, velocity, contact_now, bounce_now, bounce_pos, target, estimate_valid):
+    def step(self, ball, velocity, contact_now, bounce_now, bounce_pos, target, estimate_valid,
+             contact_quality=None):
         """Return event components; repeated contacts/bounces cannot earn them again."""
+        if self.needs_contact_quality and (contact_quality is None or
+                any(k not in contact_quality for k in self.quality_totals)):
+            raise ValueError('Opt-in contact rewards require first-impact physics quality scores')
         had_contact = self.hit.clone()
         self.contact_age[had_contact] += 1
         finite = torch.isfinite(ball).all(-1) & torch.isfinite(velocity).all(-1)
@@ -159,6 +171,12 @@ class ReturnCurriculum:
             # A penalty avoids granting a free bonus to flat backward/weak hits.
             # Zero inside a broad band; at most -1 beyond it. No flight modifications.
             events.append(-first_contact.float() * (vertical_excess / self.vertical_falloff).clamp(0, 1))
+        for name, total in self.quality_totals.items():
+            # Additive quality bonuses never gate contact or signed penalties.
+            score = torch.nan_to_num(contact_quality[name], nan=0., posinf=0., neginf=0.).clamp(0, 1)
+            value = torch.where(first_contact, score, torch.zeros_like(score))
+            total.add_(value)
+            events.append(value)
         return torch.stack(events, dim=-1)
 
     def stats(self, completed, boundary):
@@ -179,4 +197,6 @@ class ReturnCurriculum:
         }
         if 'vertical' in self.components:
             stats['return_vertical_outside_band'] = (hits & self.vertical_outside_band).sum()
+        for name, total in self.quality_totals.items():
+            stats['return_' + name + '_sum'] = total[hits].sum()
         return stats

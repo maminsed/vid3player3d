@@ -2,16 +2,21 @@
 import torch
 
 
+def racket_state_snapshot(physics):
+    """Copy XYZ, XYZW, COM velocity, angular velocity for the actual racket body."""
+    indices = (physics._contact_env_ids, physics._contact_racket_ids)
+    return torch.cat([field[indices] for field in (
+        physics._rigid_body_pos_origin, physics._rigid_body_rot_origin,
+        physics._rigid_body_vel_origin, physics._rigid_body_ang_vel_origin)], dim=-1)
+
+
 def racket_ball_snapshot(physics):
     """Copy world-space simulator states before their shared buffers change.
 
     State layout: position XYZ, quaternion XYZW, linear velocity XYZ (m/s),
     angular velocity XYZ (rad/s). Use the actual body index, including lefties.
     """
-    indices = (physics._contact_env_ids, physics._contact_racket_ids)
-    racket = torch.cat([field[indices] for field in (
-        physics._rigid_body_pos_origin, physics._rigid_body_rot_origin,
-        physics._rigid_body_vel_origin, physics._rigid_body_ang_vel_origin)], dim=-1)
+    racket = racket_state_snapshot(physics)
     body = torch.cat((physics._rigid_body_pos_origin, physics._rigid_body_rot_origin,
                       physics._rigid_body_vel_origin, physics._rigid_body_ang_vel_origin), dim=-1)
     return {'ball_state': physics._ball_root_states.clone(), 'racket_state': racket,

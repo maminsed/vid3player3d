@@ -21,7 +21,8 @@ from vid2player.utils.tennis_contacts import contact_materials, ground_impact, r
 from vid2player.utils.tennis_materials import configure_ball_asset, configure_racket_asset
 from vid2player.utils.ball_physics import resolve_ball_physics, configure_ball_options, resolve_ball_asset, ball_aerodynamic_force
 from vid2player.utils.ground_alignment import reset_height_offset
-from vid2player.utils.racket_diagnostics import racket_ball_snapshot
+from vid2player.utils.racket_diagnostics import racket_ball_snapshot, racket_state_snapshot
+from vid2player.utils.contact_quality import RacketContactQuality, read_string_bed_geometry
 
 import torch
 import torch.nn.functional as F
@@ -598,6 +599,8 @@ class HumanoidSMPLIMMVAE(HumanoidSMPL):
         self._bounce_pos[env_ids] = 0
         self._has_racket_ball_contact[env_ids] = 0
         self._has_racket_ball_contact_now[env_ids] = 0
+        if getattr(self, '_contact_quality', None) is not None:
+            self._contact_quality.reset(env_ids)
         self._ball_pos[env_ids] = self._ball_root_states[env_ids, 0:3]
         self._ball_vel[env_ids] = self._ball_root_states[env_ids, 7:10]
 
@@ -824,10 +827,16 @@ class HumanoidSMPLIMMVAE(HumanoidSMPL):
     
     def _physics_step(self):
         record = getattr(self, '_record_racket_diagnostics', False)
+        quality = getattr(self, '_contact_quality', None)
+        if quality is not None:
+            quality.reset()
         for i in range(self.control_freq_inv):
             if record:
                 self.gym.refresh_rigid_body_state_tensor(self.sim)
                 diagnostic = {'pre_' + key: value for key, value in racket_ball_snapshot(self).items()}
+            if quality is not None:
+                self.gym.refresh_rigid_body_state_tensor(self.sim)
+                quality_racket_pre = racket_state_snapshot(self)
             if self._tennis_contacts.enabled:
                 previous_ball = self._ball_root_states.clone()
                 previous_racket = self._rigid_body_pos_origin[
@@ -879,6 +888,9 @@ class HumanoidSMPLIMMVAE(HumanoidSMPL):
                 else:
                     hit = impact_result
                 hit &= ~ground_hit & ~self._has_racket_ball_contact
+                if quality is not None:
+                    quality.record(hit, previous_ball, quality_racket_pre,
+                                   racket_state_snapshot(self), self.sim_params.dt)
                 if record:
                     diagnostic['accepted_contact'] = hit.clone()
                 self._has_racket_ball_contact_now |= hit
@@ -912,6 +924,18 @@ class HumanoidSMPLIMMVAE(HumanoidSMPL):
             # so pause/step cannot be consumed by the generic viewer handler.
             if not getattr(self, '_evaluation_viewer_active', False):
                 self.render()
+
+    def configure_contact_quality(self, settings):
+        """Called only by an explicitly opted-in single-player return curriculum."""
+        if not self._tennis_contacts.enabled or self.cfg_v2p.get('dual_mode'):
+            raise ValueError('Contact quality requires enabled tennis_contacts and single-player control')
+        geometry = read_string_bed_geometry(self.humanoid_files[0])
+        prop = self.gym.get_actor_rigid_body_properties(
+            self.envs[0], self.humanoid_handles[0])[self._racket_body_id_true]
+        self._contact_quality = RacketContactQuality(
+            self.num_envs, self.device, settings, geometry,
+            [prop.com.x, prop.com.y, prop.com.z], self._ball_physics.radius,
+            self._tennis_contacts.ball_contact_offset + self._tennis_contacts.racket_contact_offset)
         
     def post_physics_step(self):
         self.progress_buf += 1
