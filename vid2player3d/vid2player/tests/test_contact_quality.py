@@ -180,7 +180,7 @@ class ContactQualityTests(unittest.TestCase):
                 self.assertAlmostEqual(obj.weights[key],expected)
                 self.assertAlmostEqual(obj.schedule_metrics()['curriculum/weight_'+key],expected)
 
-    def test_2_5_is_a_new_200_epoch_experiment_with_no_vertical_or_angle_credit(self):
+    def test_2_5_continuation_replaces_angle_with_scheduled_orientation(self):
         cfg_root = ROOT/'cfg/controller/usopen_train_stage_2'
         source = yaml.safe_load((cfg_root/'high_level_2_4.yaml').read_text())
         cfg = yaml.safe_load((cfg_root/'high_level_2_5.yaml').read_text())
@@ -190,10 +190,11 @@ class ContactQualityTests(unittest.TestCase):
         self.assertEqual(obj.weights['contact_angle'],0.)
         self.assertEqual(obj.weights['clean_contact'],.5)
         self.assertEqual(obj.weights['forward'],2.)
-        for epoch in [0,50,100,150,200,250,500]:
+        for epoch,orientation in [(200,0.),(350,0.),(375,.5),(400,1.),(450,1.)]:
             obj.set_progress(epoch*2048*64)
             self.assertEqual(obj.weights['vertical'],0.)
             self.assertEqual(obj.weights['contact_angle'],0.)
+            self.assertAlmostEqual(obj.weights['orientation'],orientation)
             self.assertEqual([obj.weights[k] for k in ('net','court','target')],[0.,0.,0.])
             if epoch >= 100:
                 self.assertEqual(obj.weights['clean_contact'],.5)
@@ -201,21 +202,23 @@ class ContactQualityTests(unittest.TestCase):
         self.assertNotIn('vertical',obj.logged_components)
         self.assertNotIn('contact_angle',obj.logged_components)
         self.assertEqual(cfg['params']['config']['name'],'high_level_2_5')
-        self.assertEqual(cfg['params']['config']['max_epochs'],200)
+        self.assertEqual(cfg['params']['config']['max_epochs'],450)
         self.assertEqual(cfg['env']['physics'],source['env']['physics'])
         for key,value in source['env']['vid2player'].items():
-            if key not in ('return_curriculum','reward_weights'):
+            if key not in ('return_curriculum','reward_weights','tennis_contacts'):
                 self.assertEqual(v[key],value,key)
+        contact = dict(v['tennis_contacts'])
+        self.assertEqual(contact.pop('min_velocity_change_mps'),2.)
+        self.assertEqual(contact,source['env']['vid2player']['tennis_contacts'])
         self.assertEqual(cfg['params']['config']['pretrained_model_cp'],source['params']['config']['pretrained_model_cp'])
         # If later explicitly enabled, resume uses the existing stage-local clock.
         continuation = v['return_curriculum']
         continuation['weights_schedule']['vertical']['enabled'] = True
-        continuation['weights_schedule']['contact_angle']['enabled'] = True
         obj,_ = self.curriculum(config=continuation,weights=v['reward_weights'].copy())
-        for epoch,vertical,angle in [(200,0.,0.),(225,.1,.125),(250,.2,.25)]:
+        for epoch,vertical in [(200,0.),(225,.1),(250,.2)]:
             obj.set_progress(epoch*2048*64)
             self.assertAlmostEqual(obj.weights['vertical'],vertical)
-            self.assertAlmostEqual(obj.weights['contact_angle'],angle)
+            self.assertEqual(obj.weights['contact_angle'],0.)
 
     def test_all_previous_yamls_retain_original_component_shapes_and_no_geometry_requirement(self):
         for path in (ROOT/'cfg/controller').glob('**/*.yaml'):
@@ -266,7 +269,7 @@ class ContactQualityTests(unittest.TestCase):
             ball,racket = self.states()
             ball[:,2] = racket[:,2] = 1.
             ball[:,1] = .15
-            state = NS(control_freq_inv=2, _tennis_contacts=NS(enabled=True,racket_contact_offset=.05),
+            state = NS(control_freq_inv=2, _tennis_contacts=NS(enabled=True,racket_contact_offset=.05,min_velocity_change_mps=2.),
                 _contact_env_ids=torch.tensor([0]),_contact_racket_ids=torch.tensor(0),
                 _ball_root_states=ball, _rigid_body_pos_origin=racket[:,:3].reshape(1,1,3),
                 _rigid_body_rot_origin=racket[:,3:7].reshape(1,1,4),

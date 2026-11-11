@@ -5,6 +5,7 @@ from vid2player.utils.common import AverageMeter
 from vid2player.utils.reward_schedule import LinearRewardSchedule
 from vid2player.utils.return_curriculum import ReturnCurriculum, COMPONENTS
 from vid2player.utils.racket_control import resolve_racket_control, InterceptionWindow
+from vid2player.utils.racket_diagnostics import racket_state_snapshot
 from vid2player.utils.torch_transform import quat_to_rot6d
 from utils import torch_utils
 
@@ -127,6 +128,7 @@ class PhysicsMVAEController():
             self._mvae_actions_random = torch.zeros((self.num_envs, self._num_mvae_action), device=self.device, dtype=torch.float32)
         racket_control = resolve_racket_control(self.cfg_v2p.get('racket_phase_correction'))
         self._interception_window = None
+        self._racket_orientation = None
         if racket_control.prediction.enabled:
             if self.cfg_v2p.get('dual_mode') or not self.cfg_v2p.get('predict_phase', True):
                 raise ValueError('Interception windows require single-player phase-enabled control')
@@ -135,6 +137,11 @@ class PhysicsMVAEController():
                 self.num_envs, self.device, dt, racket_control.prediction, racket_control.blend_s)
         if racket_control.mode != 'legacy':
             self._mvae_player._racket_blend_alpha = min(1., self._physics_player.task.dt / racket_control.blend_s)
+        if self._return_curriculum is not None and self._return_curriculum.needs_orientation:
+            if self._interception_window is None:
+                raise ValueError('Orientation reward requires racket_phase_correction.prediction.enabled: true')
+            self._racket_orientation = self._physics_player.task.configure_racket_orientation(
+                self._return_curriculum.orientation_settings)
         
         # optimization flags for pytorch JIT
         torch._C._jit_set_profiling_mode(False)
@@ -264,6 +271,8 @@ class PhysicsMVAEController():
         self._est_max_height[env_ids] = 0
         if self._return_curriculum is not None:
             self._return_curriculum.reset(env_ids, self._ball_pos[env_ids])
+        if getattr(self, '_racket_orientation', None) is not None:
+            self._racket_orientation.reset(env_ids)
         self._mvae_player._swing_type_cycle[env_ids] = -1
 
         self._tar_time_total[env_ids] = self.cfg_v2p['reset_reaction_nframes'] + \
@@ -296,6 +305,10 @@ class PhysicsMVAEController():
                                  self._tar_action == 1, self._physics_player.task._has_racket_ball_contact,
                                  self.cfg_v2p.get('righthand', True))
             self._mvae_player._racket_window_weight = weight
+        if self._racket_orientation is not None:
+            self._racket_orientation.prepare(
+                window.eta, window.valid, window.position, self._target_bounce_pos,
+                self._tar_action == 1, self._physics_player.task._has_racket_ball_contact)
         self._mvae_actions = actions[:, :self._num_mvae_action].clone() * \
             self.cfg_v2p.get('vae_action_scale', 1.0)
         
@@ -427,6 +440,9 @@ class PhysicsMVAEController():
             player = self._physics_player.task
             quality = ({'contact_quality': player._contact_quality.scores}
                        if self._return_curriculum.needs_contact_quality else {})
+            if self._return_curriculum.needs_orientation:
+                quality['orientation_reward'] = self._racket_orientation.step(
+                    racket_state_snapshot(player), player._ball_root_states)
             events = self._return_curriculum.step(
                 self._ball_pos, self._ball_vel, player._has_racket_ball_contact_now,
                 getattr(player, '_has_ground_impact_now', player._has_bounce_now),

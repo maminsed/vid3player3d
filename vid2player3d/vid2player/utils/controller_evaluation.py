@@ -308,7 +308,8 @@ def contact_interval_events(samples, step, control_dt, physics_dt, first_id):
         ground = bool(sample.get('ground_impact', False))
         latched = bool(sample.get('contact_already_latched', False))
         status = ('registered' if registered else 'rejected_ground_impact' if ground
-                  else 'ignored_already_latched' if latched else 'not_registered')
+                  else 'ignored_already_latched' if latched
+                  else 'rejected_velocity_change' if sensor and not impulse else 'not_registered')
         events.append({'id': first_id + len(events), 'control_step': step,
                        'physics_interval': interval,
                        'time_start_s': (step-1)*control_dt + interval*physics_dt,
@@ -359,7 +360,7 @@ def evaluate_controller(player, args, evaluation):
         'face_normal_definition': 'Configured grip normal rotated by actual racket body quaternion; sign is a convention, not a chosen contacting side.',
         'surface_velocity_definition': 'v_COM + omega cross (ball_center - COM); proxy at ball center, NOT measured contact location.',
         'contact_force_definition': 'Net body contact force tensors in N, not pair-resolved impulses; short impacts may be absent.',
-        'contact_evidence_definition': 'Independent proximity, sensor and residual-delta-v checks. accepted_contact additionally excludes ground impact and previously latched contact.',
+        'contact_evidence_definition': 'Contact requires swept proximity and vector delta-v beyond expected flight above tennis_contacts.min_velocity_change_mps. Sensors are diagnostic only. accepted_contact also excludes ground impact and previously latched contact.',
         'detector_evidence_available': bool(physics._tennis_contacts.enabled),
         'missing_contact_information': 'Exact contact point, contact normal and colliding shape pair are not provided by this recorder.',
         'ball_radius_m': float(physics._ball_physics.radius),

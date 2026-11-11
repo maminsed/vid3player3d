@@ -42,6 +42,11 @@ class ControllerEvaluationTests(unittest.TestCase):
         self.assertEqual(sum(e['registered'] for e in events),1)
         self.assertAlmostEqual(events[0]['time_start_s'],2/30)
         self.assertAlmostEqual(events[1]['time_end_s'],2/30+2/120)
+        grazes = contact_interval_events([dict(proximity_pass=True,sensor_evidence=True,
+                                               impulse_evidence=False,accepted_contact=False)],
+                                        3,1/30,1/120,7)
+        self.assertEqual(grazes[0]['status'],'rejected_velocity_change')
+        self.assertFalse(grazes[0]['registered'])
 
     def test_low_level_player_preserves_evaluation_display_settings(self):
         from vid2player.utils.tennis_contacts import resolve_tennis_contacts

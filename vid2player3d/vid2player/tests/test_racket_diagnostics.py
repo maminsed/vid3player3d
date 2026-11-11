@@ -25,7 +25,7 @@ class TestRacketDiagnostics(unittest.TestCase):
         results = []
         for record in (False, True):
             state = NS(control_freq_inv=2, _record_racket_diagnostics=record,
-                       _racket_diagnostic_samples=[], _tennis_contacts=NS(enabled=True, racket_contact_offset=.05),
+                       _racket_diagnostic_samples=[], _tennis_contacts=NS(enabled=True, racket_contact_offset=.05,min_velocity_change_mps=2.),
                        _contact_env_ids=torch.tensor([0]), _contact_racket_ids=torch.tensor(0),
                        _ball_root_states=torch.zeros(1, 13), _rigid_body_pos_origin=torch.zeros(1, 1, 3),
                        _rigid_body_rot_origin=torch.tensor([[[0., 0., 0., 1.]]]),
@@ -98,7 +98,7 @@ class TestRacketDiagnostics(unittest.TestCase):
         original = racket_impact(*args)
         hit, evidence = racket_impact(*args, return_details=True)
         torch.testing.assert_close(hit, original)
-        self.assertEqual(hit.tolist(), [True, True, False, False])
+        self.assertEqual(hit.tolist(), [False, True, False, False])
         self.assertEqual(evidence['sensor_evidence'].tolist(), [True, False, False, False])
         self.assertEqual(evidence['impulse_evidence'].tolist(), [False, True, True, False])
         self.assertEqual(evidence['proximity_pass'].tolist(), [True, True, False, True])

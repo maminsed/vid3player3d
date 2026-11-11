@@ -78,7 +78,30 @@ class TestTennisContacts(unittest.TestCase):
         # Strong body impulse far from the racket must be excluded.
         previous[3, 0], current[3, 0], current[3, 7] = 2., 2., 10.
         hit = racket_impact(previous, current, racket, racket, force, force, expected, .0335, .05, 1 / 60)
-        self.assertEqual(hit.tolist(), [True, True, False, False])
+        self.assertEqual(hit.tolist(), [True, False, False, False])
+
+    def test_contact_requires_vector_change_even_with_sensors(self):
+        previous = torch.zeros(6,13)
+        current = previous.clone()
+        previous[:,8] = -10.
+        current[:,8] = torch.tensor([-10., -8.1, -8., -7.9, 10., -10.])
+        # Identical speeds, different direction: this must also register.
+        current[5,7:10] = torch.tensor([10.,0.,0.])
+        zeros = torch.zeros(6,3)
+        force = torch.ones(6,3)*1000
+        hit = racket_impact(previous,current,zeros,zeros,force,force,zeros,.0335,.05,1/60,
+                            min_velocity_change_mps=2.)
+        self.assertEqual(hit.tolist(),[False,False,False,True,True,True])
+        # Gravity/drag cannot count as impact, even if their total exceeds the threshold.
+        expected = current[:,7:10]-previous[:,7:10]
+        hit = racket_impact(previous,current,zeros,zeros,force,force,expected,.0335,.05,1/60)
+        self.assertFalse(hit.any())
+
+    def test_contact_threshold_config_is_validated(self):
+        self.assertEqual(resolve_tennis_contacts({'min_velocity_change_mps':3.}).min_velocity_change_mps,3.)
+        for value in [-1., float('nan'), float('inf'), True]:
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                resolve_tennis_contacts({'min_velocity_change_mps':value})
 
     def test_preview_timing_preserves_30hz(self):
         for rate in [60, 240, 480, 960, 1920]:

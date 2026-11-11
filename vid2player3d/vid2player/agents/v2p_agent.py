@@ -486,4 +486,6 @@ def summarize_task_stats(totals):
         key = 'return_' + name + '_sum'
         if key in values and values.get('return_hits', 0) > 0:
             result['return/' + name + '_per_contact'] = values[key] / values['return_hits']
+    if 'return_orientation_sum' in values and values.get('cycles', 0) > 0:
+        result['return/orientation_per_shot'] = values['return_orientation_sum'] / values['cycles']
     return result

@@ -21,6 +21,7 @@ class TennisContacts:
     racket_friction: float = .6
     ball_contact_offset: float = .02
     racket_contact_offset: float = .05
+    min_velocity_change_mps: float = 2.
 
     @property
     def enabled(self):
@@ -48,7 +49,7 @@ def resolve_tennis_contacts(config=None):
         if f.name == 'model':
             continue
         value = getattr(result, f.name)
-        if not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
             raise ValueError(f'tennis_contacts.{f.name} must be finite and nonnegative')
         if 'restitution' in f.name and value > 1:
             raise ValueError(f'tennis_contacts.{f.name} must be <= 1')
@@ -110,12 +111,13 @@ def apply_solver_config(sim_params, physics):
 
 def racket_impact(previous, current, racket_previous, racket_current,
                   ball_contact_force, racket_contact_force, expected_velocity_change,
-                  radius, contact_margin, dt, *, return_details=False):
-    """Racket-region event from impulses and a swept proximity check.
+                  radius, contact_margin, dt, *, min_velocity_change_mps=2., return_details=False):
+    """Require a vector velocity change beyond smooth flight near the racket.
 
     GPU contact tensors can omit short impacts even with all-substep collection.
-    A velocity impulse (>2 m/s beyond smooth flight) is a fallback. Both paths
-    must pass a swept racket-center check; this does not identify exact mesh
+    Sensors are diagnostic only: a barely touching ball must not trigger the
+    contact latch/reward. Same-speed reversals count because the vector
+    difference is used, not a difference of speeds. This does not identify exact
     contact pairs or distinguish a handle strike at the edge of the head.
     """
     start = previous[:, :3] - racket_previous
@@ -129,8 +131,8 @@ def racket_impact(previous, current, racket_previous, racket_current,
     sensors = ((ball_contact_force.square().sum(-1) > 1e-8)
                & (racket_contact_force.square().sum(-1) > 1e-8))
     impulse = current[:, 7:10] - previous[:, 7:10] - expected_velocity_change
-    impulse_evidence = impulse.square().sum(-1) > 4.
-    hit = near & (sensors | impulse_evidence)
+    impulse_evidence = impulse.square().sum(-1) > min_velocity_change_mps**2
+    hit = near & impulse_evidence
     if return_details:
         return hit, {
             'swept_distance_m': closest.norm(dim=-1),
