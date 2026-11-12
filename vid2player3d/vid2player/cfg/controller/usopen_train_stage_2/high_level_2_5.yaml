@@ -84,52 +84,54 @@ env:
       transverse_inertia: 0.0123
       normal_inertia: 0.01349
 
-    # Continue from epoch 350 through 450 with useful-return orientation feedback.
-    # Resume 2_5 with --resume --checkpoint epoch00350; orientation ramps over 350-400.
-    # Evaluation uses the fixed weights below; training overrides them by schedule.
-    # Keep generic contact independent; the new quality terms are additive bonuses.
     reward_type: return_curriculum
-    reward_weights: {pos: 0.5, contact: 1.0, forward: 2.0, net: 0.0, court: 0.0, target: 0.0, vertical: 0.0, clean_contact: 0.5, contact_angle: 0.0, orientation: 1.0}
+    reward_weights: {pos: 0.5, contact: 1.0, forward: 2.0, net: 0.0, court: 0.0, target: 0.0, vertical: 0.0, clean_contact: 0.5, contact_angle: 0.0, orientation: 0.5}
     reward_scales: {pos: 5.0, phase: 5.0, court: 0.02, target: 0.005}
     return_curriculum:
-      forward_reward_mode: signed_linear  # 2_1 defaults to positive_linear, unchanged.
-      forward_speed_mps: 10.0  # Normalize outgoing vy; saturate at +/-10 m/s, not a contact gate.
-      backward_penalty_scale: 0.5  # Preserve the trained value; raw forward range [-0.5, +1].
-      # Optional contact-time penalty: zero in this broad band, bounded below by -1.
-      # Not an exact launch-velocity target or a substitute for measured outcomes.
+      # Forward velocity reward setting
+      forward_reward_mode: signed_linear
+      forward_speed_mps: 10.0
+      backward_penalty_scale: 0.5
+      # Vertical velocity reward setting
       vertical_velocity: {min_mps: 0.0, max_mps: 8.0, falloff_mps: 8.0}
+      # Contact quality reward setting
       contact_quality:
-        # Fractions of the actual asset's string-bed radius: full credit inside
-        # 0.5R, linear falloff to zero at R. Geometry is a swept-impact proxy.
         full_credit_radius_fraction: 0.5
         zero_credit_radius_fraction: 1.0
-        # Angle to either face normal, using pre-impact ball/surface relative
-        # velocity. 0..30 degrees all score 1; linear falloff to zero at 90.
-        # Retain the incidence diagnostic/implementation; its reward weight is 0.
+        
+        # Angle contact quality (angle of ball to incoming ball during hit)
         angle_tolerance_deg: 30.0
         angle_falloff_deg: 60.0
+
+      # orientation reward (how good the racket positioning is for hitting back to the target point)
       orientation:
-        # Face normal aligned with desired v_out - incoming v, using a broad
-        # ballistic return to the existing target (spin/aerodynamic effects omitted).
-        # One per-shot budget: up to 0.5 preparation + 0.5 at first accepted impact.
+        gate_mode: player_reach
+        score_mode: positive
         angle_tolerance_deg: 30.0
         angle_falloff_deg: 60.0
-        preparation_s: 0.20
-        late_tolerance_s: 0.10
-        max_distance_m: 0.60  # Physical racket head to predicted interception point.
+        preparation_s: 0.35
+        full_credit_before_s: 0.10
+        full_credit_after_s: 0.10
+        late_tolerance_s: 0.20
+        # Player-relative XY / world-height envelope; independent of racket position.
+        lateral_reach_m: 1.50
+        forward_min_m: -0.60
+        forward_max_m: 1.50
+        min_height_m: 0.45
+        max_height_m: 2.50
+        reach_falloff_m: 0.50
+        movement_speed_mps: 4.0
+        max_preview_error_m: 1.0
         flight_time_s: 1.40
-      max_post_contact_s: 3.0 # Delay timed relaunch while observing a contacted flight.
-      # Total environment transitions SINCE this stage starts, not physics steps.
+      # Delay timed relaunch while observing a contacted flight.
+      max_post_contact_s: 3.0 
       # With 2048 environments x 64 steps, one epoch collects 131072 transitions.
       weights_schedule:
+        pos: {start: 1.0, end: 0.5, start_frame: 1310720, end_frame: 13107200}  # 10-100
         contact: {start: 0.25, end: 1.0, start_frame: 0, end_frame: 13107200}  # Epochs 0-100.
         forward: {start: 0.0, end: 2.0, start_frame: 1310720, end_frame: 13107200}  # 10-100, then hold.
-        pos: {start: 1.0, end: 0.5, start_frame: 1310720, end_frame: 13107200}  # 10-100
         clean_contact: {start: 0.0, end: 0.5, start_frame: 0, end_frame: 13107200}  # 0-100, then hold.
-        # Replace incidence shaping in this continuation; keep vertical/placement off.
-        # Disabled schedules do NOT override fixed weights: vertical/net/court/target
-        # must also retain fixed weight 0 above. Schedules can later fade to 0.
-        orientation: {start: 0.0, end: 1.0, start_frame: 45875200, end_frame: 52428800}  # 350-400, then hold through 450.
+        orientation: {start: 0.0, end: 0.5, start_frame: 58982400, end_frame: 62259200}  # 450-475, then hold through 550.
         vertical: {enabled: false, start: 0.0, end: 0.2, start_frame: 26214400, end_frame: 32768000}  # 200-250.
         net:
           enabled: false
@@ -245,7 +247,7 @@ params:
 
   config:
     name: high_level_2_5
-    description: "Continue 2_5 from epoch 350 to 450: require delta-v >2 m/s; orientation ramps 0 to 1 over 350-400; angle=0, forward=2, clean_contact=0.5, vertical/placement disabled."
+    description: "Resume 2_5 epoch 450 through 550: positive player-reach orientation ramps 0 to 0.5 over 450-475; contact=1, forward=2, pos=0.5, clean_contact=0.5; angle/vertical/placement disabled."
     protect_existing_checkpoints: True
     env_name: rlgpu
     multi_gpu: False
@@ -261,7 +263,7 @@ params:
     learning_rate: 2e-5
     lr_schedule: constant
     score_to_win: 20000
-    max_epochs: 450
+    max_epochs: 550
     save_best_after: 100
     save_frequency: 50
     print_stats: True
