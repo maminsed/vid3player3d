@@ -488,4 +488,14 @@ def summarize_task_stats(totals):
             result['return/' + name + '_per_contact'] = values[key] / values['return_hits']
     if 'return_orientation_sum' in values and values.get('cycles', 0) > 0:
         result['return/orientation_per_shot'] = values['return_orientation_sum'] / values['cycles']
+    for name, numerator, denominator in (
+        ('orientation_preparation_per_shot', 'return_orientation_preparation_sum', 'cycles'),
+        ('orientation_impact_per_shot', 'return_orientation_impact_sum', 'cycles'),
+        ('orientation_at_contact', 'return_orientation_contact_score_sum', 'return_orientation_contacts'),
+        ('orientation_error_deg_at_contact', 'return_orientation_contact_angle_sum', 'return_orientation_contacts'),
+        ('orientation_active_steps_per_shot', 'return_orientation_active_steps', 'cycles'),
+        ('orientation_opportunity_rate', 'return_orientation_opportunities', 'cycles'),
+    ):
+        if numerator in values and values.get(denominator, 0) > 0:
+            result['return/' + name] = values[numerator] / values[denominator]
     return result

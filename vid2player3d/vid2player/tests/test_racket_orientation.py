@@ -19,9 +19,15 @@ class RacketOrientationTests(unittest.TestCase):
         racket = torch.zeros(count,13); racket[:,6] = 1
         racket[:,:3] = torch.tensor([0.,-12.,1.])
         ball = racket.clone(); ball[:,8] = -8.
+        context = {}
+        if helper.settings.gate_mode == 'player_reach':
+            context = dict(root=racket[:,:3],root_velocity=torch.zeros(count,3),
+                trajectory=ball[:,:3,None].transpose(1,2).repeat(1,100,1),
+                clock=torch.zeros(count,dtype=torch.long),ball_position=ball[:,:3],
+                loaded=torch.ones(count,dtype=torch.bool))
         helper.prepare(torch.full((count,),.1),torch.ones(count,dtype=torch.bool),racket[:,:3],
                        torch.tensor([[0.,10.,0.]]).repeat(count,1),torch.ones(count,dtype=torch.bool),
-                       torch.zeros(count,dtype=torch.bool))
+                       torch.zeros(count,dtype=torch.bool),**context)
         return helper, racket, ball
 
     def test_useful_upright_face_beats_horizontal_and_normal_sign_does_not_matter(self):
@@ -197,6 +203,164 @@ class RacketOrientationTests(unittest.TestCase):
         self.assertTrue(state._has_racket_ball_contact_now[0])
         self.assertTrue(helper.contact_seen[0])
         self.assertAlmostEqual(helper.step(racket,ball)[0].item(),.5)
+
+    def new_settings(self):
+        return dict(gate_mode='player_reach',score_mode='signed',preparation_s=.35,
+                    late_tolerance_s=.20,full_credit_before_s=.10,full_credit_after_s=.10)
+
+    def test_signed_score_full_credit_zero_at_sixty_and_smooth_penalty(self):
+        helper,racket,ball=self.fixture(7,settings={'score_mode':'signed'})
+        outgoing=(helper.target-ball[:,:3])/helper.settings.flight_time_s
+        outgoing[:,2]+=.0335/helper.settings.flight_time_s+.5*9.81*helper.settings.flight_time_s
+        ball[:,7:10]=outgoing-torch.tensor([0.,20.,0.])
+        angles=torch.tensor([0.,15.,30.,45.,60.,75.,90.])*math.pi/180
+        racket[:,3]=torch.sin(angles/2);racket[:,6]=torch.cos(angles/2)
+        torch.testing.assert_close(helper.score(racket,ball,ball[:,:3]),
+            torch.tensor([1.,1.,1.,.5,0.,-.5,-1.]),atol=2e-6,rtol=2e-6)
+
+    def test_new_gate_does_not_depend_on_racket_distance(self):
+        helper,racket,ball=self.fixture(3,settings=self.new_settings())
+        helper.start[:]=helper.end[:]=1.;helper.now[:]=1.-helper.dt
+        racket[1,0]+=3. # Old gate was zero at only .6 m.
+        helper.root[2,0]=4. # A truly unreachable shot still has no preparation signal.
+        result=helper.step(racket,ball)
+        self.assertGreater(result[0],0)
+        self.assertEqual(result[0],result[1])
+        self.assertEqual(result[2],0)
+        torch.testing.assert_close(helper.last_reach_gate,torch.tensor([1.,1.,0.]))
+        helper.root[0,0]=1.75
+        self.assertAlmostEqual(helper.reachability_gate()[0].item(),.5)
+
+    def test_time_plateau_and_smooth_ramps(self):
+        helper,racket,ball=self.fixture(7,settings=self.new_settings())
+        helper.start[:]=1.;helper.end[:]=1.2
+        # Includes the whole estimated reachable interval plus .1 s at either side.
+        times=torch.tensor([.65,.775,.90,1.0,1.30,1.35,1.4])
+        helper.now[:]=times-helper.dt
+        helper.step(racket,ball)
+        torch.testing.assert_close(helper.last_time_gate,torch.tensor([0.,.5,1.,1.,1.,.5,0.]),atol=2e-6,rtol=2e-6)
+
+    def test_signed_preparation_budget_cannot_be_refilled_by_alternating_signs(self):
+        helper,racket,ball=self.fixture(settings=self.new_settings())
+        helper.start[:]=helper.end[:]=1.;helper.now[:]=1.-helper.dt
+        total_absolute=0.
+        for i in range(100):
+            racket[:,3:7]=torch.tensor([0.,0.,0.,1.]) if i%2 else torch.tensor([math.sqrt(.5),0.,0.,math.sqrt(.5)])
+            result=helper.step(racket,ball)
+            total_absolute+=abs(result.item())
+        self.assertAlmostEqual(total_absolute,.5,places=5)
+        self.assertAlmostEqual(helper.preparation_paid.item(),.5,places=5)
+        self.assertFalse(helper.contact_seen[0])
+        helper.reset(torch.tensor([0]))
+        self.assertEqual(helper.preparation_paid.item(),0)
+        self.assertEqual(helper.preparation_total.item(),0)
+
+    def test_signed_budget_normalization_across_time_steps(self):
+        for dt in [1/30,1/60]:
+            helper,racket,ball=self.fixture(settings=self.new_settings(),dt=dt)
+            helper.start[:]=1.;helper.end[:]=1.2
+            total=0.
+            for frame in range(round(1.5/dt)):
+                helper.now[:]=frame*dt
+                total+=helper.step(racket,ball).item()
+            self.assertAlmostEqual(total,.5,places=4)
+
+    def test_opportunity_is_an_interval_locked_before_interception(self):
+        helper,racket,ball=self.fixture(settings=self.new_settings())
+        helper.reset(torch.tensor([0]))
+        trajectory=torch.zeros(1,100,3)
+        trajectory[:,:,1]=torch.linspace(0.,-20.,100);trajectory[:,:,2]=1.
+        def prepare(frame,root=racket[:,:3]):
+            helper.prepare(torch.tensor([0.]),torch.tensor([False]),torch.ones(1,3)*999,
+                torch.tensor([[0.,10.,0.]]),torch.tensor([True]),torch.tensor([False]),
+                root=root,root_velocity=torch.zeros(1,3),trajectory=trajectory,
+                clock=torch.tensor([frame]),ball_position=trajectory[:,min(frame,99)],loaded=torch.tensor([True]))
+        prepare(0)
+        self.assertTrue(helper.valid[0]) # Independent of the old point predictor's validity.
+        self.assertGreater(helper.end[0],helper.start[0])
+        frame=math.ceil((helper.start.item()-.35)/helper.dt)
+        prepare(frame)
+        self.assertTrue(helper.locked[0])
+        before=[x.clone() for x in (helper.start,helper.end,helper.position)]
+        moved=racket[:,:3]+torch.tensor([[.1,.5,0.]])
+        prepare(frame+1,moved)
+        for old,new in zip(before,(helper.start,helper.end,helper.position)):
+            torch.testing.assert_close(old,new)
+        prepare(99,moved)
+        helper.step(racket,ball)
+        self.assertEqual(helper.last_time_gate.item(),0)
+
+    def test_new_gate_rejects_bad_preview_and_unreachable_height(self):
+        for bad in ['height','divergence','unloaded','recovery']:
+            helper,racket,ball=self.fixture(settings=self.new_settings())
+            helper.reset(torch.tensor([0]))
+            trajectory=torch.zeros(1,100,3);trajectory[:,:,1]=-12.;trajectory[:,:,2]=1.
+            if bad=='height':trajectory[:,:,2]=10.
+            actual=trajectory[:,0].clone()
+            if bad=='divergence':actual[:,0]+=5
+            helper.prepare(torch.zeros(1),torch.tensor([True]),ball[:,:3],torch.tensor([[0.,10.,0.]]),
+                torch.tensor([bad!='recovery']),torch.tensor([False]),root=racket[:,:3],
+                root_velocity=torch.zeros(1,3),trajectory=trajectory,clock=torch.tensor([0]),
+                ball_position=actual,loaded=torch.tensor([bad!='unloaded']))
+            self.assertFalse(helper.valid[0],bad)
+            self.assertEqual(helper.step(racket,ball).item(),0)
+
+    def test_negative_feedback_survives_curriculum_and_has_separate_diagnostics(self):
+        helper,racket,ball=self.fixture(settings=self.new_settings())
+        helper.start[:]=helper.end[:]=1.;helper.now[:]=1.-helper.dt
+        racket[:,3:7]=torch.tensor([math.sqrt(.5),0.,0.,math.sqrt(.5)])
+        preparation=helper.step(racket,ball)
+        self.assertLess(preparation.item(),0) # A miss also receives negative preparation feedback.
+        helper.record_contact(torch.tensor([True]),ball,racket)
+        impact=helper.step(racket,ball)
+        self.assertLess(impact.item(),0)
+        obj=ReturnCurriculum(1,'cpu',{'orientation':self.new_settings()},{'orientation':3.},{},ball_radius=.0335)
+        zeros=torch.tensor([False]);pos=ball[:,:3]
+        result=obj.step(pos,ball[:,7:10],zeros,zeros,pos,pos,zeros,orientation_reward=preparation+impact)
+        self.assertLess(result[0,-1],0)
+        stats=helper.stats(torch.tensor([True]));stats['cycles']=torch.tensor(1)
+        summarize=definitions(ROOT/'agents/v2p_agent.py',{'summarize_task_stats'}, {})['summarize_task_stats']
+        metrics=summarize(stats)
+        self.assertLess(metrics['return/orientation_preparation_per_shot'],0)
+        self.assertLess(metrics['return/orientation_at_contact'],0)
+        self.assertGreater(metrics['return/orientation_error_deg_at_contact'],60)
+
+    def test_2_6_starts_fresh_and_learns_orientation_before_forward(self):
+        import yaml
+        cfg=yaml.safe_load((ROOT/'cfg/controller/usopen_train_stage_2/high_level_2_6.yaml').read_text())
+        v=cfg['env']['vid2player'];training=cfg['params']['config']
+        self.assertFalse(cfg['params']['load_checkpoint'])
+        self.assertEqual(training['name'],'high_level_2_6')
+        self.assertEqual(training['max_epochs'],450)
+        self.assertIn('usopen_train_stage_1__high_level_7',training['pretrained_model_cp'])
+        obj=ReturnCurriculum(1,'cpu',v['return_curriculum'],v['reward_weights'].copy(),v['reward_scales'].copy(),ball_radius=.0335)
+        for epoch,orientation,forward in [(0,0.,0.),(25,3.,0.),(50,3.,0.),(100,3.,1.),(150,3.,2.),(450,3.,2.)]:
+            obj.set_progress(epoch*2048*64)
+            self.assertEqual(obj.weights['orientation'],orientation)
+            self.assertEqual(obj.weights['forward'],forward)
+            self.assertLessEqual(obj.weights['contact'],.5)
+            self.assertEqual([obj.weights[k] for k in ['contact_angle','vertical','net','court','target']],[0.]*5)
+        self.assertEqual(obj.orientation_settings.gate_mode,'player_reach')
+        self.assertEqual(obj.orientation_settings.score_mode,'signed')
+
+    def test_new_gate_validation_and_evaluation_fields(self):
+        from vid2player.utils.controller_evaluation import orientation_metrics
+        for spec in [{'gate_mode':'bad'},{'score_mode':'bad'},
+                     {'score_mode':'signed','angle_zero_deg':30.},
+                     {'score_mode':'signed','angle_penalty_full_deg':95.},
+                     {'full_credit_before_s':.2},{'full_credit_after_s':.1},
+                     {'lateral_reach_m':0.},{'reach_falloff_m':-1.},
+                     {'forward_min_m':2.},{'max_height_m':.4}]:
+            with self.subTest(spec=spec),self.assertRaises(ValueError):resolve_orientation(spec)
+        helper,racket,ball=self.fixture(settings=self.new_settings())
+        helper.start[:]=helper.end[:]=1.;helper.now[:]=1.-helper.dt
+        helper.step(racket,ball)
+        metrics=orientation_metrics(NS(_racket_orientation=helper))
+        self.assertTrue(metrics['orientation_preparation_active'])
+        self.assertEqual(metrics['orientation_time_gate'],1.)
+        self.assertEqual(metrics['orientation_reachability_gate'],1.)
+        self.assertEqual(orientation_metrics(NS()),{})
+        self.assertEqual(orientation_metrics(NS(_racket_orientation=self.fixture()[0])),{})
 
 
 if __name__ == '__main__': unittest.main()

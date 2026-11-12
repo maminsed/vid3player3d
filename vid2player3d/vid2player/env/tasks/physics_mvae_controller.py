@@ -308,7 +308,9 @@ class PhysicsMVAEController():
         if self._racket_orientation is not None:
             self._racket_orientation.prepare(
                 window.eta, window.valid, window.position, self._target_bounce_pos,
-                self._tar_action == 1, self._physics_player.task._has_racket_ball_contact)
+                self._tar_action == 1, self._physics_player.task._has_racket_ball_contact,
+                root=self._root_pos, root_velocity=self._root_vel, trajectory=window.trajectory,
+                clock=self._tar_time, ball_position=self._ball_pos, loaded=window.loaded)
         self._mvae_actions = actions[:, :self._num_mvae_action].clone() * \
             self.cfg_v2p.get('vae_action_scale', 1.0)
         
@@ -567,6 +569,8 @@ class PhysicsMVAEController():
         if getattr(self, '_return_curriculum', None) is not None:
             boundary = check_out_of_court(self._root_pos, self._court_min, self._court_max).bool()
             stats.update(self._return_curriculum.stats(completed, boundary))
+        if getattr(self, '_racket_orientation', None) is not None:
+            stats.update(self._racket_orientation.stats(completed))
         return stats
     
     def step(self, actions):

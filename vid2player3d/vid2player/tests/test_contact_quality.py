@@ -223,7 +223,7 @@ class ContactQualityTests(unittest.TestCase):
     def test_all_previous_yamls_retain_original_component_shapes_and_no_geometry_requirement(self):
         for path in (ROOT/'cfg/controller').glob('**/*.yaml'):
             cfg = yaml.safe_load(path.read_text()); v = cfg.get('env',{}).get('vid2player',{})
-            if v.get('reward_type') != 'return_curriculum' or path.stem == 'high_level_2_5': continue
+            if v.get('reward_type') != 'return_curriculum' or path.stem in ('high_level_2_5','high_level_2_6'): continue
             obj,_ = self.curriculum(config=v.get('return_curriculum'),weights=v['reward_weights'].copy())
             self.assertFalse(obj.needs_contact_quality,path)
             expected = COMPONENTS+(('vertical',) if 'vertical' in v['reward_weights'] or

@@ -188,7 +188,7 @@ class ReturnCurriculum:
             total.add_(value)
             events.append(value)
         if self.needs_orientation:
-            value = torch.nan_to_num(orientation_reward, nan=0., posinf=0., neginf=0.).clamp(0, 1)
+            value = torch.nan_to_num(orientation_reward, nan=0., posinf=0., neginf=0.).clamp(-1, 1)
             self.orientation_total.add_(value)
             events.append(value)
         return torch.stack(events, dim=-1)

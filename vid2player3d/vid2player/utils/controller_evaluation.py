@@ -249,6 +249,27 @@ def interception_metrics(task):
             'interception_preview_error_m': _number(window.preview_error[0].item())}
 
 
+def orientation_metrics(task):
+    """Separate the new reward's opportunity window from the old preset predictor."""
+    helper = getattr(task, '_racket_orientation', None)
+    if helper is None or helper.settings.gate_mode != 'player_reach':
+        return {}
+    chosen = bool(helper.opportunity_valid[0].item())
+    active = (helper.valid & ~helper.contact_seen & (helper.last_time_gate > 0)
+              & (helper.last_reach_gate > 0))
+    return {'orientation_prediction_valid': bool(helper.valid[0].item()),
+            'orientation_window_locked': bool(helper.locked[0].item()),
+            'orientation_interval_start_s': _number(helper.start[0].item()) if chosen else None,
+            'orientation_interval_end_s': _number(helper.end[0].item()) if chosen else None,
+            'orientation_time_gate': _number(helper.last_time_gate[0].item()),
+            'orientation_reachability_gate': _number(helper.last_reach_gate[0].item()),
+            'orientation_preparation_active': bool(active[0].item()),
+            'orientation_preparation_total': _number(helper.preparation_total[0].item()),
+            'orientation_preparation_budget_spent': _number(helper.preparation_paid[0].item()),
+            'orientation_impact_total': _number(helper.impact_total[0].item()),
+            'orientation_impact_error_deg': _number(helper.impact_angle[0].item()) if helper.contact_seen[0] else None}
+
+
 def save_metrics_plot(filename, metrics, fps):
     """Four focused panels; full components and losses remain in the rollout."""
     from matplotlib.figure import Figure
@@ -465,6 +486,7 @@ def evaluate_controller(player, args, evaluation):
             row = {'step':step+1,'time_s':(step+1)/fps,'reward':value,'cumulative_reward':cumulative,
                    **phase_metrics(task),
                    **interception_metrics(task),
+                   **orientation_metrics(task),
                    'reward_components':components,'weighted_reward_components':weighted,
                    'aux_dof_res_loss':_number(aux_loss),'weighted_aux_dof_res_loss':_number(aux_weight*aux_loss),
                    'bounds_loss':_number(bounds_loss),'weighted_bounds_loss':_number(bounds_weight*bounds_loss),
