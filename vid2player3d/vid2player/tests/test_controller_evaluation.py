@@ -87,12 +87,50 @@ class ControllerEvaluationTests(unittest.TestCase):
             title = figure._suptitle.get_text()
             if has_contact:
                 self.assertIn('First racket contact: 0.10s', title)
+                np.testing.assert_allclose(figure.axes[3].get_xlim(), [-.4, .6])
                 for axis in figure.axes:
                     markers = [line for line in axis.lines if line.get_label().startswith('first racket contact')]
                     self.assertEqual(len(markers), 1)
                     self.assertEqual(markers[0].get_color(), 'crimson')
             else:
                 self.assertIn('No racket contact detected', title)
+                self.assertIn('No racket contact detected',
+                              [text.get_text() for text in figure.axes[3].texts])
+
+    def test_plot_reward_contributions_for_both_stages(self):
+        from matplotlib.figure import Figure
+        cases = [
+            {'pos_reward': [.1, .3, 0.]},
+            {'pos_reward': [.01, .03, .1], 'ball_pos_reward': [0., .2, .8]},
+            {'pos_reward': [.05, .15, 0.], 'contact_reward': [0., .5, 0.],
+             'forward_reward': [0., 1.2, 0.], 'vertical_reward': [0., -.2, 0.],
+             'orientation_reward': [.2, .4, 0.], 'target_reward': [0., 0., 0.]},
+        ]
+        for components in cases:
+            with self.subTest(components=list(components)):
+                rows = [dict(time_s=(i+1)/30, reward=sum(v[i] for v in components.values()),
+                             cumulative_reward=0., phase_rad=3., phase_target_rad=np.pi,
+                             ball_racket_distance_m=.2, has_contact=False,
+                             weighted_reward_components={k: v[i] for k, v in components.items()})
+                        for i in range(3)]
+                with patch.object(Figure, 'savefig', autospec=True) as save:
+                    save_metrics_plot('unused.png', rows, 30)
+                axis = save.call_args.args[0].axes[2]
+                self.assertIn('Reward components', axis.get_title())
+                self.assertEqual([line.get_label() for line in axis.lines], list(components))
+                for line, values in zip(axis.lines, components.values()):
+                    np.testing.assert_allclose(line.get_xdata(), [r['time_s'] for r in rows])
+                    np.testing.assert_allclose(line.get_ydata(), values)
+                np.testing.assert_allclose(sum(line.get_ydata() for line in axis.lines),
+                                           [r['reward'] for r in rows])
+                rows[1]['has_contact'] = True
+                with patch.object(Figure, 'savefig', autospec=True) as save:
+                    save_metrics_plot('unused.png', rows, 30)
+                zoom = save.call_args.args[0].axes[3]
+                np.testing.assert_allclose(zoom.get_xlim(), [2/30-.5, 2/30+.5])
+                for full, close in zip(axis.lines, zoom.lines):
+                    self.assertEqual(full.get_label(), close.get_label())
+                    np.testing.assert_allclose(full.get_ydata(), close.get_ydata())
 
     def test_offline_sampler_device_boundary(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -231,7 +269,8 @@ class ControllerEvaluationTests(unittest.TestCase):
             physics._ball_root_states[:,6]=1
             task=SimpleNamespace(device='cpu',_physics_player=SimpleNamespace(task=physics),
                 cfg_v2p={'court_min':[-5,-16],'court_max':[5,-10],
-                         'reward_type':'reach', 'reward_weights':{'pos':1.},'aux_loss_specs':{'dof_res':.01}},
+                         'reward_type':'reach', 'reward_weights':{'pos':2.},'aux_loss_specs':{'dof_res':.01}},
+                _reward_weights={'pos':1.},
                 _phase_pred=torch.tensor([3.]), _reward_scales={'phase':5.},
                 _tar_action=torch.ones(1,dtype=torch.long),
                 _mvae_player=SimpleNamespace(_swing_type=torch.tensor([1])),

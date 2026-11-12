@@ -271,29 +271,27 @@ def orientation_metrics(task):
 
 
 def save_metrics_plot(filename, metrics, fps):
-    """Four focused panels; full components and losses remain in the rollout."""
+    """Plot rewards and phase, with reward components zoomed around first contact."""
     from matplotlib.figure import Figure
     from matplotlib.backends.backend_agg import FigureCanvasAgg
 
     times = np.asarray([row['time_s'] for row in metrics])
+    component_names = list(dict.fromkeys(
+        name for row in metrics for name in row.get('weighted_reward_components', {})))
     panels = [('Step reward', 'Reward', [('reward',[row['reward'] for row in metrics])]),
               ('Predicted and target phase', 'Phase (radians)',
                [('predicted',[row['phase_rad'] for row in metrics]),
                 ('target',[row['phase_target_rad'] for row in metrics])]),
-              ('Phase reward factor: exp(-scale * error²)', 'Multiplier / reaction mask',
-               [('phase factor',[row['phase_reward_factor'] for row in metrics]),
-                ('incoming-ball attempt active',[float(row['is_reaction']) for row in metrics])])]
-    if metrics and 'interception_window_active' in metrics[0]:
-        panels.append(('Interception window and racket preset gate', 'Activation / weight',
-                       [('interception window',[float(row['interception_window_active']) for row in metrics]),
-                        ('preset gate',[row['racket_preset_gate'] for row in metrics])]))
-    else:
-        panels.append(('Ball–racket distance', 'Distance (m)',
-                       [('distance',[row['ball_racket_distance_m'] for row in metrics])]))
+              ('Reward components over time (weighted)', 'Reward contribution / step',
+               [(name, [row.get('weighted_reward_components', {}).get(name, np.nan)
+                        for row in metrics]) for name in component_names])]
+    contact = next((row['time_s'] for row in metrics if row['has_contact']),None)
+    panels.append(('Reward components at first contact (±0.5 s)', 'Reward contribution / step',
+                   panels[2][2] if contact is not None else []))
     figure = Figure(figsize=(12,8), constrained_layout=True)
     FigureCanvasAgg(figure)
-    contact = next((row['time_s'] for row in metrics if row['has_contact']),None)
-    for axis,(title,label,curves) in zip(figure.subplots(2,2).ravel(),panels):
+    axes = figure.subplots(2,2).ravel()
+    for axis,(title,label,curves) in zip(axes,panels):
         for name,values in curves:
             values = np.asarray([np.nan if value is None else value for value in values])
             axis.plot(times,values,label=name,linewidth=1.8)
@@ -304,11 +302,16 @@ def save_metrics_plot(filename, metrics, fps):
         axis.set_xlim(0,max(float(times[-1]) if len(times) else 0.,1/fps))
         axis.grid(True,alpha=.25)
         if curves or contact is not None:
-            axis.legend(fontsize=8)
+            axis.legend(loc='upper center', bbox_to_anchor=(.5, -.18), ncol=3, fontsize=7)
+    if contact is not None:
+        axes[3].set_xlim(contact - .25, contact + .25)
+    else:
+        axes[3].text(.5, .5, 'No racket contact detected',
+                     ha='center', va='center', transform=axes[3].transAxes)
     contact_text = 'No racket contact detected' if contact is None else f'First racket contact: {contact:.2f}s'
     total_reward = metrics[-1]['cumulative_reward'] if metrics else 0.
     figure.suptitle(f"Evaluation | total reward {total_reward:.3f} | {contact_text}\n"
-                   'Phase factor multiplies proximity reward; attempt mask is 0 during recovery',fontsize=12)
+                   'Reward components include active weights; their sum is the step reward',fontsize=12)
     figure.savefig(filename,dpi=150)
 
 
@@ -480,8 +483,10 @@ def evaluate_controller(player, args, evaluation):
             if info.get('sub_rewards') is not None:
                 components = dict(zip(info['sub_rewards_names'].split(','),
                                       [_number(x) for x in _cpu(info['sub_rewards'])[0]]))
-            weights = task.cfg_v2p.get('reward_weights',{})
-            weighted = {name:None if val is None else val*weights.get(name[:-7],0.)
+            weights = getattr(task, '_reward_weights', task.cfg_v2p.get('reward_weights',{}))
+            default_pos_weight = 1. if task.cfg_v2p.get('reward_type', 'return') == 'reach' else 0.
+            weighted = {name:None if val is None else val*weights.get(
+                            name[:-7], default_pos_weight if name == 'pos_reward' else 0.)
                         for name,val in components.items()}
             row = {'step':step+1,'time_s':(step+1)/fps,'reward':value,'cumulative_reward':cumulative,
                    **phase_metrics(task),
